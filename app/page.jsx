@@ -24,7 +24,6 @@ export default function Home() {
   const getIvColor = () => ivPercent >= 93 ? "#4ecdc4" : ivPercent >= 82 ? "#ffd93d" : "#ff6b6b";
   const getIvLabel = () => ivPercent >= 98 ? "거의 완벽!" : ivPercent >= 93 ? "매우 우수" : ivPercent >= 82 ? "괜찮음" : ivPercent >= 67 ? "보통" : "별로";
 
-  // Load Pokemon data
   useEffect(() => {
     fetch("/api/pokemon-data")
       .then((r) => r.json())
@@ -60,19 +59,23 @@ export default function Home() {
     setShowSugg(false);
   };
 
-  const getMoves = () => {
-    if (!selectedPokemon?.moves?.length) return { fast: [], charged: [], eliteFast: [], eliteCharged: [] };
-    const m = selectedPokemon.moves.find((mv) => mv.form === selectedPokemon.form) || selectedPokemon.moves[0];
-    return m || { fast: [], charged: [], eliteFast: [], eliteCharged: [] };
-  };
-
   const analyze = useCallback(async () => {
     if (!pokemonName.trim()) { setError("포켓몬 이름을 입력해주세요!"); return; }
     setLoading(true); setError(null); setResult(null);
 
     const pokemonData = selectedPokemon
-      ? { name: selectedPokemon.name, id: selectedPokemon.id, baseAttack: selectedPokemon.baseAttack, baseDefense: selectedPokemon.baseDefense, baseStamina: selectedPokemon.baseStamina, moves: getMoves() }
-      : { name: pokemonName, note: "API에서 매칭 안됨 - AI가 직접 판단" };
+      ? {
+          name: selectedPokemon.name,
+          id: selectedPokemon.id,
+          baseAttack: selectedPokemon.baseAttack,
+          baseDefense: selectedPokemon.baseDefense,
+          baseStamina: selectedPokemon.baseStamina,
+          fast: selectedPokemon.fast,
+          charged: selectedPokemon.charged,
+          eliteFast: selectedPokemon.eliteFast,
+          eliteCharged: selectedPokemon.eliteCharged,
+        }
+      : { name: pokemonName, note: "API에서 매칭 안됨" };
 
     try {
       const res = await fetch("/api/analyze", {
@@ -84,7 +87,7 @@ export default function Home() {
         }),
       });
       const data = await res.json();
-      if (data.error) { setError("분석 오류: " + data.error); }
+      if (data.error) { setError(data.error); }
       else { setResult(data.result); }
     } catch (e) { setError("네트워크 오류입니다. 다시 시도해주세요."); }
     setLoading(false);
@@ -105,48 +108,47 @@ export default function Home() {
   };
 
   const formatResult = (text) => text.split("\n").map((line, i) => {
-    if (line.startsWith("**") && line.includes("👉")) return <div key={i} style={s.resultTitle}>{line.replace(/\*\*/g, "")}</div>;
+    if (line.startsWith("**") && line.includes("👉")) return <div key={i} style={st.resultTitle}>{line.replace(/\*\*/g, "")}</div>;
     if (line.includes("**판정:**") || line.includes("**판정:")) {
       const color = line.includes("영구 보존") || line.includes("킵") ? "#4ecdc4" : line.includes("보류") ? "#ffd93d" : line.includes("사탕행") ? "#ff6b6b" : "#a890f0";
-      return <div key={i} style={{ ...s.verdictLine, borderLeftColor: color }}>{renderBold(line)}</div>;
+      return <div key={i} style={{ ...st.verdictLine, borderLeftColor: color }}>{renderBold(line)}</div>;
     }
-    if (line.includes("🚨")) return <div key={i} style={s.warningLine}>{renderBold(line)}</div>;
-    if (line.trim().startsWith("*")) return <div key={i} style={s.bulletLine}>{renderBold(line.replace(/^\*\s*/, ""))}</div>;
+    if (line.includes("🚨")) return <div key={i} style={st.warningLine}>{renderBold(line)}</div>;
+    if (line.trim().startsWith("*")) return <div key={i} style={st.bulletLine}>{renderBold(line.replace(/^\*\s*/, ""))}</div>;
     if (line.trim() === "") return <div key={i} style={{ height: 8 }} />;
     return <div key={i} style={{ padding: "2px 0", fontSize: 13 }}>{renderBold(line)}</div>;
   });
 
-  const moves = getMoves();
+  const hasFast = selectedPokemon && selectedPokemon.fast && selectedPokemon.fast.length > 0;
+  const hasCharged = selectedPokemon && selectedPokemon.charged && selectedPokemon.charged.length > 0;
 
   return (
-    <div style={s.container}>
-      <div style={s.inner}>
-        {/* Header */}
-        <div style={s.header}>
-          <span style={s.logoIcon}>⚡</span>
+    <div style={st.container}>
+      <div style={st.inner}>
+        <div style={st.header}>
+          <span style={st.logoIcon}>⚡</span>
           <div>
-            <h1 style={s.title}>포고박사</h1>
-            <p style={s.subtitle}>킵? 버려? 냅둬? AI가 판정해드립니다</p>
+            <h1 style={st.title}>포고박사</h1>
+            <p style={st.subtitle}>킵? 버려? 냅둬? AI가 판정해드립니다</p>
           </div>
         </div>
 
         {!result ? (
-          <div style={s.card}>
-            {/* Name */}
-            <div style={s.group}>
-              <label style={s.label}>포켓몬 이름 {dataLoading && <span style={{ fontSize: 10, color: "#ffd93d" }}>데이터 로딩중...</span>}</label>
+          <div style={st.card}>
+            <div style={st.group}>
+              <label style={st.label}>포켓몬 이름 {dataLoading && <span style={{ fontSize: 10, color: "#ffd93d" }}>데이터 로딩중...</span>}</label>
               <div style={{ position: "relative" }}>
-                <input style={s.input} value={pokemonName} onChange={(e) => handleNameChange(e.target.value)} onFocus={() => suggestions.length > 0 && setShowSugg(true)} onBlur={() => setTimeout(() => setShowSugg(false), 200)} />
+                <input style={st.input} value={pokemonName} onChange={(e) => handleNameChange(e.target.value)} onFocus={() => suggestions.length > 0 && setShowSugg(true)} onBlur={() => setTimeout(() => setShowSugg(false), 200)} />
                 {selectedPokemon && (
-                  <div style={s.miniInfo}>
+                  <div style={st.miniInfo}>
                     <span style={{ color: "#4ecdc4" }}>✓ #{selectedPokemon.id}</span>
-                    <span style={{ opacity: 0.5 }}>공{selectedPokemon.baseAttack}/방{selectedPokemon.baseDefense}/체{selectedPokemon.baseStamina}</span>
+                    <span style={{ opacity: 0.5 }}>공{selectedPokemon.baseAttack} / 방{selectedPokemon.baseDefense} / 체{selectedPokemon.baseStamina}</span>
                   </div>
                 )}
                 {showSugg && (
-                  <div style={s.suggBox}>
-                    {suggestions.map((p) => (
-                      <div key={p.id + p.form} style={s.suggItem} onMouseDown={() => selectPokemon(p)}>
+                  <div style={st.suggBox}>
+                    {suggestions.map((p, i) => (
+                      <div key={`${p.id}-${p.form}-${i}`} style={st.suggItem} onMouseDown={() => selectPokemon(p)}>
                         <span style={{ fontWeight: 600 }}>{p.name}</span>
                         <span style={{ fontSize: 11, opacity: 0.5 }}>#{p.id} 공{p.baseAttack}/방{p.baseDefense}/체{p.baseStamina}</span>
                       </div>
@@ -156,27 +158,25 @@ export default function Home() {
               </div>
             </div>
 
-            {/* CP */}
-            <div style={s.group}>
-              <label style={s.label}>CP (전투력)</label>
-              <input style={s.input} type="number" value={cp} onChange={(e) => setCp(e.target.value)} />
+            <div style={st.group}>
+              <label style={st.label}>CP (전투력)</label>
+              <input style={st.input} type="number" value={cp} onChange={(e) => setCp(e.target.value)} />
             </div>
 
-            {/* IV */}
-            <div style={s.group}>
-              <label style={s.label}>개체값 (IV) <span style={{ ...s.ivBadge, background: getIvColor() }}>{ivPercent}% — {getIvLabel()}</span></label>
-              <div style={s.ivBox}>
+            <div style={st.group}>
+              <label style={st.label}>개체값 (IV) <span style={{ ...st.ivBadge, background: getIvColor() }}>{ivPercent}% — {getIvLabel()}</span></label>
+              <div style={st.ivBox}>
                 {[{ label: "공격", value: atkIv, set: setAtkIv }, { label: "방어", value: defIv, set: setDefIv }, { label: "HP", value: staIv, set: setStaIv }].map(({ label, value, set }) => (
-                  <div key={label} style={s.ivItem}>
-                    <div style={s.ivLabelRow}>
-                      <span style={s.ivStatLabel}>{label}</span>
-                      <span style={{ ...s.ivStatVal, color: value >= 14 ? "#ff6348" : value >= 10 ? "#ffa502" : "#8899aa" }}>{value}</span>
+                  <div key={label} style={st.ivItem}>
+                    <div style={st.ivLabelRow}>
+                      <span style={st.ivStatLabel}>{label}</span>
+                      <span style={{ ...st.ivStatVal, color: value >= 14 ? "#ff6348" : value >= 10 ? "#ffa502" : "#8899aa" }}>{value}</span>
                     </div>
-                    <div style={s.gaugeOuter}>
+                    <div style={st.gaugeOuter}>
                       {[0, 1, 2].map((seg) => {
                         const fill = value <= seg * 5 ? 0 : value >= (seg + 1) * 5 ? 100 : ((value - seg * 5) / 5) * 100;
                         return (
-                          <div key={seg} style={s.gaugeSeg}>
+                          <div key={seg} style={st.gaugeSeg}>
                             <div style={{ position: "absolute", top: 0, left: 0, height: "100%", width: `${fill}%`, background: value === 15 ? "linear-gradient(90deg,#ff9f43,#ee5a24)" : "linear-gradient(90deg,#f6b93b,#e58e26)", borderRadius: 3, transition: "width 0.15s" }} />
                           </div>
                         );
@@ -188,71 +188,75 @@ export default function Home() {
               </div>
             </div>
 
-            {/* Moves */}
-            <div style={s.group}>
-              <label style={s.label}>현재 기술 {!selectedPokemon && <span style={{ fontSize: 10, fontWeight: 400, opacity: 0.5 }}>(포켓몬 선택 시 목록 표시)</span>}</label>
-              <div style={s.moveRow}>
+            <div style={st.group}>
+              <label style={st.label}>현재 기술 {!selectedPokemon && <span style={{ fontSize: 10, fontWeight: 400, opacity: 0.5 }}>(포켓몬 선택 시 목록 표시)</span>}</label>
+              <div style={st.moveRow}>
                 <div style={{ flex: 1 }}>
-                  <div style={s.moveLabel}>빠른기술</div>
-                  {selectedPokemon && moves.fast.length > 0 ? (
-                    <select style={s.select} value={fastMove} onChange={(e) => setFastMove(e.target.value)}>
+                  <div style={st.moveLabel}>빠른기술</div>
+                  {hasFast ? (
+                    <select style={st.select} value={fastMove} onChange={(e) => setFastMove(e.target.value)}>
                       <option value="">선택</option>
-                      {moves.fast.map((m) => <option key={m} value={m}>{m}</option>)}
-                      {moves.eliteFast?.length > 0 && <optgroup label="── 한정기술 ──">{moves.eliteFast.map((m) => <option key={m} value={`⭐${m}`}>⭐ {m}</option>)}</optgroup>}
+                      {selectedPokemon.fast.map((m) => <option key={m} value={m}>{m}</option>)}
+                      {selectedPokemon.eliteFast && selectedPokemon.eliteFast.length > 0 && (
+                        <optgroup label="── 한정기술 ──">
+                          {selectedPokemon.eliteFast.map((m) => <option key={m} value={m}>⭐ {m}</option>)}
+                        </optgroup>
+                      )}
                     </select>
-                  ) : <input style={s.input} value={fastMove} onChange={(e) => setFastMove(e.target.value)} />}
+                  ) : <input style={st.input} value={fastMove} onChange={(e) => setFastMove(e.target.value)} />}
                 </div>
                 <div style={{ flex: 1 }}>
-                  <div style={s.moveLabel}>차징기술</div>
-                  {selectedPokemon && moves.charged.length > 0 ? (
-                    <select style={s.select} value={chargedMove} onChange={(e) => setChargedMove(e.target.value)}>
+                  <div style={st.moveLabel}>차징기술</div>
+                  {hasCharged ? (
+                    <select style={st.select} value={chargedMove} onChange={(e) => setChargedMove(e.target.value)}>
                       <option value="">선택</option>
-                      {moves.charged.map((m) => <option key={m} value={m}>{m}</option>)}
-                      {moves.eliteCharged?.length > 0 && <optgroup label="── 한정기술 ──">{moves.eliteCharged.map((m) => <option key={m} value={`⭐${m}`}>⭐ {m}</option>)}</optgroup>}
+                      {selectedPokemon.charged.map((m) => <option key={m} value={m}>{m}</option>)}
+                      {selectedPokemon.eliteCharged && selectedPokemon.eliteCharged.length > 0 && (
+                        <optgroup label="── 한정기술 ──">
+                          {selectedPokemon.eliteCharged.map((m) => <option key={m} value={m}>⭐ {m}</option>)}
+                        </optgroup>
+                      )}
                     </select>
-                  ) : <input style={s.input} value={chargedMove} onChange={(e) => setChargedMove(e.target.value)} />}
+                  ) : <input style={st.input} value={chargedMove} onChange={(e) => setChargedMove(e.target.value)} />}
                 </div>
               </div>
             </div>
 
-            {/* Toggles */}
-            <div style={s.toggleRow}>
-              <button onClick={() => setIsShiny(!isShiny)} style={{ ...s.toggle, ...(isShiny ? { background: "linear-gradient(135deg,#ffd93d,#f0a500)", borderColor: "#ffd93d", color: "#0a1628" } : {}) }}>✨ 이로치</button>
-              <button onClick={() => setIsShadow(!isShadow)} style={{ ...s.toggle, ...(isShadow ? { background: "linear-gradient(135deg,#705898,#4a3370)", borderColor: "#705898", color: "#fff" } : {}) }}>👤 그림자</button>
+            <div style={st.toggleRow}>
+              <button onClick={() => setIsShiny(!isShiny)} style={{ ...st.toggle, ...(isShiny ? { background: "linear-gradient(135deg,#ffd93d,#f0a500)", borderColor: "#ffd93d", color: "#0a1628" } : {}) }}>✨ 이로치</button>
+              <button onClick={() => setIsShadow(!isShadow)} style={{ ...st.toggle, ...(isShadow ? { background: "linear-gradient(135deg,#705898,#4a3370)", borderColor: "#705898", color: "#fff" } : {}) }}>👤 그림자</button>
             </div>
 
-            {error && <div style={s.error}>{error}</div>}
+            {error && <div style={st.error}>{error}</div>}
 
-            <button onClick={analyze} style={s.analyzeBtn} disabled={loading}>
+            <button onClick={analyze} style={st.analyzeBtn} disabled={loading}>
               {loading ? <span>⚡ 분석 중...</span> : "🔍 포켓몬 분석하기"}
             </button>
           </div>
         ) : (
-          <div style={s.resultCard}>
-            {/* Pokemon Image */}
+          <div style={st.resultCard}>
             {selectedPokemon && (
-              <div style={s.imgContainer}>
-                <img src={`https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/other/official-artwork/${selectedPokemon.id}.png`} alt={pokemonName} style={s.pokemonImg} onError={(e) => { e.target.style.display = "none"; }} />
-                {isShiny && <span style={s.shinyBadge}>✨ 이로치</span>}
-                {isShadow && <span style={s.shadowBadge}>👤 그림자</span>}
+              <div style={st.imgContainer}>
+                <img src={`https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/other/official-artwork/${selectedPokemon.id}.png`} alt={pokemonName} style={st.pokemonImg} onError={(e) => { e.target.style.display = "none"; }} />
+                {isShiny && <span style={st.shinyBadge}>✨ 이로치</span>}
+                {isShadow && <span style={st.shadowBadge}>👤 그림자</span>}
               </div>
             )}
 
-            {/* IV Summary */}
-            <div style={s.ivSummary}>
+            <div style={st.ivSummary}>
               {[["공격", atkIv], ["방어", defIv], ["HP", staIv]].map(([l, v]) => (
-                <div key={l} style={s.ivSumItem}><span style={{ fontSize: 11, opacity: 0.6 }}>{l}</span><span style={{ fontWeight: 700 }}>{v}</span></div>
+                <div key={l} style={st.ivSumItem}><span style={{ fontSize: 11, opacity: 0.6 }}>{l}</span><span style={{ fontWeight: 700 }}>{v}</span></div>
               ))}
-              <div style={{ ...s.ivSumItem, borderRight: "none" }}><span style={{ fontSize: 11, opacity: 0.6 }}>IV</span><span style={{ fontWeight: 700, color: getIvColor() }}>{ivPercent}%</span></div>
+              <div style={{ ...st.ivSumItem, borderRight: "none" }}><span style={{ fontSize: 11, opacity: 0.6 }}>IV</span><span style={{ fontWeight: 700, color: getIvColor() }}>{ivPercent}%</span></div>
             </div>
 
-            <div style={s.resultContent}>{formatResult(result)}</div>
-            <button onClick={reset} style={s.resetBtn}>🔄 다른 포켓몬 분석하기</button>
+            <div style={st.resultContent}>{formatResult(result)}</div>
+            <button onClick={reset} style={st.resetBtn}>🔄 다른 포켓몬 분석하기</button>
           </div>
         )}
 
-        <div style={s.footer}>
-          <p>포고박사 v0.2 — AI 기반 포켓몬GO 어드바이저</p>
+        <div style={st.footer}>
+          <p>포고박사 v0.2</p>
           <p style={{ fontSize: 10, opacity: 0.4, marginTop: 4 }}>Pokémon GO는 Niantic, Inc.의 상표입니다</p>
         </div>
       </div>
@@ -260,13 +264,13 @@ export default function Home() {
   );
 }
 
-const s = {
+const st = {
   container: { minHeight: "100vh", background: "linear-gradient(180deg,#0a1628 0%,#0f2035 50%,#0a1628 100%)", display: "flex", justifyContent: "center", padding: "20px 12px" },
   inner: { maxWidth: 520, width: "100%" },
   header: { display: "flex", alignItems: "center", justifyContent: "center", gap: 12, textAlign: "center", marginBottom: 24, padding: "16px 0" },
   logoIcon: { fontSize: 36, filter: "drop-shadow(0 0 12px rgba(0,212,170,0.6))" },
   title: { fontSize: 28, fontWeight: 800, margin: 0, background: "linear-gradient(135deg,#00d4aa,#4ecdc4,#00d4aa)", backgroundSize: "200% auto", WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent", animation: "shimmer 3s linear infinite" },
-  subtitle: { fontSize: 13, margin: "2px 0 0 0", opacity: 0.5 },
+  subtitle: { fontSize: 13, margin: "2px 0 0 0", opacity: 0.5, color: "#c8d6e5" },
   card: { background: "linear-gradient(135deg,#1a2744,#162038)", borderRadius: 16, padding: "24px 20px", border: "1px solid rgba(0,212,170,0.1)", boxShadow: "0 8px 32px rgba(0,0,0,0.3)", animation: "fadeIn 0.4s ease-out" },
   group: { marginBottom: 20 },
   label: { display: "flex", alignItems: "center", gap: 8, fontSize: 13, fontWeight: 600, marginBottom: 8, color: "#8899aa", textTransform: "uppercase", letterSpacing: "0.5px" },
@@ -304,4 +308,3 @@ const s = {
   resetBtn: { display: "block", width: "calc(100% - 40px)", margin: "20px 20px 0", padding: 14, background: "transparent", border: "2px solid #2a3a5c", borderRadius: 12, color: "#8899aa", fontSize: 14, fontWeight: 600, fontFamily: "'Outfit',sans-serif", cursor: "pointer" },
   footer: { textAlign: "center", padding: "24px 0 8px", fontSize: 11, opacity: 0.3, color: "#c8d6e5" },
 };
-
