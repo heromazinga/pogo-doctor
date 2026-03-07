@@ -26,10 +26,20 @@ export default function Home() {
   const [showCollection, setShowCollection] = useState(false);
   const [currentKept, setCurrentKept] = useState(false);
   const [usedModel, setUsedModel] = useState("");
+  const [viewingEntry, setViewingEntry] = useState(null);
 
   const ivPercent = Math.round(((atkIv + defIv + staIv) / 45) * 100);
   const getIvColor = () => ivPercent >= 93 ? "#4ecdc4" : ivPercent >= 82 ? "#ffd93d" : "#ff6b6b";
   const getIvLabel = () => ivPercent >= 98 ? "거의 완벽!" : ivPercent >= 93 ? "매우 우수" : ivPercent >= 82 ? "괜찮음" : ivPercent >= 67 ? "보통" : "별로";
+
+  // PvP IV evaluation: low attack + high def/hp = better for GL/UL
+  const getPvpTag = () => {
+    if (atkIv <= 3 && defIv >= 13 && staIv >= 13) return { text: "🏆 PvP 최적 (그레이트/울트라)", color: "#a890f0" };
+    if (atkIv <= 7 && defIv >= 11 && staIv >= 11) return { text: "👍 PvP 적합", color: "#7c8db5" };
+    if (atkIv >= 14 && defIv >= 14 && staIv >= 14) return { text: "⚔️ 레이드/마스터리그 최적", color: "#ff9f43" };
+    if (atkIv >= 13) return { text: "⚔️ PvE 우선", color: "#8899aa" };
+    return null;
+  };
 
   // Move name helper: English → Korean (fallback to English)
   const krMove = (engName) => moveNamesKr[engName] || engName;
@@ -181,6 +191,7 @@ export default function Home() {
       fastMove: fastMove ? krMove(fastMove) : "",
       chargedMove: chargedMove ? krMove(chargedMove) : "",
       isShiny, isShadow, verdict,
+      analysisResult: result,
       date: new Date().toISOString(),
     };
     setCollection((prev) => {
@@ -287,6 +298,12 @@ export default function Home() {
                   </div>
                 ))}
               </div>
+              {getPvpTag() && (
+                <div style={s.pvpTag}>
+                  <span style={{ color: getPvpTag().color }}>{getPvpTag().text}</span>
+                  <span style={s.pvpHint}>PvP는 공격↓ 방어·HP↑가 유리 (CP 제한 리그)</span>
+                </div>
+              )}
             </div>
 
             <div style={s.group}>
@@ -374,7 +391,7 @@ export default function Home() {
         )}
 
         <div style={s.footer}>
-          <p>포고박사 v0.4</p>
+          <p>포고박사 v0.5</p>
           <p style={{ fontSize: 10, opacity: 0.4, marginTop: 4 }}>Pokémon GO는 Niantic, Inc.의 상표입니다</p>
         </div>
       </div>
@@ -391,7 +408,7 @@ export default function Home() {
           <div style={s.collPanel}>
             <div style={s.collHeader}>
               <h2 style={{ fontSize: 18, fontWeight: 800, color: "#e0e0e0" }}>📋 보유목록 ({collection.length})</h2>
-              <button style={s.collClose} onClick={() => setShowCollection(false)}>✕</button>
+              <button style={s.collClose} onClick={() => { setShowCollection(false); setViewingEntry(null); }}>✕</button>
             </div>
 
             {collection.length === 0 ? (
@@ -400,24 +417,55 @@ export default function Home() {
                 <div>아직 저장된 포켓몬이 없습니다</div>
                 <div style={{ fontSize: 12, marginTop: 4, opacity: 0.5 }}>분석 후 "킵" 버튼을 눌러 추가하세요</div>
               </div>
+            ) : viewingEntry ? (
+              /* ─── Detail view: saved analysis ─── */
+              <div>
+                <button onClick={() => setViewingEntry(null)} style={s.collBackBtn}>← 목록으로</button>
+                <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 16 }}>
+                  <img
+                    src={`https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/${viewingEntry.pokemonId}.png`}
+                    alt={viewingEntry.name} style={{ width: 48, height: 48, imageRendering: "pixelated" }}
+                  />
+                  <div>
+                    <div style={{ fontSize: 16, fontWeight: 700, color: "#e0e0e0" }}>
+                      {viewingEntry.isShiny ? "✨" : ""}{viewingEntry.isShadow ? "👤" : ""}{viewingEntry.name}
+                    </div>
+                    <div style={{ fontSize: 12, color: "#8899aa" }}>
+                      CP{viewingEntry.cp} IV{viewingEntry.ivPercent}% | {viewingEntry.verdict}
+                    </div>
+                  </div>
+                </div>
+                {viewingEntry.analysisResult ? (
+                  <div style={{ ...s.collAnalysis, lineHeight: 1.7, fontSize: 14 }}>
+                    {formatResult(viewingEntry.analysisResult)}
+                  </div>
+                ) : (
+                  <div style={{ color: "#8899aa", textAlign: "center", padding: 20 }}>
+                    저장된 분석 결과가 없습니다 (이전 버전에서 저장됨)
+                  </div>
+                )}
+              </div>
             ) : (
               <div style={s.collList}>
                 {collection.map((item) => (
                   <div key={item.id} style={s.collItem}>
-                    <img
-                      src={`https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/${item.pokemonId}.png`}
-                      alt={item.name} style={{ width: 40, height: 40, imageRendering: "pixelated" }}
-                    />
-                    <div style={{ flex: 1, minWidth: 0 }}>
-                      <div style={{ fontSize: 14, fontWeight: 700, color: "#e0e0e0" }}>
-                        {item.isShiny ? "✨" : ""}{item.isShadow ? "👤" : ""}{item.name}
-                        <span style={{ fontSize: 11, opacity: 0.4, marginLeft: 4 }}>#{item.pokemonId}</span>
+                    <div style={s.collItemClickable} onClick={() => item.analysisResult ? setViewingEntry(item) : null}>
+                      <img
+                        src={`https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/${item.pokemonId}.png`}
+                        alt={item.name} style={{ width: 40, height: 40, imageRendering: "pixelated" }}
+                      />
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <div style={{ fontSize: 14, fontWeight: 700, color: "#e0e0e0" }}>
+                          {item.isShiny ? "✨" : ""}{item.isShadow ? "👤" : ""}{item.name}
+                          <span style={{ fontSize: 11, opacity: 0.4, marginLeft: 4 }}>#{item.pokemonId}</span>
+                        </div>
+                        <div style={{ fontSize: 11, color: "#8899aa", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                          CP{item.cp} IV{item.ivPercent}% | {item.fastMove}/{item.chargedMove}
+                          {item.analysisResult && <span style={{ marginLeft: 4, opacity: 0.5 }}>📄</span>}
+                        </div>
                       </div>
-                      <div style={{ fontSize: 11, color: "#8899aa", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                        CP{item.cp} IV{item.ivPercent}% | {item.fastMove}/{item.chargedMove}
-                      </div>
+                      <span style={{ fontSize: 12, fontWeight: 700, color: "#ffd93d", whiteSpace: "nowrap" }}>{item.verdict}</span>
                     </div>
-                    <span style={{ fontSize: 12, fontWeight: 700, color: "#ffd93d", whiteSpace: "nowrap" }}>{item.verdict}</span>
                     <button style={s.collRemove} onClick={() => removeFromCollection(item.id)}>🗑</button>
                   </div>
                 ))}
@@ -493,4 +541,13 @@ const s = {
   collList: { display: "flex", flexDirection: "column", gap: 8 },
   collItem: { display: "flex", alignItems: "center", gap: 10, background: "#1a2744", border: "1px solid #2a3a5c", borderRadius: 12, padding: "10px 12px" },
   collRemove: { background: "none", border: "none", fontSize: 16, cursor: "pointer", padding: 4, opacity: 0.5, filter: "grayscale(0.5)" },
+
+  // ─── PvP IV tag ───
+  pvpTag: { marginTop: 10, padding: "8px 12px", background: "rgba(168,144,240,0.06)", border: "1px solid rgba(168,144,240,0.15)", borderRadius: 8, display: "flex", flexDirection: "column", gap: 2 },
+  pvpHint: { fontSize: 10, color: "#576574" },
+
+  // ─── Collection detail view ───
+  collBackBtn: { background: "none", border: "none", color: "#4ecdc4", fontSize: 14, fontWeight: 600, cursor: "pointer", padding: "8px 0", marginBottom: 8, fontFamily: "'Outfit',sans-serif" },
+  collItemClickable: { display: "flex", alignItems: "center", gap: 10, flex: 1, minWidth: 0, cursor: "pointer" },
+  collAnalysis: { background: "#0d1a2e", borderRadius: 10, padding: 16, border: "1px solid #2a3a5c" },
 };
