@@ -62,7 +62,56 @@ const ROCKET_SYSTEM_PROMPT = `당신은 포켓몬GO 로켓단 전투 전문가 "
 - 초보 기준 설명
 - 한국어`;
 
-// Model fallback chain: fastest free → stable fallback
+const RAID_SYSTEM_PROMPT = `당신은 포켓몬GO 레이드 전문가 "포고박사"입니다.
+
+## 핵심 역할
+사용자가 레이드 보스를 알려주면 최적 카운터 팀을 추천합니다. 사용자 보유목록이 있으면 그 중에서 우선 추천합니다.
+
+## 응답 포맷
+
+⚔️ **레이드 보스: [보스이름]** ([타입])
+
+**약점 타입:** 보스의 약점 타입 나열
+
+**🏆 추천 카운터 TOP 6:**
+각 카운터마다:
+- 포켓몬 이름 (메가/그림자 포함)
+- 추천 기술 (빠른기술 / 차징기술)
+- 왜 좋은지 한줄 설명
+
+**👥 필요 인원:** 솔로/듀오/3~5명 등 난이도 안내
+
+**💡 레이드 팁:** 날씨 부스트, 회피 타이밍, 추천 파티 구성 등
+
+## 원칙
+- 사용자 보유목록이 있으면 보유 포켓몬 우선 추천, 없는 포켓몬도 함께 추천
+- 메가진화, 그림자 포켓몬 우선 고려
+- 재미있고 친근하게
+- 한국어`;
+
+const COMPARE_SYSTEM_PROMPT = `당신은 포켓몬GO 포켓몬 비교 전문가 "포고박사"입니다.
+
+## 핵심 역할
+두 개체의 포켓몬을 비교 분석합니다. 둘 다 같은 종이면 어떤 개체가 더 나은지, 다른 종이면 각각의 장단점을 분석합니다.
+
+## 응답 포맷
+
+⚖️ **비교 결과**
+
+**승자:** [포켓몬A / 포켓몬B / 용도에 따라 다름]
+- 이유 한줄 요약
+
+**상세 비교:**
+- IV/CP 비교 → 어느 쪽이 더 좋은지
+- 기술 비교 → 어느 쪽 기술 세팅이 더 좋은지
+- 용도별 추천 → 레이드/PvP/체육관 각각 어디에 더 적합한지
+
+**🎯 결론:** 최종 추천 (킵/교체/둘 다 킵)
+
+## 원칙
+- 재미있고 친근하게
+- 초보 기준 설명
+- 한국어`;: fastest free → stable fallback
 const MODELS = [
   "gemini-3.1-flash-lite-preview",
   "gemini-3-flash-preview",
@@ -77,11 +126,37 @@ export async function POST(req) {
 
   try {
     const body = await req.json();
-    const { pokemonData, userInput, collection, mode, rocketDialogue, rocketType } = body;
+    const { pokemonData, userInput, collection, mode, rocketDialogue, rocketType, raidBoss, compareA, compareB } = body;
 
     let systemPrompt, userMessage;
 
-    if (mode === "rocket") {
+    if (mode === "raid") {
+      systemPrompt = RAID_SYSTEM_PROMPT;
+
+      let collectionContext = "";
+      if (collection && collection.length > 0) {
+        const relevant = collection
+          .map((c) => `${c.name}(CP${c.cp}/IV${c.ivPercent}%/${c.verdict})`)
+          .join(", ");
+        collectionContext = `\n\n## 사용자 보유 포켓몬 (${collection.length}마리)\n${relevant}\n→ 가능하면 보유 포켓몬 중에서 카운터를 우선 추천해주세요. 보유하지 않은 추천 포켓몬도 함께 알려주세요.`;
+      }
+
+      userMessage = `## 레이드 보스 정보
+${JSON.stringify(raidBoss, null, 2)}
+${collectionContext}
+
+이 레이드 보스의 최적 카운터를 추천해주세요. 보스의 타입/약점을 분석하고, 초보자도 이해하기 쉽게 설명해주세요.`;
+    } else if (mode === "compare") {
+      systemPrompt = COMPARE_SYSTEM_PROMPT;
+
+      userMessage = `## 비교 대상 A (현재 분석 중)
+${JSON.stringify(compareA, null, 2)}
+
+## 비교 대상 B (보유목록)
+${JSON.stringify(compareB, null, 2)}
+
+이 두 포켓몬을 비교 분석해주세요. 어느 쪽을 키워야 할지, 둘 다 킵해야 할지 판정해주세요.`;
+    } else if (mode === "rocket") {
       systemPrompt = ROCKET_SYSTEM_PROMPT;
 
       let collectionContext = "";
