@@ -599,7 +599,7 @@ export default function Home() {
             </div>
             <div style={s.group}>
               <label style={s.label}>또는 직접 입력</label>
-              <input style={s.input} value={rocketCustom} onChange={(e) => { setRocketCustom(e.target.value); setRocketDialogueIdx(-1); }} placeholder="로켓단 대사를 직접 입력..." />
+              <input style={s.input} value={rocketCustom} onChange={(e) => { setRocketCustom(e.target.value); setRocketDialogueIdx(-1); }} placeholder="" />
             </div>
             {error && <div style={s.error}>{error}</div>}
             <button onClick={analyzeRocket} style={s.rocketBtn} disabled={loading}>{loading ? "🚀 분석 중..." : "🚀 카운터 추천받기"}</button>
@@ -627,7 +627,7 @@ export default function Home() {
             <div style={s.group}>
               <label style={s.label}>레이드 보스 검색</label>
               <div style={{ position: "relative" }}>
-                <input style={s.input} value={raidBossName} onChange={(e) => handleRaidBossSearch(e.target.value)} onFocus={() => raidSuggestions.length > 0 && setShowRaidSugg(true)} onBlur={() => setTimeout(() => setShowRaidSugg(false), 200)} placeholder="레이드 보스 이름" />
+                <input style={s.input} value={raidBossName} onChange={(e) => handleRaidBossSearch(e.target.value)} onFocus={() => raidSuggestions.length > 0 && setShowRaidSugg(true)} onBlur={() => setTimeout(() => setShowRaidSugg(false), 200)} placeholder="" />
                 {raidSelectedPoke && (
                   <div style={s.miniInfo}>
                     <span style={{ color: "#ff9f43" }}>✓ #{raidSelectedPoke.id} {raidSelectedPoke.nameKr}</span>
