@@ -38,13 +38,7 @@ export default function Home() {
     fetch("/api/pokemon-data")
       .then((r) => r.json())
       .then((data) => {
-        // New format: { pokemon, moveNamesKr } — backward compat with old array format
-        if (data.pokemon && Array.isArray(data.pokemon)) {
-          setAllPokemon(data.pokemon);
-          setMoveNamesKr(data.moveNamesKr || {});
-        } else if (Array.isArray(data)) {
-          setAllPokemon(data);
-        }
+        if (Array.isArray(data)) setAllPokemon(data);
         setDataLoading(false);
       })
       .catch(() => setDataLoading(false));
@@ -91,6 +85,30 @@ export default function Home() {
     setSelectedPokemon(poke);
     setSuggestions([]);
     setShowSugg(false);
+
+    // Fetch Korean names for this pokemon's moves only (4-8 calls, fast)
+    const allMoves = [...(poke.fast || []), ...(poke.charged || []), ...(poke.eliteFast || []), ...(poke.eliteCharged || [])];
+    const toFetch = allMoves.filter((m) => !moveNamesKr[m]);
+    if (toFetch.length > 0) {
+      Promise.allSettled(
+        toFetch.map(async (engName) => {
+          const slug = engName.toLowerCase().replace(/[()'']/g, "").replace(/\s+/g, "-").replace(/--+/g, "-");
+          try {
+            const r = await fetch(`https://pokeapi.co/api/v2/move/${slug}`);
+            if (!r.ok) return;
+            const d = await r.json();
+            const kr = d.names?.find((n) => n.language.name === "ko");
+            if (kr) return { eng: engName, kr: kr.name };
+          } catch {}
+        })
+      ).then((results) => {
+        const newNames = {};
+        results.forEach((r) => { if (r.status === "fulfilled" && r.value) newNames[r.value.eng] = r.value.kr; });
+        if (Object.keys(newNames).length > 0) {
+          setMoveNamesKr((prev) => ({ ...prev, ...newNames }));
+        }
+      });
+    }
   };
 
   const analyze = useCallback(async () => {
