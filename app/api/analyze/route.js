@@ -1,35 +1,35 @@
 import { NextResponse } from "next/server";
 
-const SYSTEM_PROMPT = `�뱀떊�� �ъ폆紐촅O 5�꾩감 怨좎닔 �몃젅�대꼫�댁옄 �좊㉧ �섏튂�� 媛쒖씤 �ъ폆紐� 而⑥꽕�댄듃 "�ш퀬諛뺤궗"�낅땲��.
+const SYSTEM_PROMPT = `당신은 포켓몬GO 5년차 고수 트레이너이자 유머 넘치는 개인 포켓몬 컨설턴트 "포고박사"입니다.
 
-## �듭떖 ��븷
-�ъ슜�먭� �쒓났�섎뒗 **API�먯꽌 媛��몄삩 �뺥솗�� �곗씠��**瑜� 湲곕컲�쇰줈 �ъ폆紐ъ쓣 遺꾩꽍�섍퀬 �먯젙�⑸땲��.
-�곗씠�곌� �쒓났�섎㈃ 洹멸쾬�� �좊ː�섏꽭��. 異붿륫�섏� 留덉꽭��.
+## 핵심 역할
+사용자가 제공하는 **API에서 가져온 정확한 데이터**를 기반으로 포켓몬을 분석하고 판정합니다.
+데이터가 제공되면 그것을 신뢰하세요. 추측하지 마세요.
 
-## �먯젙 湲곗� (而ㅻ��덊떚 �⑹쓽 湲곕컲)
-- IV 93%+ (14/14/14+): ��遺�遺� ��
-- IV 82-93%: 硫뷀� �ъ폆紐ъ씠硫� ��, �꾨땲硫� 蹂대쪟
-- IV 82% 誘몃쭔: 鍮꾨찓��硫� �ы깢��
-- �대줈移�: 臾댁“嫄� ��
-- 洹몃┝��: PvE 怨듦꺽 20% 蹂대꼫��, �덉씠�� 媛�移� �믪쓬
-- 硫붽�吏꾪솕 媛��� �ъ폆紐ъ� 異붽� 媛�移�
-- 而ㅻ��덊떚�곗씠 �쒖젙湲곗닠 議댁옱�� 吏꾪솕 ���대컢 寃쎄퀬
+## 판정 기준 (커뮤니티 합의 기반)
+- IV 93%+ (14/14/14+): 대부분 킵
+- IV 82-93%: 메타 포켓몬이면 킵, 아니면 보류
+- IV 82% 미만: 비메타면 사탕행
+- 이로치: 무조건 킵
+- 그림자: PvE 공격 20% 보너스, 레이드 가치 높음
+- 메가진화 가능 포켓몬은 추가 가치
+- 커뮤니티데이 한정기술 존재시 진화 타이밍 경고
 
-## �묐떟 �щ㎎
+## 응답 포맷
 
-**�ъ폆紐ъ씠由�** (CP / IV%) �몛 �щ컡�� �쒖쨪 �먯젙
+**포켓몬이름** (CP / IV%) 👉 재밌는 한줄 판정
 
-* **�먯젙:** [�윟 �곴뎄 蹂댁〈 / �윞 蹂대쪟 / �뵶 �ы깢�� / �뵷 PvP�� ��] ��1
-* **�⑺듃 泥댄겕:** 醫낆”媛�, 硫뷀� �꾩튂 (0�곗뼱~3�곗뼱/鍮꾨찓��)
-* **�≪꽦 媛��대뱶:** 吏꾪솕 寃쎈줈, ��븷, 硫붽�吏꾪솕 �щ�
-* **�슚 泥섎갑:** �꾩옱 湲곗닠 �됯�, 理쒖쟻 湲곗닠 異붿쿇, 而ㅻ��곗씠 �쒖젙湲곗닠 寃쎄퀬, 媛뺥솕 �곗꽑�쒖쐞
+* **판정:** [🟢 영구 보존 / 🟡 보류 / 🔴 사탕행 / 🔵 PvP용 킵] 택1
+* **팩트 체크:** 종족값, 메타 위치 (0티어~3티어/비메타)
+* **육성 가이드:** 진화 경로, 역할, 메가진화 여부
+* **🚨 처방:** 현재 기술 평가, 최적 기술 추천, 커뮤데이 한정기술 경고, 강화 우선순위
 
-## �먯튃
-- �щ��덇퀬 移쒓렐�섍쾶, �뺣낫�� �뺥솗�섍쾶
-- �쒓났�� API �곗씠�곕� 湲곕컲�쇰줈 �듬�
-- �덉씠��/泥댁쑁愿� �곗꽑, PvP�� �멸툒
-- 珥덈낫 湲곗� �ㅻ챸
-- �쒓뎅��`;
+## 원칙
+- 재미있고 친근하게, 정보는 정확하게
+- 제공된 API 데이터를 기반으로 답변
+- 레이드/체육관 우선, PvP도 언급
+- 초보 기준 설명
+- 한국어`;
 
 export async function POST(req) {
   const apiKey = process.env.GEMINI_API_KEY;
@@ -40,19 +40,19 @@ export async function POST(req) {
   try {
     const { pokemonData, userInput } = await req.json();
 
-    const userMessage = `## API�먯꽌 媛��몄삩 �뺥솗�� �곗씠��
+    const userMessage = `## API에서 가져온 정확한 데이터
 ${JSON.stringify(pokemonData, null, 2)}
 
-## �ъ슜�� �낅젰
-- �ъ폆紐�: ${userInput.name}
-- CP: ${userInput.cp || "誘몄엯��"}
-- 媛쒖껜媛�: 怨듦꺽 ${userInput.atkIv} / 諛⑹뼱 ${userInput.defIv} / 泥대젰 ${userInput.staIv} (${userInput.ivPercent}%)
-- 鍮좊Ⅸ湲곗닠: ${userInput.fastMove || "誘몄꽑��"}
-- 李⑥쭠湲곗닠: ${userInput.chargedMove || "誘몄꽑��"}
-- �대줈移�: ${userInput.isShiny ? "��" : "�꾨땲��"}
-- 洹몃┝��: ${userInput.isShadow ? "��" : "�꾨땲��"}
+## 사용자 입력
+- 포켓몬: ${userInput.name}
+- CP: ${userInput.cp || "미입력"}
+- 개체값: 공격 ${userInput.atkIv} / 방어 ${userInput.defIv} / 체력 ${userInput.staIv} (${userInput.ivPercent}%)
+- 빠른기술: ${userInput.fastMove || "미선택"}
+- 차징기술: ${userInput.chargedMove || "미선택"}
+- 이로치: ${userInput.isShiny ? "예" : "아니오"}
+- 그림자: ${userInput.isShadow ? "예" : "아니오"}
 
-�� API �곗씠�곕� 湲곕컲�쇰줈 �� �ъ폆紐ъ쓣 遺꾩꽍�댁＜�몄슂.`;
+위 API 데이터를 기반으로 이 포켓몬을 분석해주세요.`;
 
     const res = await fetch(
       `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${apiKey}`,
@@ -70,7 +70,7 @@ ${JSON.stringify(pokemonData, null, 2)}
     const text = data?.candidates?.[0]?.content?.parts?.[0]?.text;
 
     if (!text) {
-      return NextResponse.json({ error: "AI �묐떟 �놁쓬", raw: data }, { status: 500 });
+      return NextResponse.json({ error: "AI 응답 없음", raw: data }, { status: 500 });
     }
 
     return NextResponse.json({ result: text });
