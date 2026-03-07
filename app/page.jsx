@@ -25,6 +25,7 @@ export default function Home() {
   const [collection, setCollection] = useState([]);
   const [showCollection, setShowCollection] = useState(false);
   const [currentKept, setCurrentKept] = useState(false);
+  const [usedModel, setUsedModel] = useState("");
 
   const ivPercent = Math.round(((atkIv + defIv + staIv) / 45) * 100);
   const getIvColor = () => ivPercent >= 93 ? "#4ecdc4" : ivPercent >= 82 ? "#ffd93d" : "#ff6b6b";
@@ -94,7 +95,7 @@ export default function Home() {
 
   const analyze = useCallback(async () => {
     if (!pokemonName.trim()) { setError("포켓몬 이름을 입력해주세요!"); return; }
-    setLoading(true); setError(null); setResult(null); setCurrentKept(false);
+    setLoading(true); setError(null); setResult(null); setCurrentKept(false); setUsedModel("");
 
     const pokemonData = selectedPokemon
       ? {
@@ -128,19 +129,24 @@ export default function Home() {
             chargedMove: chargedMoveDisplay || chargedMove,
             isShiny, isShadow,
           },
+          collection: collection.map((c) => ({
+            name: c.name, pokemonId: c.pokemonId, cp: c.cp,
+            ivPercent: c.ivPercent, verdict: c.verdict,
+            isShiny: c.isShiny, isShadow: c.isShadow,
+          })),
         }),
       });
       const data = await res.json();
       if (data.error) { setError(data.error); }
-      else { setResult(data.result); }
+      else { setResult(data.result); setUsedModel(data.model || ""); }
     } catch (e) { setError("네트워크 오류입니다. 다시 시도해주세요."); }
     setLoading(false);
-  }, [pokemonName, cp, atkIv, defIv, staIv, ivPercent, fastMove, chargedMove, isShiny, isShadow, selectedPokemon, moveNamesKr]);
+  }, [pokemonName, cp, atkIv, defIv, staIv, ivPercent, fastMove, chargedMove, isShiny, isShadow, selectedPokemon, moveNamesKr, collection]);
 
   const reset = () => {
     setPokemonName(""); setCp(""); setAtkIv(15); setDefIv(15); setStaIv(15);
     setFastMove(""); setChargedMove(""); setIsShiny(false); setIsShadow(false);
-    setResult(null); setSelectedPokemon(null); setError(null); setCurrentKept(false);
+    setResult(null); setSelectedPokemon(null); setError(null); setCurrentKept(false); setUsedModel("");
   };
 
   // ─── Keep / Collection ───
@@ -328,6 +334,13 @@ export default function Home() {
             </div>
 
             <div style={s.resultContent}>{formatResult(result)}</div>
+
+            {/* Model info */}
+            {usedModel && (
+              <div style={{ padding: "4px 20px 0", fontSize: 10, color: "#576574", textAlign: "right" }}>
+                ⚡ {usedModel.replace("gemini-", "").replace("-preview", "")}
+              </div>
+            )}
 
             {/* ─── Keep button ─── */}
             {selectedPokemon && (
