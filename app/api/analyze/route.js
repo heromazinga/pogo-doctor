@@ -49,7 +49,18 @@ export async function POST(req) {
   }
 
   try {
-    const { pokemonData, userInput } = await req.json();
+    const { pokemonData, userInput, collection } = await req.json();
+
+    // Build collection context for AI
+    let collectionContext = "";
+    if (collection && collection.length > 0) {
+      const relevant = collection
+        .map((c) => `${c.name}(CP${c.cp}/IV${c.ivPercent}%/${c.verdict})`)
+        .join(", ");
+      collectionContext = `\n\n## 사용자 보유목록 (${collection.length}마리)
+${relevant}
+→ 이미 보유 중인 포켓몬과 비교해서 판정에 반영해주세요. (예: "이미 더 좋은 개체가 있으니 교환용", "보유 중인 것보다 우수하니 교체 추천" 등)`;
+    }
 
     const userMessage = `## API에서 가져온 정확한 데이터
 ${JSON.stringify(pokemonData, null, 2)}
@@ -61,7 +72,7 @@ ${JSON.stringify(pokemonData, null, 2)}
 - 빠른기술: ${userInput.fastMove || "미선택"}
 - 차징기술: ${userInput.chargedMove || "미선택"}
 - 이로치: ${userInput.isShiny ? "예" : "아니오"}
-- 그림자: ${userInput.isShadow ? "예" : "아니오"}
+- 그림자: ${userInput.isShadow ? "예" : "아니오"}${collectionContext}
 
 위 API 데이터를 기반으로 이 포켓몬을 분석해주세요. 상성 분석과 카운터 추천도 포함해주세요.`;
 
