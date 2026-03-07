@@ -1,5 +1,29 @@
 "use client";
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
+
+// ─── Rocket dialogue → type mapping ───
+const ROCKET_DIALOGUES = [
+  { dialogue: "노말 타입이 노말하다고 생각하면 큰코다쳐!", type: "노말", emoji: "😐" },
+  { dialogue: "불꽃 포켓몬의 뜨거움을 맛봐라!", type: "불꽃", emoji: "🔥" },
+  { dialogue: "물이 얼마나 무서운지 보여주지!", type: "물", emoji: "💧" },
+  { dialogue: "풀 타입의 힘을 보여주겠어!", type: "풀", emoji: "🌿" },
+  { dialogue: "전기 쇼크에 찌릿찌릿해봐!", type: "전기", emoji: "⚡" },
+  { dialogue: "얼음 타입의 차가움을 느껴봐!", type: "얼음", emoji: "❄️" },
+  { dialogue: "이 근육을 봐! 격투 포켓몬이 얼마나 강한지!", type: "격투", emoji: "🥊" },
+  { dialogue: "독이 소리없이 퍼져나간다...", type: "독", emoji: "☠️" },
+  { dialogue: "너 땅으로 돌아가라!", type: "땅", emoji: "🌍" },
+  { dialogue: "하늘에서의 전투는 어떤가!", type: "비행", emoji: "🕊️" },
+  { dialogue: "초능력을 쓰겠어!", type: "에스퍼", emoji: "🔮" },
+  { dialogue: "벌레 포켓몬에게 물려봐!", type: "벌레", emoji: "🐛" },
+  { dialogue: "바위가 얼마나 단단한지 보여주지!", type: "바위", emoji: "🪨" },
+  { dialogue: "가으윽! 무서운 유령이 나타났다!", type: "고스트", emoji: "👻" },
+  { dialogue: "용의 힘 앞에 무릎 꿇어라!", type: "드래곤", emoji: "🐉" },
+  { dialogue: "어둠 속에서 덮치겠어!", type: "악", emoji: "🌑" },
+  { dialogue: "강철의 의지를 보여주겠어!", type: "강철", emoji: "⚙️" },
+  { dialogue: "요정의 힘을 얕보지 마라!", type: "페어리", emoji: "🧚" },
+  { dialogue: "승리가 너를 기다리고 있어 ... 과연 그럴까?", type: "혼합 (보스전)", emoji: "🚀" },
+  { dialogue: "잘 봐둬! 내 포켓몬은 정말 강하다고!", type: "혼합", emoji: "❓" },
+];
 
 export default function Home() {
   const [allPokemon, setAllPokemon] = useState([]);
@@ -27,6 +51,20 @@ export default function Home() {
   const [currentKept, setCurrentKept] = useState(false);
   const [usedModel, setUsedModel] = useState("");
   const [viewingEntry, setViewingEntry] = useState(null);
+
+  // ─── Streaming state ───
+  const [streaming, setStreaming] = useState(false);
+  const abortRef = useRef(null);
+  const resultRef = useRef(null);
+
+  // ─── Tab / Mode ───
+  const [activeTab, setActiveTab] = useState("analyze"); // "analyze" | "rocket"
+
+  // ─── Rocket counter states ───
+  const [rocketDialogueIdx, setRocketDialogueIdx] = useState(-1);
+  const [rocketCustom, setRocketCustom] = useState("");
+  const [rocketResult, setRocketResult] = useState(null);
+  const [rocketModel, setRocketModel] = useState("");
 
   const ivPercent = Math.round(((atkIv + defIv + staIv) / 45) * 100);
   const getIvColor = () => ivPercent >= 93 ? "#4ecdc4" : ivPercent >= 82 ? "#ffd93d" : "#ff6b6b";
@@ -68,6 +106,13 @@ export default function Home() {
       localStorage.setItem("pogo-collection", JSON.stringify(collection));
     } catch {}
   }, [collection]);
+
+  // Auto-scroll result card while streaming
+  useEffect(() => {
+    if (streaming && resultRef.current) {
+      resultRef.current.scrollIntoView({ behavior: "smooth", block: "end" });
+    }
+  }, [result, streaming]);
 
   const handleNameChange = (val) => {
     setPokemonName(val);
@@ -121,9 +166,82 @@ export default function Home() {
     }
   };
 
+  // ─── Streaming fetch helper ───
+  const streamFetch = async (body, onChunk, onModel, onDone, onError) => {
+    const controller = new AbortController();
+    abortRef.current = controller;
+
+    try {
+      const res = await fetch("/api/analyze", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+        signal: controller.signal,
+      });
+
+      // If server returned JSON error (non-streaming fallback)
+      const contentType = res.headers.get("content-type") || "";
+      if (contentType.includes("application/json")) {
+        const data = await res.json();
+        if (data.error) { onError(data.error); return; }
+        // Fallback: non-streaming response
+        if (data.result) { onChunk(data.result); onModel(data.model || ""); }
+        onDone();
+        return;
+      }
+
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let accumulated = "";
+      let modelSent = false;
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        const chunk = decoder.decode(value, { stream: true });
+
+        // Parse model metadata from first chunk
+        if (!modelSent && chunk.includes("__MODEL__:")) {
+          const lines = chunk.split("\n");
+          for (const line of lines) {
+            if (line.startsWith("__MODEL__:")) {
+              onModel(line.replace("__MODEL__:", ""));
+              modelSent = true;
+            } else if (line.startsWith("__ERROR__:")) {
+              onError(line.replace("__ERROR__:", ""));
+            } else {
+              accumulated += line;
+              onChunk(accumulated);
+            }
+          }
+        } else {
+          // Check for inline errors
+          if (chunk.includes("__ERROR__:")) {
+            const parts = chunk.split("__ERROR__:");
+            accumulated += parts[0];
+            onChunk(accumulated);
+            onError(parts[1]);
+          } else {
+            accumulated += chunk;
+            onChunk(accumulated);
+          }
+        }
+      }
+
+      onDone();
+    } catch (e) {
+      if (e.name !== "AbortError") {
+        onError("네트워크 오류입니다. 다시 시도해주세요.");
+      }
+    }
+    abortRef.current = null;
+  };
+
+  // ─── Analyze (streaming) ───
   const analyze = useCallback(async () => {
     if (!pokemonName.trim()) { setError("포켓몬 이름을 입력해주세요!"); return; }
-    setLoading(true); setError(null); setResult(null); setCurrentKept(false); setUsedModel("");
+    setLoading(true); setStreaming(true); setError(null); setResult(null); setCurrentKept(false); setUsedModel("");
 
     const pokemonData = selectedPokemon
       ? {
@@ -140,41 +258,69 @@ export default function Home() {
         }
       : { name: pokemonName, note: "API에서 매칭 안됨" };
 
-    // Send Korean move names for context
     const fastMoveDisplay = fastMove ? `${krMove(fastMove)} (${fastMove})` : "";
     const chargedMoveDisplay = chargedMove ? `${krMove(chargedMove)} (${chargedMove})` : "";
 
-    try {
-      const res = await fetch("/api/analyze", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          pokemonData,
-          userInput: {
-            name: selectedPokemon ? selectedPokemon.nameKr : pokemonName,
-            cp, atkIv, defIv, staIv, ivPercent,
-            fastMove: fastMoveDisplay || fastMove,
-            chargedMove: chargedMoveDisplay || chargedMove,
-            isShiny, isShadow,
-          },
-          collection: collection.map((c) => ({
-            name: c.name, pokemonId: c.pokemonId, cp: c.cp,
-            ivPercent: c.ivPercent, verdict: c.verdict,
-            isShiny: c.isShiny, isShadow: c.isShadow,
-          })),
-        }),
-      });
-      const data = await res.json();
-      if (data.error) { setError(data.error); }
-      else { setResult(data.result); setUsedModel(data.model || ""); }
-    } catch (e) { setError("네트워크 오류입니다. 다시 시도해주세요."); }
-    setLoading(false);
+    await streamFetch(
+      {
+        pokemonData,
+        userInput: {
+          name: selectedPokemon ? selectedPokemon.nameKr : pokemonName,
+          cp, atkIv, defIv, staIv, ivPercent,
+          fastMove: fastMoveDisplay || fastMove,
+          chargedMove: chargedMoveDisplay || chargedMove,
+          isShiny, isShadow,
+        },
+        collection: collection.map((c) => ({
+          name: c.name, pokemonId: c.pokemonId, cp: c.cp,
+          ivPercent: c.ivPercent, verdict: c.verdict,
+          isShiny: c.isShiny, isShadow: c.isShadow,
+        })),
+      },
+      (text) => setResult(text),
+      (model) => setUsedModel(model),
+      () => { setLoading(false); setStreaming(false); },
+      (err) => { setError(err); setLoading(false); setStreaming(false); }
+    );
   }, [pokemonName, cp, atkIv, defIv, staIv, ivPercent, fastMove, chargedMove, isShiny, isShadow, selectedPokemon, moveNamesKr, collection]);
 
+  // ─── Rocket counter (streaming) ───
+  const analyzeRocket = useCallback(async () => {
+    const dialogue = rocketDialogueIdx >= 0 ? ROCKET_DIALOGUES[rocketDialogueIdx].dialogue : rocketCustom.trim();
+    const type = rocketDialogueIdx >= 0 ? ROCKET_DIALOGUES[rocketDialogueIdx].type : "";
+    if (!dialogue) { setError("로켓단 대사를 선택하거나 입력해주세요!"); return; }
+    setLoading(true); setStreaming(true); setError(null); setRocketResult(null); setRocketModel("");
+
+    await streamFetch(
+      {
+        mode: "rocket",
+        rocketDialogue: dialogue,
+        rocketType: type,
+        collection: collection.map((c) => ({
+          name: c.name, pokemonId: c.pokemonId, cp: c.cp,
+          ivPercent: c.ivPercent, verdict: c.verdict,
+          isShiny: c.isShiny, isShadow: c.isShadow,
+        })),
+      },
+      (text) => setRocketResult(text),
+      (model) => setRocketModel(model),
+      () => { setLoading(false); setStreaming(false); },
+      (err) => { setError(err); setLoading(false); setStreaming(false); }
+    );
+  }, [rocketDialogueIdx, rocketCustom, collection]);
+
   const reset = () => {
+    if (abortRef.current) abortRef.current.abort();
     setPokemonName(""); setCp(""); setAtkIv(15); setDefIv(15); setStaIv(15);
     setFastMove(""); setChargedMove(""); setIsShiny(false); setIsShadow(false);
     setResult(null); setSelectedPokemon(null); setError(null); setCurrentKept(false); setUsedModel("");
+    setStreaming(false); setLoading(false);
+  };
+
+  const resetRocket = () => {
+    if (abortRef.current) abortRef.current.abort();
+    setRocketResult(null); setRocketModel(""); setError(null);
+    setStreaming(false); setLoading(false);
   };
 
   // ─── Keep / Collection ───
@@ -221,7 +367,7 @@ export default function Home() {
       return <div key={i} style={{ ...s.verdictLine, borderLeftColor: color }}>{renderBold(line)}</div>;
     }
     if (line.includes("🚨")) return <div key={i} style={s.warningLine}>{renderBold(line)}</div>;
-    if (line.includes("🛡️")) return <div key={i} style={s.counterLine}>{renderBold(line)}</div>;
+    if (line.includes("🛡️") || line.includes("🏆") || line.includes("💡")) return <div key={i} style={s.counterLine}>{renderBold(line)}</div>;
     if (line.trim().startsWith("*")) return <div key={i} style={s.bulletLine}>{renderBold(line.replace(/^\*\s*/, ""))}</div>;
     if (line.trim() === "") return <div key={i} style={{ height: 8 }} />;
     return <div key={i} style={{ padding: "2px 0", fontSize: 13 }}>{renderBold(line)}</div>;
@@ -231,8 +377,14 @@ export default function Home() {
   const hasCharged = selectedPokemon && selectedPokemon.charged && selectedPokemon.charged.length > 0;
   const displayName = selectedPokemon ? selectedPokemon.nameKr : pokemonName;
 
+  // Are we showing the analyze result screen?
+  const showAnalyzeResult = activeTab === "analyze" && result;
+  const showRocketResult = activeTab === "rocket" && rocketResult;
+
   return (
     <div style={s.container}>
+      {/* Inject blink keyframe — no globals.css edit needed */}
+      <style>{`@keyframes blink { 50% { opacity: 0; } }`}</style>
       <div style={s.inner}>
         <div style={s.header}>
           <span style={s.logoIcon}>⚡</span>
@@ -242,7 +394,24 @@ export default function Home() {
           </div>
         </div>
 
-        {!result ? (
+        {/* ─── Tab Switcher ─── */}
+        {!showAnalyzeResult && !showRocketResult && (
+          <div style={s.tabRow}>
+            <button
+              onClick={() => { setActiveTab("analyze"); setError(null); }}
+              style={activeTab === "analyze" ? s.tabActive : s.tab}
+            >🔍 포켓몬 분석</button>
+            <button
+              onClick={() => { setActiveTab("rocket"); setError(null); }}
+              style={activeTab === "rocket" ? s.tabActive : s.tab}
+            >🚀 로켓단 카운터</button>
+          </div>
+        )}
+
+        {/* ═══════════════════════════════════════ */}
+        {/* ─── ANALYZE TAB ─── */}
+        {/* ═══════════════════════════════════════ */}
+        {activeTab === "analyze" && !result && (
           <div style={s.card}>
             <div style={s.group}>
               <label style={s.label}>포켓몬 이름 {dataLoading && <span style={{ fontSize: 10, color: "#ffd93d" }}>데이터 로딩중...</span>}</label>
@@ -351,8 +520,11 @@ export default function Home() {
               {loading ? <span>⚡ 분석 중...</span> : "🔍 포켓몬 분석하기"}
             </button>
           </div>
-        ) : (
-          <div style={s.resultCard}>
+        )}
+
+        {/* ─── Analyze Result (streaming) ─── */}
+        {activeTab === "analyze" && result && (
+          <div style={s.resultCard} ref={resultRef}>
             {selectedPokemon && (
               <div style={s.imgContainer}>
                 <img src={`https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/other/official-artwork/${selectedPokemon.id}.png`} alt={displayName} style={s.pokemonImg} onError={(e) => { e.target.style.display = "none"; }} />
@@ -368,17 +540,20 @@ export default function Home() {
               <div style={{ ...s.ivSumItem, borderRight: "none" }}><span style={{ fontSize: 11, opacity: 0.6 }}>IV</span><span style={{ fontWeight: 700, color: getIvColor() }}>{ivPercent}%</span></div>
             </div>
 
-            <div style={s.resultContent}>{formatResult(result)}</div>
+            <div style={s.resultContent}>
+              {formatResult(result)}
+              {streaming && <span style={s.cursor}>▌</span>}
+            </div>
 
             {/* Model info */}
-            {usedModel && (
+            {usedModel && !streaming && (
               <div style={{ padding: "4px 20px 0", fontSize: 10, color: "#576574", textAlign: "right" }}>
                 ⚡ {usedModel.replace("gemini-", "").replace("-preview", "")}
               </div>
             )}
 
             {/* ─── Keep button ─── */}
-            {selectedPokemon && (
+            {selectedPokemon && !streaming && (
               <div style={{ padding: "12px 20px 0" }}>
                 <button onClick={handleKeep} disabled={currentKept} style={currentKept ? s.keepBtnKept : s.keepBtn}>
                   {currentKept ? "✅ 보유목록에 저장됨" : "📦 킵! 보유목록에 저장"}
@@ -386,12 +561,97 @@ export default function Home() {
               </div>
             )}
 
-            <button onClick={reset} style={s.resetBtn}>🔄 다른 포켓몬 분석하기</button>
+            {!streaming && (
+              <button onClick={reset} style={s.resetBtn}>🔄 다른 포켓몬 분석하기</button>
+            )}
+          </div>
+        )}
+
+        {/* ═══════════════════════════════════════ */}
+        {/* ─── ROCKET TAB ─── */}
+        {/* ═══════════════════════════════════════ */}
+        {activeTab === "rocket" && !rocketResult && (
+          <div style={s.card}>
+            <div style={s.rocketHeader}>
+              <span style={{ fontSize: 28 }}>🚀</span>
+              <div>
+                <div style={{ fontSize: 15, fontWeight: 700, color: "#e0e0e0" }}>로켓단 대사 → 카운터 추천</div>
+                <div style={{ fontSize: 11, color: "#8899aa" }}>대사를 선택하면 AI가 최적 카운터를 알려드려요</div>
+              </div>
+            </div>
+
+            <div style={s.group}>
+              <label style={s.label}>로켓단 대사 선택</label>
+              <div style={s.rocketGrid}>
+                {ROCKET_DIALOGUES.map((d, i) => (
+                  <button
+                    key={i}
+                    onClick={() => { setRocketDialogueIdx(i); setRocketCustom(""); }}
+                    style={rocketDialogueIdx === i ? s.rocketChipActive : s.rocketChip}
+                  >
+                    <span style={{ fontSize: 16 }}>{d.emoji}</span>
+                    <span style={{ fontSize: 11 }}>{d.type}</span>
+                  </button>
+                ))}
+              </div>
+              {rocketDialogueIdx >= 0 && (
+                <div style={s.rocketPreview}>
+                  "{ROCKET_DIALOGUES[rocketDialogueIdx].dialogue}"
+                  <span style={{ display: "block", fontSize: 11, color: "#4ecdc4", marginTop: 4 }}>→ {ROCKET_DIALOGUES[rocketDialogueIdx].type} 타입</span>
+                </div>
+              )}
+            </div>
+
+            <div style={s.group}>
+              <label style={s.label}>또는 직접 입력</label>
+              <input
+                style={s.input}
+                value={rocketCustom}
+                onChange={(e) => { setRocketCustom(e.target.value); setRocketDialogueIdx(-1); }}
+                placeholder="로켓단 대사를 직접 입력..."
+              />
+            </div>
+
+            {collection.length > 0 && (
+              <div style={s.rocketCollNote}>
+                📋 보유목록 {collection.length}마리 반영됨 — 내 포켓몬 중 카운터 우선 추천
+              </div>
+            )}
+
+            {error && <div style={s.error}>{error}</div>}
+
+            <button onClick={analyzeRocket} style={s.rocketBtn} disabled={loading}>
+              {loading ? <span>🚀 분석 중...</span> : "🚀 카운터 추천받기"}
+            </button>
+          </div>
+        )}
+
+        {/* ─── Rocket Result (streaming) ─── */}
+        {activeTab === "rocket" && rocketResult && (
+          <div style={s.resultCard} ref={resultRef}>
+            <div style={{ ...s.imgContainer, background: "radial-gradient(ellipse at center,rgba(112,88,152,0.15) 0%,transparent 70%)" }}>
+              <div style={{ fontSize: 64 }}>🚀</div>
+            </div>
+
+            <div style={s.resultContent}>
+              {formatResult(rocketResult)}
+              {streaming && <span style={s.cursor}>▌</span>}
+            </div>
+
+            {rocketModel && !streaming && (
+              <div style={{ padding: "4px 20px 0", fontSize: 10, color: "#576574", textAlign: "right" }}>
+                ⚡ {rocketModel.replace("gemini-", "").replace("-preview", "")}
+              </div>
+            )}
+
+            {!streaming && (
+              <button onClick={resetRocket} style={s.resetBtn}>🔄 다른 대사 분석하기</button>
+            )}
           </div>
         )}
 
         <div style={s.footer}>
-          <p>포고박사 v0.5</p>
+          <p>포고박사 v0.6</p>
           <p style={{ fontSize: 10, opacity: 0.4, marginTop: 4 }}>Pokémon GO는 Niantic, Inc.의 상표입니다</p>
         </div>
       </div>
@@ -524,15 +784,15 @@ const s = {
   resetBtn: { display: "block", width: "calc(100% - 40px)", margin: "20px 20px 0", padding: 14, background: "transparent", border: "2px solid #2a3a5c", borderRadius: 12, color: "#8899aa", fontSize: 14, fontWeight: 600, fontFamily: "'Outfit',sans-serif", cursor: "pointer" },
   footer: { textAlign: "center", padding: "24px 0 8px", fontSize: 11, opacity: 0.3, color: "#c8d6e5" },
 
-  // ─── New styles: Keep button ───
+  // ─── Keep button ───
   keepBtn: { width: "100%", padding: 12, background: "rgba(0,212,170,0.1)", border: "2px solid #00d4aa", borderRadius: 10, color: "#00d4aa", fontSize: 14, fontWeight: 700, fontFamily: "'Outfit',sans-serif", cursor: "pointer" },
   keepBtnKept: { width: "100%", padding: 12, background: "#00d4aa", border: "2px solid #00d4aa", borderRadius: 10, color: "#0a1628", fontSize: 14, fontWeight: 700, fontFamily: "'Outfit',sans-serif", cursor: "default" },
 
-  // ─── New styles: Collection FAB ───
+  // ─── Collection FAB ───
   fab: { position: "fixed", bottom: 20, right: 20, width: 56, height: 56, background: "linear-gradient(135deg,#00d4aa,#00b894)", border: "none", borderRadius: "50%", fontSize: 24, cursor: "pointer", boxShadow: "0 4px 20px rgba(0,212,170,0.4)", zIndex: 100, display: "flex", alignItems: "center", justifyContent: "center" },
   fabBadge: { position: "absolute", top: -4, right: -4, background: "#ff6b6b", color: "#fff", fontSize: 11, fontWeight: 700, minWidth: 20, height: 20, borderRadius: 10, display: "flex", alignItems: "center", justifyContent: "center", padding: "0 5px" },
 
-  // ─── New styles: Collection Panel ───
+  // ─── Collection Panel ───
   collOverlay: { position: "fixed", inset: 0, background: "rgba(10,22,40,0.95)", zIndex: 200, display: "flex", justifyContent: "center", overflowY: "auto" },
   collPanel: { width: "100%", maxWidth: 520, padding: 20, paddingBottom: 40 },
   collHeader: { display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16, position: "sticky", top: 0, background: "rgba(10,22,40,0.98)", padding: "12px 0", zIndex: 10 },
@@ -550,4 +810,21 @@ const s = {
   collBackBtn: { background: "none", border: "none", color: "#4ecdc4", fontSize: 14, fontWeight: 600, cursor: "pointer", padding: "8px 0", marginBottom: 8, fontFamily: "'Outfit',sans-serif" },
   collItemClickable: { display: "flex", alignItems: "center", gap: 10, flex: 1, minWidth: 0, cursor: "pointer" },
   collAnalysis: { background: "#0d1a2e", borderRadius: 10, padding: 16, border: "1px solid #2a3a5c" },
+
+  // ─── NEW: Streaming cursor ───
+  cursor: { display: "inline-block", color: "#4ecdc4", animation: "blink 1s step-end infinite", fontWeight: 700, fontSize: 16 },
+
+  // ─── NEW: Tab switcher ───
+  tabRow: { display: "flex", gap: 4, marginBottom: 16, background: "#0d1a2e", borderRadius: 12, padding: 4, border: "1px solid #2a3a5c" },
+  tab: { flex: 1, padding: "10px 0", background: "transparent", border: "none", borderRadius: 10, color: "#8899aa", fontSize: 13, fontWeight: 600, fontFamily: "'Outfit',sans-serif", cursor: "pointer", transition: "all 0.2s" },
+  tabActive: { flex: 1, padding: "10px 0", background: "linear-gradient(135deg,#1a2744,#162038)", border: "1px solid rgba(0,212,170,0.2)", borderRadius: 10, color: "#4ecdc4", fontSize: 13, fontWeight: 700, fontFamily: "'Outfit',sans-serif", cursor: "pointer", boxShadow: "0 2px 8px rgba(0,0,0,0.2)" },
+
+  // ─── NEW: Rocket counter ───
+  rocketHeader: { display: "flex", alignItems: "center", gap: 12, marginBottom: 20, padding: "12px 16px", background: "rgba(112,88,152,0.1)", border: "1px solid rgba(112,88,152,0.2)", borderRadius: 12 },
+  rocketGrid: { display: "grid", gridTemplateColumns: "repeat(5, 1fr)", gap: 6 },
+  rocketChip: { display: "flex", flexDirection: "column", alignItems: "center", gap: 2, padding: "10px 4px", background: "#0d1a2e", border: "2px solid #2a3a5c", borderRadius: 10, color: "#8899aa", cursor: "pointer", fontFamily: "'Outfit',sans-serif", transition: "all 0.15s" },
+  rocketChipActive: { display: "flex", flexDirection: "column", alignItems: "center", gap: 2, padding: "10px 4px", background: "rgba(112,88,152,0.2)", border: "2px solid #705898", borderRadius: 10, color: "#e0e0e0", cursor: "pointer", fontFamily: "'Outfit',sans-serif", boxShadow: "0 0 12px rgba(112,88,152,0.3)" },
+  rocketPreview: { marginTop: 12, padding: "12px 16px", background: "rgba(112,88,152,0.08)", border: "1px solid rgba(112,88,152,0.2)", borderRadius: 10, fontSize: 13, color: "#c8d6e5", fontStyle: "italic", lineHeight: 1.6 },
+  rocketCollNote: { padding: "8px 12px", background: "rgba(0,212,170,0.06)", border: "1px solid rgba(0,212,170,0.1)", borderRadius: 8, fontSize: 12, color: "#4ecdc4", marginBottom: 16 },
+  rocketBtn: { width: "100%", padding: 16, background: "linear-gradient(135deg,#705898,#4a3370)", border: "none", borderRadius: 12, color: "#fff", fontSize: 16, fontWeight: 700, fontFamily: "'Outfit',sans-serif", cursor: "pointer", boxShadow: "0 4px 16px rgba(112,88,152,0.3)" },
 };
