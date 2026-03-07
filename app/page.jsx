@@ -627,7 +627,7 @@ export default function Home() {
             <div style={s.group}>
               <label style={s.label}>레이드 보스 검색</label>
               <div style={{ position: "relative" }}>
-                <input style={s.input} value={raidBossName} onChange={(e) => handleRaidBossSearch(e.target.value)} onFocus={() => raidSuggestions.length > 0 && setShowRaidSugg(true)} onBlur={() => setTimeout(() => setShowRaidSugg(false), 200)} placeholder="예: 가이오가, Mewtwo..." />
+                <input style={s.input} value={raidBossName} onChange={(e) => handleRaidBossSearch(e.target.value)} onFocus={() => raidSuggestions.length > 0 && setShowRaidSugg(true)} onBlur={() => setTimeout(() => setShowRaidSugg(false), 200)} placeholder="레이드 보스 이름" />
                 {raidSelectedPoke && (
                   <div style={s.miniInfo}>
                     <span style={{ color: "#ff9f43" }}>✓ #{raidSelectedPoke.id} {raidSelectedPoke.nameKr}</span>
