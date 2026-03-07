@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 
 let cache = null;
 let cacheTime = 0;
-const CACHE_DURATION = 1000 * 60 * 60; // 1 hour
+const CACHE_DURATION = 1000 * 60 * 60;
 
 export async function GET() {
   if (cache && Date.now() - cacheTime < CACHE_DURATION) {
@@ -18,7 +18,6 @@ export async function GET() {
     const stats = await statsRes.json();
     const moves = await movesRes.json();
 
-    // Build moves lookup by pokemon_id
     const movesMap = {};
     for (const m of moves) {
       const key = m.pokemon_id;
@@ -26,22 +25,23 @@ export async function GET() {
       movesMap[key].push(m);
     }
 
-    // Combine into one list
-    const pokemon = stats.map((s) => ({
-      id: s.id,
-      name: s.pokemon_name,
-      form: s.form || "Normal",
-      baseAttack: s.base_attack,
-      baseDefense: s.base_defense,
-      baseStamina: s.base_stamina,
-      moves: (movesMap[s.id] || []).map((m) => ({
-        form: m.form,
-        fast: m.fast_moves || [],
-        charged: m.charged_moves || [],
-        eliteFast: m.elite_fast_moves || [],
-        eliteCharged: m.elite_charged_moves || [],
-      })),
-    }));
+    const pokemon = stats.map((s) => {
+      const pokeMoves = movesMap[s.pokemon_id] || [];
+      const matchedMoves = pokeMoves.find((m) => m.form === s.form) || pokeMoves[0] || {};
+
+      return {
+        id: s.pokemon_id,
+        name: s.pokemon_name,
+        form: s.form || "Normal",
+        baseAttack: s.base_attack,
+        baseDefense: s.base_defense,
+        baseStamina: s.base_stamina,
+        fast: matchedMoves.fast_moves || [],
+        charged: matchedMoves.charged_moves || [],
+        eliteFast: matchedMoves.elite_fast_moves || [],
+        eliteCharged: matchedMoves.elite_charged_moves || [],
+      };
+    });
 
     cache = pokemon;
     cacheTime = Date.now();
