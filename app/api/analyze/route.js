@@ -55,7 +55,7 @@ ${JSON.stringify(pokemonData, null, 2)}
 위 API 데이터를 기반으로 이 포켓몬을 분석해주세요.`;
 
     const res = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-lite:generateContent?key=${apiKey}`,
+      `https://generativelanguage.googleapis.com/v1beta/models/gemini-3-flash-preview:generateContent?key=${apiKey}`,
       {
         method: "POST",
         headers: { "Content-Type": "application/json" },
