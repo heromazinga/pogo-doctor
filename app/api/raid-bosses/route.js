@@ -25,11 +25,11 @@ export async function GET() {
       lvl1: "⭐",
       lvl3: "⭐⭐⭐",
       lvl5: "⭐⭐⭐⭐⭐",
-      mega: "🔥 메가",
-      ultra_beast: "🌀 UB",
-      shadow_lvl1: "👤⭐",
-      shadow_lvl3: "👤⭐⭐⭐",
-      shadow_lvl5: "👤⭐⭐⭐⭐⭐",
+      mega: "메가",
+      ultra_beast: "UB",
+      shadow_lvl1: "⭐",
+      shadow_lvl3: "⭐⭐⭐",
+      shadow_lvl5: "⭐⭐⭐⭐⭐",
     };
 
     // 5성, 메가, UB, 그림자5성 위주로 표시 (1성/3성은 관심도 낮음)
