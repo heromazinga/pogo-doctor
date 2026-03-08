@@ -134,7 +134,9 @@ const COMPARE_SYSTEM_PROMPT = `당신은 포켓몬GO 포켓몬 비교 전문가 
 ## 원칙
 - 재미있고 친근하게
 - 초보 기준 설명
-- 한국어`;: fastest free → stable fallback
+- 한국어`;
+
+// fastest free → stable fallback
 const MODELS = [
   "gemini-3.1-flash-lite-preview",
   "gemini-3-flash-preview",
