@@ -106,7 +106,9 @@ const COMPARE_SYSTEM_PROMPT = `당신은 포켓몬GO 포켓몬 비교 전문가 
 4. 용도별 추천 — 레이드/PvP/체육관 각각
 5. 최종 결론 — 킵/교체/둘 다 킵 중 택1, 확실한 이유와 함께
 
-한국어로 답변하세요.`;: fastest free → stable fallback
+한국어로 답변하세요.`;
+
+// fastest free → stable fallback
 const MODELS = [
   "gemini-3.1-flash-lite-preview",
   "gemini-3-flash-preview",
