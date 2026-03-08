@@ -50,6 +50,13 @@ export default function Home() {
   const [raidResult, setRaidResult] = useState(null);
   const [raidModel, setRaidModel] = useState("");
 
+  // ─── Collection filter ───
+  const [collFilter, setCollFilter] = useState("all");
+
+  // ─── Current raid bosses ───
+  const [currentRaidBosses, setCurrentRaidBosses] = useState([]);
+  const [raidBossesLoading, setRaidBossesLoading] = useState(false);
+
   // ─── Compare ───
   const [showCompare, setShowCompare] = useState(false);
   const [compareTarget, setCompareTarget] = useState(null);
@@ -72,6 +79,29 @@ export default function Home() {
   // Move name helper: English → Korean (fallback to English)
   const krMove = (engName) => moveNamesKr[engName] || engName;
 
+  // Collection category helper
+  const getCollCategory = (item) => {
+    const v = (item.verdict || "").toLowerCase();
+    if (v.includes("pvp")) return "pvp";
+    if (v.includes("사탕행")) return "candy";
+    if (v.includes("보류")) return item.isShiny ? "collection" : "pending";
+    if (v.includes("영구 보존") || v.includes("킵")) return item.isShadow ? "raid" : (item.ivPercent >= 93 ? "raid" : "pvp");
+    return "collection";
+  };
+
+  const COLL_FILTERS = [
+    { key: "all", label: "전체", emoji: "📋" },
+    { key: "raid", label: "레이드", emoji: "⚔️" },
+    { key: "pvp", label: "PvP", emoji: "🏆" },
+    { key: "collection", label: "관상용", emoji: "✨" },
+    { key: "candy", label: "사탕행", emoji: "🍬" },
+    { key: "pending", label: "보류", emoji: "🟡" },
+  ];
+
+  const filteredCollection = collFilter === "all"
+    ? collection
+    : collection.filter((item) => getCollCategory(item) === collFilter);
+
   useEffect(() => {
     fetch("/api/pokemon-data")
       .then((r) => r.json())
@@ -88,6 +118,18 @@ export default function Home() {
       const saved = localStorage.getItem("pogo-collection");
       if (saved) setCollection(JSON.parse(saved));
     } catch {}
+  }, []);
+
+  // Fetch current raid bosses
+  useEffect(() => {
+    setRaidBossesLoading(true);
+    fetch("/api/raid-bosses")
+      .then((r) => r.json())
+      .then((data) => {
+        if (Array.isArray(data)) setCurrentRaidBosses(data);
+        setRaidBossesLoading(false);
+      })
+      .catch(() => setRaidBossesLoading(false));
   }, []);
 
   // Save collection to localStorage
@@ -236,6 +278,21 @@ export default function Home() {
       setRaidSuggestions(matches);
       setShowRaidSugg(matches.length > 0);
     } else { setRaidSuggestions([]); setShowRaidSugg(false); }
+  };
+
+  // ─── Select current raid boss from chip ───
+  const selectCurrentRaidBoss = (boss) => {
+    // Try to find matching pokemon in allPokemon data
+    const match = allPokemon.find((p) => p.id === boss.id && (p.form === boss.form || p.form === "Normal"));
+    if (match) {
+      setRaidBossName(match.nameKr);
+      setRaidSelectedPoke(match);
+    } else {
+      setRaidBossName(boss.name);
+      setRaidSelectedPoke(null);
+    }
+    setRaidSuggestions([]);
+    setShowRaidSugg(false);
   };
 
   // ─── Auto-scroll while streaming ───
@@ -638,6 +695,29 @@ export default function Home() {
             </div>
             <div style={s.group}>
               <label style={s.label}>레이드 보스 검색</label>
+
+              {/* ─── Current Raid Bosses ─── */}
+              {currentRaidBosses.length > 0 && (
+                <div style={{ marginBottom: 12 }}>
+                  <div style={{ fontSize: 12, fontWeight: 700, color: "#ff9f43", marginBottom: 8, display: "flex", alignItems: "center", gap: 6 }}>
+                    <span style={{ display: "inline-block", width: 8, height: 8, borderRadius: "50%", background: "#ff9f43", animation: "blink 2s ease-in-out infinite" }} />
+                    지금 레이드 중
+                  </div>
+                  <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+                    {currentRaidBosses.map((boss, i) => {
+                      const krName = allPokemon.find((p) => p.id === boss.id)?.nameKr || boss.name;
+                      return (
+                        <button key={`${boss.id}-${boss.form}-${i}`} onClick={() => selectCurrentRaidBoss(boss)} style={s.raidBossChip}>
+                          <img src={`https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/${boss.id}.png`} alt={krName} style={{ width: 24, height: 24, imageRendering: "pixelated" }} onError={(e) => { e.target.style.display = "none"; }} />
+                          <span style={{ fontSize: 12, fontWeight: 600, color: "#e0e0e0" }}>{krName}</span>
+                          <span style={{ fontSize: 9, color: "#8899aa" }}>{boss.tier}</span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+              {raidBossesLoading && <div style={{ fontSize: 11, color: "#8899aa", marginBottom: 8 }}>레이드 보스 로딩 중...</div>}
               <div style={{ position: "relative" }}>
                 <input style={s.input} value={raidBossName} onChange={(e) => handleRaidBossSearch(e.target.value)} onFocus={() => raidSuggestions.length > 0 && setShowRaidSugg(true)} onBlur={() => setTimeout(() => setShowRaidSugg(false), 200)} placeholder="예: 가이오가, Mewtwo..." />
                 {raidSelectedPoke && (
@@ -677,7 +757,7 @@ export default function Home() {
         )}
 
         <div style={s.footer}>
-          <p>포고박사 v0.7</p>
+          <p>포고박사 v0.8</p>
           <p style={{ fontSize: 10, opacity: 0.4, marginTop: 4 }}>Pokémon GO는 Niantic, Inc.의 상표입니다</p>
         </div>
       </div>
@@ -694,8 +774,25 @@ export default function Home() {
           <div style={s.collPanel}>
             <div style={s.collHeader}>
               <h2 style={{ fontSize: 18, fontWeight: 800, color: "#e0e0e0" }}>📋 보유목록 ({collection.length})</h2>
-              <button style={s.collClose} onClick={() => { setShowCollection(false); setViewingEntry(null); }}>✕</button>
+              <button style={s.collClose} onClick={() => { setShowCollection(false); setViewingEntry(null); setCollFilter("all"); }}>✕</button>
             </div>
+
+            {/* ─── Collection Filter Tabs ─── */}
+            {collection.length > 0 && !viewingEntry && (
+              <div style={s.collFilterRow}>
+                {COLL_FILTERS.map((f) => {
+                  const count = f.key === "all" ? collection.length : collection.filter((item) => getCollCategory(item) === f.key).length;
+                  if (f.key !== "all" && count === 0) return null;
+                  return (
+                    <button key={f.key} onClick={() => setCollFilter(f.key)} style={collFilter === f.key ? s.collFilterActive : s.collFilterBtn}>
+                      <span style={{ fontSize: 13 }}>{f.emoji}</span>
+                      <span style={{ fontSize: 11 }}>{f.label}</span>
+                      <span style={{ fontSize: 10, opacity: 0.5 }}>{count}</span>
+                    </button>
+                  );
+                })}
+              </div>
+            )}
 
             {collection.length === 0 ? (
               <div style={s.collEmpty}>
@@ -733,7 +830,9 @@ export default function Home() {
               </div>
             ) : (
               <div style={s.collList}>
-                {collection.map((item) => (
+                {filteredCollection.length === 0 ? (
+                  <div style={{ textAlign: "center", padding: "30px 20px", color: "#8899aa", fontSize: 13 }}>이 카테고리에 해당하는 포켓몬이 없습니다</div>
+                ) : filteredCollection.map((item) => (
                   <div key={item.id} style={s.collItem}>
                     <div style={s.collItemClickable} onClick={() => item.analysisResult ? setViewingEntry(item) : null}>
                       <img
@@ -751,6 +850,12 @@ export default function Home() {
                         </div>
                       </div>
                       <span style={{ fontSize: 12, fontWeight: 700, color: "#ffd93d", whiteSpace: "nowrap" }}>{item.verdict}</span>
+                      {(() => {
+                        const cat = getCollCategory(item);
+                        const catColors = { pvp: "#a890f0", raid: "#ff9f43", collection: "#ffd93d", candy: "#ff6b6b", pending: "#8899aa" };
+                        const catLabels = { pvp: "PvP", raid: "레이드", collection: "관상", candy: "사탕행", pending: "보류" };
+                        return <span style={{ fontSize: 9, padding: "1px 5px", borderRadius: 6, background: `${catColors[cat]}22`, color: catColors[cat], fontWeight: 600, marginLeft: 4 }}>{catLabels[cat]}</span>;
+                      })()}
                     </div>
                     <button style={s.collRemove} onClick={() => removeFromCollection(item.id)}>🗑</button>
                   </div>
@@ -926,4 +1031,12 @@ const s = {
   // ─── Compare ───
   compareCard: { padding: "12px 16px", background: "#1a2744", border: "1px solid #2a3a5c", borderRadius: 12, marginBottom: 8, cursor: "pointer" },
   compareMini: { flex: 1, padding: "10px 12px", background: "#0d1a2e", border: "1px solid #2a3a5c", borderRadius: 10, textAlign: "center" },
+
+  // ─── Collection filter tabs ───
+  collFilterRow: { display: "flex", gap: 4, marginBottom: 12, overflowX: "auto", paddingBottom: 4 },
+  collFilterBtn: { display: "flex", flexDirection: "column", alignItems: "center", gap: 1, padding: "6px 10px", background: "#0d1a2e", border: "1px solid #2a3a5c", borderRadius: 8, color: "#8899aa", cursor: "pointer", fontFamily: "'Outfit',sans-serif", whiteSpace: "nowrap", minWidth: 48 },
+  collFilterActive: { display: "flex", flexDirection: "column", alignItems: "center", gap: 1, padding: "6px 10px", background: "rgba(0,212,170,0.1)", border: "1px solid rgba(0,212,170,0.3)", borderRadius: 8, color: "#4ecdc4", cursor: "pointer", fontFamily: "'Outfit',sans-serif", whiteSpace: "nowrap", minWidth: 48, fontWeight: 600 },
+
+  // ─── Current raid boss chips ───
+  raidBossChip: { display: "flex", alignItems: "center", gap: 4, padding: "6px 10px", background: "#0d1a2e", border: "1px solid rgba(255,159,67,0.25)", borderRadius: 10, cursor: "pointer", fontFamily: "'Outfit',sans-serif", transition: "border-color 0.2s" },
 };
