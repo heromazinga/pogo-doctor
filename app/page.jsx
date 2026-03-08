@@ -104,12 +104,17 @@ export default function Home() {
     setChargedMove("");
     if (val.length >= 1) {
       const q = val.toLowerCase();
+      // Allow Normal + meaningful regional forms, exclude costume/event forms
+      const REGIONAL_FORMS = ["Alola", "Galarian", "Hisuian", "Paldea"];
       const matches = allPokemon
         .filter((p) => {
-          if (p.form !== "Normal") return false;
-          return p.nameKr.toLowerCase().includes(q) || p.name.toLowerCase().includes(q);
+          const isNormal = p.form === "Normal";
+          const isRegional = REGIONAL_FORMS.includes(p.form);
+          if (!isNormal && !isRegional) return false;
+          const formLabel = isRegional ? p.form.toLowerCase() : "";
+          return p.nameKr.toLowerCase().includes(q) || p.name.toLowerCase().includes(q) || formLabel.includes(q);
         })
-        .slice(0, 8);
+        .slice(0, 10);
       setSuggestions(matches);
       setShowSugg(matches.length > 0);
     } else {
@@ -119,7 +124,8 @@ export default function Home() {
   };
 
   const selectPokemon = (poke) => {
-    setPokemonName(poke.nameKr);
+    const formLabel = poke.form !== "Normal" ? ` (${poke.form})` : "";
+    setPokemonName(poke.nameKr + formLabel);
     setSelectedPokemon(poke);
     setSuggestions([]);
     setShowSugg(false);
@@ -223,9 +229,10 @@ export default function Home() {
     setRaidSelectedPoke(null);
     if (val.length >= 1) {
       const q = val.toLowerCase();
+      const REGIONAL_FORMS = ["Alola", "Galarian", "Hisuian", "Paldea"];
       const matches = allPokemon
-        .filter((p) => p.form === "Normal" && (p.nameKr.toLowerCase().includes(q) || p.name.toLowerCase().includes(q)))
-        .slice(0, 8);
+        .filter((p) => (p.form === "Normal" || REGIONAL_FORMS.includes(p.form)) && (p.nameKr.toLowerCase().includes(q) || p.name.toLowerCase().includes(q)))
+        .slice(0, 10);
       setRaidSuggestions(matches);
       setShowRaidSugg(matches.length > 0);
     } else { setRaidSuggestions([]); setShowRaidSugg(false); }
@@ -243,6 +250,7 @@ export default function Home() {
     const pokemonData = selectedPokemon
       ? {
           name: selectedPokemon.name, nameKr: selectedPokemon.nameKr, id: selectedPokemon.id,
+          form: selectedPokemon.form,
           baseAttack: selectedPokemon.baseAttack, baseDefense: selectedPokemon.baseDefense,
           baseStamina: selectedPokemon.baseStamina, fast: selectedPokemon.fast,
           charged: selectedPokemon.charged, eliteFast: selectedPokemon.eliteFast,
@@ -252,16 +260,18 @@ export default function Home() {
 
     const fastMoveDisplay = fastMove ? `${krMove(fastMove)} (${fastMove})` : "";
     const chargedMoveDisplay = chargedMove ? `${krMove(chargedMove)} (${chargedMove})` : "";
+    const pvpTag = getPvpTag();
 
     await streamFetch(
       {
         pokemonData,
         userInput: {
-          name: selectedPokemon ? selectedPokemon.nameKr : pokemonName,
+          name: selectedPokemon ? displayName : pokemonName,
           cp, atkIv, defIv, staIv, ivPercent,
           fastMove: fastMoveDisplay || fastMove,
           chargedMove: chargedMoveDisplay || chargedMove,
           isShiny, isShadow,
+          pvpIvTag: pvpTag ? pvpTag.text : null,
         },
         collection: collection.map((c) => ({
           name: c.name, pokemonId: c.pokemonId, cp: c.cp,
@@ -346,9 +356,10 @@ export default function Home() {
     if (!selectedPokemon || !result || currentKept) return;
     const verdict = result.match(/(영구 보존|킵|보류|사탕행|PvP용 킵)/)?.[0] || "킵";
     const entry = {
-      id: `${selectedPokemon.id}-${Date.now()}`,
+      id: `${selectedPokemon.id}-${selectedPokemon.form}-${Date.now()}`,
       pokemonId: selectedPokemon.id,
-      name: selectedPokemon.nameKr,
+      form: selectedPokemon.form,
+      name: selectedPokemon.nameKr + (selectedPokemon.form !== "Normal" ? ` (${selectedPokemon.form})` : ""),
       enName: selectedPokemon.name,
       cp: parseInt(cp) || 0,
       ivPercent,
@@ -393,7 +404,7 @@ export default function Home() {
 
   const hasFast = selectedPokemon && selectedPokemon.fast && selectedPokemon.fast.length > 0;
   const hasCharged = selectedPokemon && selectedPokemon.charged && selectedPokemon.charged.length > 0;
-  const displayName = selectedPokemon ? selectedPokemon.nameKr : pokemonName;
+  const displayName = selectedPokemon ? selectedPokemon.nameKr + (selectedPokemon.form !== "Normal" ? ` (${selectedPokemon.form})` : "") : pokemonName;
 
   return (
     <div style={s.container}>
@@ -424,7 +435,7 @@ export default function Home() {
                 <input style={s.input} value={pokemonName} onChange={(e) => handleNameChange(e.target.value)} onFocus={() => suggestions.length > 0 && setShowSugg(true)} onBlur={() => setTimeout(() => setShowSugg(false), 200)} />
                 {selectedPokemon && (
                   <div style={s.miniInfo}>
-                    <span style={{ color: "#4ecdc4" }}>✓ #{selectedPokemon.id} {selectedPokemon.nameKr}</span>
+                    <span style={{ color: "#4ecdc4" }}>✓ #{selectedPokemon.id} {selectedPokemon.nameKr}{selectedPokemon.form !== "Normal" ? ` (${selectedPokemon.form})` : ""}</span>
                     <span style={{ opacity: 0.5 }}>공{selectedPokemon.baseAttack} / 방{selectedPokemon.baseDefense} / 체{selectedPokemon.baseStamina}</span>
                   </div>
                 )}
@@ -434,6 +445,7 @@ export default function Home() {
                       <div key={`${p.id}-${p.form}-${i}`} style={s.suggItem} onMouseDown={() => selectPokemon(p)}>
                         <div>
                           <span style={{ fontWeight: 600 }}>{p.nameKr}</span>
+                          {p.form !== "Normal" && <span style={{ fontSize: 11, color: "#a890f0", marginLeft: 4 }}>({p.form})</span>}
                           {p.nameKr !== p.name && <span style={{ fontSize: 11, opacity: 0.4, marginLeft: 6 }}>{p.name}</span>}
                         </div>
                         <span style={{ fontSize: 11, opacity: 0.5 }}>#{p.id}</span>
@@ -560,7 +572,7 @@ export default function Home() {
                   {currentKept ? "✅ 저장됨" : "📦 킵!"}
                 </button>
                 {(() => {
-                  const sameSpecies = collection.filter((c) => c.pokemonId === selectedPokemon.id);
+                  const sameSpecies = collection.filter((c) => c.pokemonId === selectedPokemon.id && (!c.form || c.form === selectedPokemon.form));
                   if (sameSpecies.length === 0) return null;
                   return (
                     <button onClick={() => setShowCompare(true)} style={{ ...s.keepBtn, flex: 1, borderColor: "#ffd93d", color: "#ffd93d" }}>
@@ -777,7 +789,7 @@ export default function Home() {
                 <div style={{ textAlign: "center", padding: "8px 0", color: "#576574", fontSize: 20 }}>⚖️</div>
 
                 {/* Collection entries of same species */}
-                {collection.filter((c) => c.pokemonId === selectedPokemon.id).map((item) => (
+                {collection.filter((c) => c.pokemonId === selectedPokemon.id && (!c.form || c.form === selectedPokemon.form)).map((item) => (
                   <div key={item.id} style={s.compareCard} onClick={() => runCompare(item)}>
                     <div style={{ display: "flex", alignItems: "center", gap: 10, cursor: "pointer" }}>
                       <img src={`https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/${item.pokemonId}.png`} alt="" style={{ width: 48, height: 48, imageRendering: "pixelated" }} />
