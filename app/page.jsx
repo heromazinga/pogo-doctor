@@ -282,13 +282,12 @@ export default function Home() {
 
   // ─── Select current raid boss from chip ───
   const selectCurrentRaidBoss = (boss) => {
-    // Try to find matching pokemon in allPokemon data
     const match = allPokemon.find((p) => p.id === boss.id && (p.form === boss.form || p.form === "Normal"));
     if (match) {
       setRaidBossName(match.nameKr);
       setRaidSelectedPoke(match);
     } else {
-      setRaidBossName(boss.name);
+      setRaidBossName(boss.nameKr || boss.name);
       setRaidSelectedPoke(null);
     }
     setRaidSuggestions([]);
@@ -704,16 +703,13 @@ export default function Home() {
                     지금 레이드 중
                   </div>
                   <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
-                    {currentRaidBosses.map((boss, i) => {
-                      const krName = allPokemon.find((p) => p.id === boss.id)?.nameKr || boss.name;
-                      return (
-                        <button key={`${boss.id}-${boss.form}-${i}`} onClick={() => selectCurrentRaidBoss(boss)} style={s.raidBossChip}>
-                          <img src={`https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/${boss.id}.png`} alt={krName} style={{ width: 24, height: 24, imageRendering: "pixelated" }} onError={(e) => { e.target.style.display = "none"; }} />
-                          <span style={{ fontSize: 12, fontWeight: 600, color: "#e0e0e0" }}>{krName}</span>
-                          <span style={{ fontSize: 9, color: "#8899aa" }}>{boss.tier}</span>
-                        </button>
-                      );
-                    })}
+                    {currentRaidBosses.filter((b) => b.isPriority).map((boss, i) => (
+                      <button key={`${boss.id}-${boss.form}-${i}`} onClick={() => selectCurrentRaidBoss(boss)} style={s.raidBossChip}>
+                        <img src={boss.image || `https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/${boss.id}.png`} alt={boss.nameKr} style={{ width: 24, height: 24, imageRendering: "pixelated" }} onError={(e) => { e.target.style.display = "none"; }} />
+                        <span style={{ fontSize: 12, fontWeight: 600, color: "#e0e0e0" }}>{boss.nameKr}</span>
+                        <span style={{ fontSize: 9, color: "#8899aa" }}>{boss.tier}</span>
+                      </button>
+                    ))}
                   </div>
                 </div>
               )}
