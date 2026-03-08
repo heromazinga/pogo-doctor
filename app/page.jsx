@@ -56,6 +56,7 @@ export default function Home() {
   // ─── Current raid bosses ───
   const [currentRaidBosses, setCurrentRaidBosses] = useState([]);
   const [raidBossesLoading, setRaidBossesLoading] = useState(false);
+  const [raidBossesExpanded, setRaidBossesExpanded] = useState(false);
 
   // ─── Compare ───
   const [showCompare, setShowCompare] = useState(false);
@@ -698,16 +699,23 @@ export default function Home() {
               {/* ─── Current Raid Bosses ─── */}
               {currentRaidBosses.length > 0 && (
                 <div style={{ marginBottom: 12 }}>
-                  <div style={{ fontSize: 12, fontWeight: 700, color: "#ff9f43", marginBottom: 8, display: "flex", alignItems: "center", gap: 6 }}>
-                    <span style={{ display: "inline-block", width: 8, height: 8, borderRadius: "50%", background: "#ff9f43", animation: "blink 2s ease-in-out infinite" }} />
-                    지금 레이드 중
+                  <div style={{ fontSize: 12, fontWeight: 700, color: "#ff9f43", marginBottom: 8, display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                      <span style={{ display: "inline-block", width: 8, height: 8, borderRadius: "50%", background: "#ff9f43", animation: "blink 2s ease-in-out infinite" }} />
+                      지금 레이드 중
+                    </div>
+                    <button onClick={() => setRaidBossesExpanded(!raidBossesExpanded)} style={{ background: "none", border: "none", color: "#8899aa", fontSize: 11, cursor: "pointer", fontFamily: "'Outfit',sans-serif" }}>
+                      {raidBossesExpanded ? "▲ 접기" : `▼ 전체 보기 (${currentRaidBosses.length})`}
+                    </button>
                   </div>
                   <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
-                    {currentRaidBosses.filter((b) => b.isPriority).map((boss, i) => (
-                      <button key={`${boss.id}-${boss.form}-${i}`} onClick={() => selectCurrentRaidBoss(boss)} style={s.raidBossChip}>
-                        <img src={boss.image || `https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/${boss.id}.png`} alt={boss.nameKr} style={{ width: 24, height: 24, imageRendering: "pixelated" }} onError={(e) => { e.target.style.display = "none"; }} />
+                    {(raidBossesExpanded ? currentRaidBosses : currentRaidBosses.filter((b) => b.isPriority)).map((boss, i) => (
+                      <button key={`${boss.id}-${boss.tierKey}-${i}`} onClick={() => selectCurrentRaidBoss(boss)} style={{ ...s.raidBossChip, ...(boss.tierKey === "shadow_lvl5" ? { borderColor: "rgba(112,88,152,0.4)" } : boss.tierKey === "mega" ? { borderColor: "rgba(255,107,107,0.4)" } : {}) }}>
+                        <img src={`https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/${boss.id}.png`} alt={boss.nameKr} style={{ width: 24, height: 24, imageRendering: "pixelated" }} onError={(e) => { e.target.style.display = "none"; }} />
                         <span style={{ fontSize: 12, fontWeight: 600, color: "#e0e0e0" }}>{boss.nameKr}</span>
-                        <span style={{ fontSize: 9, color: "#8899aa" }}>{boss.tier}</span>
+                        <span style={{ fontSize: 9, color: boss.tierKey === "shadow_lvl5" ? "#a890f0" : boss.tierKey === "mega" ? "#ff6b6b" : "#8899aa" }}>
+                          {boss.tierKey.startsWith("shadow") ? "👤" : ""}{boss.tierKey === "mega" ? "메가" : boss.tierKey === "ultra_beast" ? "UB" : boss.tier}
+                        </span>
                       </button>
                     ))}
                   </div>
