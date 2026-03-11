@@ -64,22 +64,6 @@ IF 마스터리그용: 15/15/15에 가까울수록 좋음
 
 한국어로 답변하세요.`;
 
-const ROCKET_SYSTEM_PROMPT = `당신은 포켓몬GO 로켓단 전투 전문가 "포고박사"입니다.
-
-## 말투
-솔직하고 친근하게. 초보한테 설명하듯 쉽게. 불릿포인트 최소화하고 대화체로 풀어서 말하세요.
-
-## 핵심 역할
-로켓단 대사를 보고 어떤 포켓몬이 나올지 예측하고 최적 카운터를 추천합니다.
-
-## 응답 구조
-1. 대사 분석 — 이 대사가 뜻하는 타입과 예상 포켓몬 3~5마리
-2. 추천 카운터 TOP 3 — 각각 포켓몬 이름, 추천 기술, 왜 좋은지 한줄
-3. 실전 팁 — 방어막 타이밍, 선봉 추천, 교체 전략 등 2~3줄
-4. 사용자 보유목록이 있으면 "보유 중인 ○○로 충분합니다" 식으로 우선 추천
-
-한국어로 답변하세요.`;
-
 const RAID_SYSTEM_PROMPT = `당신은 포켓몬GO 레이드 전문가 "포고박사"입니다.
 
 ## 말투
@@ -130,7 +114,7 @@ export async function POST(req) {
 
   try {
     const body = await req.json();
-    const { pokemonData, userInput, collection, mode, rocketDialogue, rocketType, raidBoss, compareA, compareB } = body;
+    const { pokemonData, userInput, collection, mode, raidBoss, compareA, compareB } = body;
 
     let systemPrompt, userMessage;
 
@@ -160,23 +144,6 @@ ${JSON.stringify(compareA, null, 2)}
 ${JSON.stringify(compareB, null, 2)}
 
 이 두 포켓몬을 비교 분석해주세요. 어느 쪽을 키워야 할지, 둘 다 킵해야 할지 판정해주세요.`;
-    } else if (mode === "rocket") {
-      systemPrompt = ROCKET_SYSTEM_PROMPT;
-
-      let collectionContext = "";
-      if (collection && collection.length > 0) {
-        const relevant = collection
-          .map((c) => `${c.name}(CP${c.cp}/IV${c.ivPercent}%/${c.verdict})`)
-          .join(", ");
-        collectionContext = `\n\n## 사용자 보유 포켓몬 (${collection.length}마리)\n${relevant}\n→ 가능하면 보유 포켓몬 중에서 카운터를 추천해주세요.`;
-      }
-
-      userMessage = `## 로켓단 대사
-"${rocketDialogue}"
-
-## 예상 타입: ${rocketType || "알 수 없음"}${collectionContext}
-
-이 로켓단 대사에 맞는 카운터 포켓몬을 추천해주세요. 초보자도 이해하기 쉽게 설명해주세요.`;
     } else {
       systemPrompt = SYSTEM_PROMPT;
 
