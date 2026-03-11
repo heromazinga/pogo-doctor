@@ -34,13 +34,7 @@ export default function Home() {
   const resultRef = useRef(null);
 
   // ─── Tab / Mode ───
-  const [activeTab, setActiveTab] = useState("analyze"); // "analyze" | "rocket" | "raid"
-
-  // ─── Rocket counter ───
-  const [rocketDialogueIdx, setRocketDialogueIdx] = useState(-1);
-  const [rocketCustom, setRocketCustom] = useState("");
-  const [rocketResult, setRocketResult] = useState(null);
-  const [rocketModel, setRocketModel] = useState("");
+  const [activeTab, setActiveTab] = useState("analyze"); // "analyze" | "raid"
 
   // ─── Raid counter ───
   const [raidBossName, setRaidBossName] = useState("");
@@ -198,29 +192,6 @@ export default function Home() {
     }
   };
 
-  // ─── Rocket dialogues ───
-  const ROCKET_DIALOGUES = [
-    { dialogue: "노말 타입이 노말하다고 생각하면 큰코다쳐!", type: "노말", emoji: "😐" },
-    { dialogue: "불꽃 포켓몬의 뜨거움을 맛봐라!", type: "불꽃", emoji: "🔥" },
-    { dialogue: "물이 얼마나 무서운지 보여주지!", type: "물", emoji: "💧" },
-    { dialogue: "풀 타입의 힘을 보여주겠어!", type: "풀", emoji: "🌿" },
-    { dialogue: "전기 쇼크에 찌릿찌릿해봐!", type: "전기", emoji: "⚡" },
-    { dialogue: "얼음 타입의 차가움을 느껴봐!", type: "얼음", emoji: "❄️" },
-    { dialogue: "이 근육을 봐! 격투 포켓몬이 얼마나 강한지!", type: "격투", emoji: "🥊" },
-    { dialogue: "독이 소리없이 퍼져나간다...", type: "독", emoji: "☠️" },
-    { dialogue: "너 땅으로 돌아가라!", type: "땅", emoji: "🌍" },
-    { dialogue: "하늘에서의 전투는 어떤가!", type: "비행", emoji: "🕊️" },
-    { dialogue: "초능력을 쓰겠어!", type: "에스퍼", emoji: "🔮" },
-    { dialogue: "벌레 포켓몬에게 물려봐!", type: "벌레", emoji: "🐛" },
-    { dialogue: "바위가 얼마나 단단한지 보여주지!", type: "바위", emoji: "🪨" },
-    { dialogue: "가으윽! 무서운 유령이 나타났다!", type: "고스트", emoji: "👻" },
-    { dialogue: "용의 힘 앞에 무릎 꿇어라!", type: "드래곤", emoji: "🐉" },
-    { dialogue: "어둠 속에서 덮치겠어!", type: "악", emoji: "🌑" },
-    { dialogue: "강철의 의지를 보여주겠어!", type: "강철", emoji: "⚙️" },
-    { dialogue: "요정의 힘을 얕보지 마라!", type: "페어리", emoji: "🧚" },
-    { dialogue: "승리가 너를 기다리고 있어 ... 과연 그럴까?", type: "혼합 (보스전)", emoji: "🚀" },
-  ];
-
   // ─── Streaming fetch helper ───
   const streamFetch = async (body, onChunk, onModel, onDone, onError) => {
     const controller = new AbortController();
@@ -281,7 +252,9 @@ export default function Home() {
     } else { setRaidSuggestions([]); setShowRaidSugg(false); }
   };
 
-  // ─── Select current raid boss from chip ───
+  // ─── Select current raid boss from chip → auto analyze ───
+  const [autoAnalyzeRaid, setAutoAnalyzeRaid] = useState(false);
+
   const selectCurrentRaidBoss = (boss) => {
     const match = allPokemon.find((p) => p.id === boss.id && (p.form === boss.form || p.form === "Normal"));
     if (match) {
@@ -293,12 +266,35 @@ export default function Home() {
     }
     setRaidSuggestions([]);
     setShowRaidSugg(false);
+    setAutoAnalyzeRaid(true);
   };
+
+  // Trigger raid analysis after chip selection
+  useEffect(() => {
+    if (autoAnalyzeRaid && (raidSelectedPoke || raidBossName)) {
+      setAutoAnalyzeRaid(false);
+      // Small delay to ensure state is set
+      setTimeout(() => {
+        const poke = raidSelectedPoke;
+        if (!poke && !raidBossName.trim()) return;
+        setLoading(true); setStreaming(true); setError(null); setRaidResult(null); setRaidModel("");
+        const raidBoss = poke ? { name: poke.name, nameKr: poke.nameKr, id: poke.id, baseAttack: poke.baseAttack, baseDefense: poke.baseDefense, baseStamina: poke.baseStamina } : { name: raidBossName };
+        streamFetch(
+          { mode: "raid", raidBoss,
+            collection: collection.map((c) => ({ name: c.name, pokemonId: c.pokemonId, cp: c.cp, ivPercent: c.ivPercent, verdict: c.verdict, isShiny: c.isShiny, isShadow: c.isShadow })),
+          },
+          (text) => setRaidResult(text), (model) => setRaidModel(model),
+          () => { setLoading(false); setStreaming(false); },
+          (err) => { setError(err); setLoading(false); setStreaming(false); }
+        );
+      }, 50);
+    }
+  }, [autoAnalyzeRaid, raidSelectedPoke, raidBossName]);
 
   // ─── Auto-scroll while streaming ───
   useEffect(() => {
     if (streaming && resultRef.current) resultRef.current.scrollIntoView({ behavior: "smooth", block: "end" });
-  }, [result, streaming, rocketResult, raidResult, compareResult]);
+  }, [result, streaming, raidResult, compareResult]);
 
   const analyze = useCallback(async () => {
     if (!pokemonName.trim()) { setError("포켓몬 이름을 입력해주세요!"); return; }
@@ -351,25 +347,13 @@ export default function Home() {
     setStreaming(false); setLoading(false); setShowCompare(false); setCompareResult(null); setCompareTarget(null);
   };
 
-  // ─── Rocket counter (streaming) ───
-  const analyzeRocket = useCallback(async () => {
-    const dialogue = rocketDialogueIdx >= 0 ? ROCKET_DIALOGUES[rocketDialogueIdx].dialogue : rocketCustom.trim();
-    const type = rocketDialogueIdx >= 0 ? ROCKET_DIALOGUES[rocketDialogueIdx].type : "";
-    if (!dialogue) { setError("로켓단 대사를 선택하거나 입력해주세요!"); return; }
-    setLoading(true); setStreaming(true); setError(null); setRocketResult(null); setRocketModel("");
-    await streamFetch(
-      { mode: "rocket", rocketDialogue: dialogue, rocketType: type,
-        collection: collection.map((c) => ({ name: c.name, pokemonId: c.pokemonId, cp: c.cp, ivPercent: c.ivPercent, verdict: c.verdict, isShiny: c.isShiny, isShadow: c.isShadow })),
-      },
-      (text) => setRocketResult(text), (model) => setRocketModel(model),
-      () => { setLoading(false); setStreaming(false); },
-      (err) => { setError(err); setLoading(false); setStreaming(false); }
-    );
-  }, [rocketDialogueIdx, rocketCustom, collection]);
-
-  const resetRocket = () => {
+  // ─── Re-analyze with different IV (keep pokemon) ───
+  const resetForReanalyze = () => {
     if (abortRef.current) abortRef.current.abort();
-    setRocketResult(null); setRocketModel(""); setError(null); setStreaming(false); setLoading(false);
+    setCp(""); setAtkIv(15); setDefIv(15); setStaIv(15);
+    setFastMove(""); setChargedMove(""); setIsShiny(false); setIsShadow(false);
+    setResult(null); setError(null); setCurrentKept(false); setUsedModel("");
+    setStreaming(false); setLoading(false); setShowCompare(false); setCompareResult(null); setCompareTarget(null);
   };
 
   // ─── Raid counter (streaming) ───
@@ -438,6 +422,45 @@ export default function Home() {
     setCollection((prev) => prev.filter((e) => e.id !== entryId));
   };
 
+  // ─── Collection export/import ───
+  const exportCollection = () => {
+    const data = JSON.stringify(collection, null, 2);
+    const blob = new Blob([data], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `포고박사_보유목록_${new Date().toISOString().slice(0, 10)}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  const importCollection = () => {
+    const input = document.createElement("input");
+    input.type = "file";
+    input.accept = ".json";
+    input.onchange = (e) => {
+      const file = e.target.files[0];
+      if (!file) return;
+      const reader = new FileReader();
+      reader.onload = (ev) => {
+        try {
+          const data = JSON.parse(ev.target.result);
+          if (Array.isArray(data)) {
+            setCollection((prev) => {
+              const existingIds = new Set(prev.map((p) => p.id));
+              const newItems = data.filter((d) => d.id && !existingIds.has(d.id));
+              const merged = [...prev, ...newItems];
+              merged.sort((a, b) => a.pokemonId - b.pokemonId);
+              return merged;
+            });
+          }
+        } catch { setError("잘못된 파일 형식입니다."); }
+      };
+      reader.readAsText(file);
+    };
+    input.click();
+  };
+
   const renderBold = (text) => {
     return text.split(/(\*\*[^*]+\*\*)/g).map((p, i) =>
       p.startsWith("**") && p.endsWith("**")
@@ -476,10 +499,9 @@ export default function Home() {
         </div>
 
         {/* ─── Tab Switcher (hide when showing results) ─── */}
-        {!result && !rocketResult && !raidResult && (
+        {!result && !raidResult && (
           <div style={s.tabRow}>
             <button onClick={() => { setActiveTab("analyze"); setError(null); }} style={activeTab === "analyze" ? s.tabActive : s.tab}>🔍 분석</button>
-            <button onClick={() => { setActiveTab("rocket"); setError(null); }} style={activeTab === "rocket" ? s.tabActive : s.tab}>🚀 로켓단</button>
             <button onClick={() => { setActiveTab("raid"); setError(null); }} style={activeTab === "raid" ? s.tabActive : s.tab}>⚔️ 레이드</button>
           </div>
         )}
@@ -525,7 +547,11 @@ export default function Home() {
                   <div key={label} style={s.ivItem}>
                     <div style={s.ivLabelRow}>
                       <span style={s.ivStatLabel}>{label}</span>
-                      <span style={{ ...s.ivStatVal, color: value >= 14 ? "#ff6348" : value >= 10 ? "#ffa502" : "#8899aa" }}>{value}</span>
+                      <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                        <button onClick={() => set(Math.max(0, value - 1))} style={s.ivStepBtn}>−</button>
+                        <span style={{ ...s.ivStatVal, color: value >= 14 ? "#ff6348" : value >= 10 ? "#ffa502" : "#8899aa", minWidth: 20, textAlign: "center" }}>{value}</span>
+                        <button onClick={() => set(Math.min(15, value + 1))} style={s.ivStepBtn}>+</button>
+                      </div>
                     </div>
                     <div style={s.gaugeOuter}>
                       {[0, 1, 2].map((seg) => {
@@ -537,7 +563,11 @@ export default function Home() {
                         );
                       })}
                     </div>
-                    <input type="range" className="iv-slider" min="0" max="15" value={value} onChange={(e) => set(parseInt(e.target.value))} />
+                    <div style={s.ivQuickRow}>
+                      {[0, 5, 10, 13, 15].map((v) => (
+                        <button key={v} onClick={() => set(v)} style={value === v ? s.ivQuickBtnActive : s.ivQuickBtn}>{v}</button>
+                      ))}
+                    </div>
                   </div>
                 ))}
               </div>
@@ -640,53 +670,19 @@ export default function Home() {
               </div>
             )}
 
-            {!streaming && <button onClick={reset} style={s.resetBtn}>🔄 다른 포켓몬 분석하기</button>}
+            {!streaming && (
+              <div style={{ padding: "0 20px", display: "flex", gap: 8, marginTop: 20 }}>
+                <button onClick={resetForReanalyze} style={{ ...s.resetBtn, margin: 0, flex: 1, borderColor: "#4ecdc4", color: "#4ecdc4" }}>🔄 IV 바꿔서 재분석</button>
+                <button onClick={reset} style={{ ...s.resetBtn, margin: 0, flex: 1 }}>🔍 다른 포켓몬</button>
+              </div>
+            )}
           </div>
         ) : null}
-
-        {/* ═══ ROCKET TAB ═══ */}
-        {activeTab === "rocket" && !rocketResult && (
-          <div style={s.card}>
-            <div style={s.rocketHeader}>
-              <span style={{ fontSize: 28 }}>🚀</span>
-              <div>
-                <div style={{ fontSize: 15, fontWeight: 700, color: "#e0e0e0" }}>로켓단 대사 → 카운터 추천</div>
-                <div style={{ fontSize: 11, color: "#8899aa" }}>대사를 선택하면 AI가 최적 카운터를 알려드려요</div>
-              </div>
-            </div>
-            <div style={s.group}>
-              <label style={s.label}>로켓단 대사 선택</label>
-              <div style={s.rocketGrid}>
-                {ROCKET_DIALOGUES.map((d, i) => (
-                  <button key={i} onClick={() => { setRocketDialogueIdx(i); setRocketCustom(""); }} style={rocketDialogueIdx === i ? s.rocketChipActive : s.rocketChip}>
-                    <span style={{ fontSize: 16 }}>{d.emoji}</span>
-                    <span style={{ fontSize: 11 }}>{d.type}</span>
-                  </button>
-                ))}
-              </div>
-              {rocketDialogueIdx >= 0 && <div style={s.rocketPreview}>"{ROCKET_DIALOGUES[rocketDialogueIdx].dialogue}"<span style={{ display: "block", fontSize: 11, color: "#4ecdc4", marginTop: 4 }}>→ {ROCKET_DIALOGUES[rocketDialogueIdx].type} 타입</span></div>}
-            </div>
-            <div style={s.group}>
-              <label style={s.label}>또는 직접 입력</label>
-              <input style={s.input} value={rocketCustom} onChange={(e) => { setRocketCustom(e.target.value); setRocketDialogueIdx(-1); }} placeholder="로켓단 대사를 직접 입력..." />
-            </div>
-            {error && <div style={s.error}>{error}</div>}
-            <button onClick={analyzeRocket} style={s.rocketBtn} disabled={loading}>{loading ? "🚀 분석 중..." : "🚀 카운터 추천받기"}</button>
-          </div>
-        )}
-        {activeTab === "rocket" && rocketResult && (
-          <div style={s.resultCard} ref={resultRef}>
-            <div style={{ ...s.imgContainer, background: "radial-gradient(ellipse at center,rgba(112,88,152,0.15) 0%,transparent 70%)" }}><div style={{ fontSize: 64 }}>🚀</div></div>
-            <div style={s.resultContent}>{formatResult(rocketResult)}{streaming && <span style={s.cursor}>▌</span>}</div>
-            {rocketModel && !streaming && <div style={{ padding: "4px 20px 0", fontSize: 10, color: "#576574", textAlign: "right" }}>⚡ {rocketModel.replace("gemini-", "").replace("-preview", "")}</div>}
-            {!streaming && <button onClick={resetRocket} style={s.resetBtn}>🔄 다른 대사 분석하기</button>}
-          </div>
-        )}
 
         {/* ═══ RAID TAB ═══ */}
         {activeTab === "raid" && !raidResult && (
           <div style={s.card}>
-            <div style={s.rocketHeader}>
+            <div style={s.sectionHeader}>
               <span style={{ fontSize: 28 }}>⚔️</span>
               <div>
                 <div style={{ fontSize: 15, fontWeight: 700, color: "#e0e0e0" }}>레이드 보스 카운터 추천</div>
@@ -742,7 +738,7 @@ export default function Home() {
                 )}
               </div>
             </div>
-            {collection.length > 0 && <div style={s.rocketCollNote}>📋 보유목록 {collection.length}마리 반영 — 내 포켓몬 중 카운터 우선 추천</div>}
+            {collection.length > 0 && <div style={s.collNote}>📋 보유목록 {collection.length}마리 반영 — 내 포켓몬 중 카운터 우선 추천</div>}
             {error && <div style={s.error}>{error}</div>}
             <button onClick={analyzeRaid} style={{ ...s.analyzeBtn, background: "linear-gradient(135deg,#ff9f43,#ee5a24)" }} disabled={loading}>{loading ? "⚔️ 분석 중..." : "⚔️ 카운터 추천받기"}</button>
           </div>
@@ -761,7 +757,7 @@ export default function Home() {
         )}
 
         <div style={s.footer}>
-          <p>포고박사 v0.8</p>
+          <p>포고박사 v1.0</p>
           <p style={{ fontSize: 10, opacity: 0.4, marginTop: 4 }}>Pokémon GO는 Niantic, Inc.의 상표입니다</p>
         </div>
       </div>
@@ -778,7 +774,13 @@ export default function Home() {
           <div style={s.collPanel}>
             <div style={s.collHeader}>
               <h2 style={{ fontSize: 18, fontWeight: 800, color: "#e0e0e0" }}>📋 보유목록 ({collection.length})</h2>
-              <button style={s.collClose} onClick={() => { setShowCollection(false); setViewingEntry(null); setCollFilter("all"); }}>✕</button>
+              <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                {collection.length > 0 && (
+                  <button onClick={exportCollection} style={{ background: "none", border: "1px solid #2a3a5c", borderRadius: 8, color: "#8899aa", fontSize: 11, padding: "4px 8px", cursor: "pointer", fontFamily: "'Outfit',sans-serif" }}>📤 내보내기</button>
+                )}
+                <button onClick={importCollection} style={{ background: "none", border: "1px solid #2a3a5c", borderRadius: 8, color: "#8899aa", fontSize: 11, padding: "4px 8px", cursor: "pointer", fontFamily: "'Outfit',sans-serif" }}>📥 가져오기</button>
+                <button style={s.collClose} onClick={() => { setShowCollection(false); setViewingEntry(null); setCollFilter("all"); }}>✕</button>
+              </div>
             </div>
 
             {/* ─── Collection Filter Tabs ─── */}
@@ -944,7 +946,7 @@ export default function Home() {
 
 const s = {
   // ─── Existing styles (unchanged) ───
-  container: { minHeight: "100vh", background: "linear-gradient(180deg,#0a1628 0%,#0f2035 50%,#0a1628 100%)", display: "flex", justifyContent: "center", padding: "20px 12px" },
+  container: { minHeight: "100vh", background: "linear-gradient(180deg,#0a1628 0%,#0f2035 50%,#0a1628 100%)", display: "flex", justifyContent: "center", padding: "20px 12px", WebkitTapHighlightColor: "transparent", touchAction: "manipulation" },
   inner: { maxWidth: 520, width: "100%" },
   header: { display: "flex", alignItems: "center", justifyContent: "center", gap: 12, textAlign: "center", marginBottom: 24, padding: "16px 0" },
   logoIcon: { fontSize: 36, filter: "drop-shadow(0 0 12px rgba(0,212,170,0.6))" },
@@ -964,6 +966,10 @@ const s = {
   ivLabelRow: { display: "flex", justifyContent: "space-between", alignItems: "center" },
   ivStatLabel: { fontSize: 13, fontWeight: 600, color: "#8899aa" },
   ivStatVal: { fontSize: 16, fontWeight: 700, fontVariantNumeric: "tabular-nums" },
+  ivStepBtn: { width: 32, height: 32, background: "#1a2744", border: "1px solid #2a3a5c", borderRadius: 8, color: "#e0e0e0", fontSize: 18, fontWeight: 700, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", fontFamily: "'Outfit',sans-serif", WebkitTapHighlightColor: "transparent" },
+  ivQuickRow: { display: "flex", gap: 4, marginTop: 4 },
+  ivQuickBtn: { flex: 1, padding: "4px 0", background: "#1a2744", border: "1px solid #2a3a5c", borderRadius: 6, color: "#576574", fontSize: 11, fontWeight: 600, cursor: "pointer", fontFamily: "'Outfit',sans-serif", textAlign: "center", WebkitTapHighlightColor: "transparent" },
+  ivQuickBtnActive: { flex: 1, padding: "4px 0", background: "rgba(0,212,170,0.15)", border: "1px solid rgba(0,212,170,0.3)", borderRadius: 6, color: "#4ecdc4", fontSize: 11, fontWeight: 600, cursor: "pointer", fontFamily: "'Outfit',sans-serif", textAlign: "center", WebkitTapHighlightColor: "transparent" },
   gaugeOuter: { display: "flex", gap: 3, width: "100%" },
   gaugeSeg: { position: "relative", flex: 1, height: 12, background: "#1a2744", borderRadius: 3, overflow: "hidden", border: "1px solid #2a3a5c" },
   moveRow: { display: "flex", gap: 8 },
@@ -1023,14 +1029,9 @@ const s = {
   tab: { flex: 1, padding: "10px 0", background: "transparent", border: "none", borderRadius: 10, color: "#8899aa", fontSize: 13, fontWeight: 600, fontFamily: "'Outfit',sans-serif", cursor: "pointer" },
   tabActive: { flex: 1, padding: "10px 0", background: "linear-gradient(135deg,#1a2744,#162038)", border: "1px solid rgba(0,212,170,0.2)", borderRadius: 10, color: "#4ecdc4", fontSize: 13, fontWeight: 700, fontFamily: "'Outfit',sans-serif", cursor: "pointer", boxShadow: "0 2px 8px rgba(0,0,0,0.2)" },
 
-  // ─── Rocket ───
-  rocketHeader: { display: "flex", alignItems: "center", gap: 12, marginBottom: 20, padding: "12px 16px", background: "rgba(112,88,152,0.1)", border: "1px solid rgba(112,88,152,0.2)", borderRadius: 12 },
-  rocketGrid: { display: "grid", gridTemplateColumns: "repeat(5, 1fr)", gap: 6 },
-  rocketChip: { display: "flex", flexDirection: "column", alignItems: "center", gap: 2, padding: "10px 4px", background: "#0d1a2e", border: "2px solid #2a3a5c", borderRadius: 10, color: "#8899aa", cursor: "pointer", fontFamily: "'Outfit',sans-serif" },
-  rocketChipActive: { display: "flex", flexDirection: "column", alignItems: "center", gap: 2, padding: "10px 4px", background: "rgba(112,88,152,0.2)", border: "2px solid #705898", borderRadius: 10, color: "#e0e0e0", cursor: "pointer", fontFamily: "'Outfit',sans-serif", boxShadow: "0 0 12px rgba(112,88,152,0.3)" },
-  rocketPreview: { marginTop: 12, padding: "12px 16px", background: "rgba(112,88,152,0.08)", border: "1px solid rgba(112,88,152,0.2)", borderRadius: 10, fontSize: 13, color: "#c8d6e5", fontStyle: "italic", lineHeight: 1.6 },
-  rocketCollNote: { padding: "8px 12px", background: "rgba(0,212,170,0.06)", border: "1px solid rgba(0,212,170,0.1)", borderRadius: 8, fontSize: 12, color: "#4ecdc4", marginBottom: 16 },
-  rocketBtn: { width: "100%", padding: 16, background: "linear-gradient(135deg,#705898,#4a3370)", border: "none", borderRadius: 12, color: "#fff", fontSize: 16, fontWeight: 700, fontFamily: "'Outfit',sans-serif", cursor: "pointer", boxShadow: "0 4px 16px rgba(112,88,152,0.3)" },
+  // ─── Section header (raid etc) ───
+  sectionHeader: { display: "flex", alignItems: "center", gap: 12, marginBottom: 20, padding: "12px 16px", background: "rgba(255,159,67,0.08)", border: "1px solid rgba(255,159,67,0.2)", borderRadius: 12 },
+  collNote: { padding: "8px 12px", background: "rgba(0,212,170,0.06)", border: "1px solid rgba(0,212,170,0.1)", borderRadius: 8, fontSize: 12, color: "#4ecdc4", marginBottom: 16 },
 
   // ─── Compare ───
   compareCard: { padding: "12px 16px", background: "#1a2744", border: "1px solid #2a3a5c", borderRadius: 12, marginBottom: 8, cursor: "pointer" },

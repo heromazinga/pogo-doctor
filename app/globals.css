@@ -1,26 +1,8 @@
 * { margin: 0; padding: 0; box-sizing: border-box; }
-body { background: #0a1628; color: #c8d6e5; font-family: 'Outfit', sans-serif; }
+body { background: #0a1628; color: #c8d6e5; font-family: 'Outfit', sans-serif; -webkit-tap-highlight-color: transparent; }
 
-input[type="range"].iv-slider {
-  -webkit-appearance: none; appearance: none;
-  height: 4px; border-radius: 2px; background: transparent;
-  outline: none; margin: 2px 0 0 0; width: 100%;
-  touch-action: none;
-}
-input[type="range"].iv-slider::-webkit-slider-thumb {
-  -webkit-appearance: none; appearance: none;
-  width: 10px; height: 20px; border-radius: 3px;
-  background: #c8d6e5; cursor: pointer;
-  border: 1px solid #0a1628; box-shadow: 0 1px 4px rgba(0,0,0,0.4);
-}
-input[type="range"].iv-slider::-moz-range-thumb {
-  width: 10px; height: 20px; border-radius: 3px;
-  background: #c8d6e5; cursor: pointer;
-  border: 1px solid #0a1628;
-}
-input[type="range"].iv-slider::-webkit-slider-runnable-track {
-  background: rgba(42,58,92,0.5); height: 4px; border-radius: 2px;
-}
+button { -webkit-tap-highlight-color: transparent; }
+
 input[type="number"]::-webkit-inner-spin-button,
 input[type="number"]::-webkit-outer-spin-button {
   -webkit-appearance: none; margin: 0;
