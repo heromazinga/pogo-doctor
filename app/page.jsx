@@ -58,6 +58,14 @@ export default function Home() {
   // ─── Events ───
   const [events, setEvents] = useState([]);
   const [eventsLoading, setEventsLoading] = useState(false);
+  const [eventsExpanded, setEventsExpanded] = useState(false); // 이벤트 접기
+
+  // ─── Max Battles ───
+  const [maxBattles, setMaxBattles] = useState([]);
+  const [maxBattlesLoading, setMaxBattlesLoading] = useState(false);
+  const [maxBattleResult, setMaxBattleResult] = useState(null);
+  const [maxBattleModel, setMaxBattleModel] = useState("");
+  const [selectedMaxBoss, setSelectedMaxBoss] = useState(null);
 
   // ─── Compare ───
   const [showCompare, setShowCompare] = useState(false);
@@ -143,6 +151,28 @@ export default function Home() {
       })
       .catch(() => setEventsLoading(false));
   }, []);
+
+  // ─── 맥스배틀 로드 ───
+  useEffect(() => {
+    setMaxBattlesLoading(true);
+    fetch("/api/max-battles")
+      .then((r) => r.json())
+      .then((data) => {
+        if (Array.isArray(data)) {
+          // allPokemon으로 한국어 이름 매칭
+          const enriched = data.map((b) => {
+            if (b.id && allPokemon.length > 0) {
+              const match = allPokemon.find((p) => p.id === b.id);
+              if (match) return { ...b, nameKr: match.nameKr };
+            }
+            return b;
+          });
+          setMaxBattles(enriched);
+        }
+        setMaxBattlesLoading(false);
+      })
+      .catch(() => setMaxBattlesLoading(false));
+  }, [allPokemon]);
 
   // ─── 레이드 보스에 한국어 이름 매칭 (allPokemon 로드 후) ───
   // ScrapedDuck은 영어 이름만 제공하므로 dex ID로 매칭
@@ -375,6 +405,23 @@ export default function Home() {
   const resetRaid = () => {
     if (abortRef.current) abortRef.current.abort();
     setRaidResult(null); setRaidModel(""); setError(null); setStreaming(false); setLoading(false);
+  };
+
+  const analyzeMaxBattle = useCallback(async (boss) => {
+    setSelectedMaxBoss(boss);
+    setLoading(true); setStreaming(true); setError(null); setMaxBattleResult(null); setMaxBattleModel("");
+    const raidBoss = { name: boss.name, nameKr: boss.nameKr, id: boss.id, isGmax: boss.isGmax, tier: boss.tier, types: boss.types, cpMin: boss.cpMin, cpMax: boss.cpMax };
+    await streamFetch(
+      { mode: "maxbattle", raidBoss, collection: collection.map((c) => ({ name: c.name, pokemonId: c.pokemonId, cp: c.cp, ivPercent: c.ivPercent, verdict: c.verdict })) },
+      (text) => setMaxBattleResult(text), (model) => setMaxBattleModel(model),
+      () => { setLoading(false); setStreaming(false); },
+      (err) => { setError(err); setLoading(false); setStreaming(false); }
+    );
+  }, [collection]);
+
+  const resetMaxBattle = () => {
+    if (abortRef.current) abortRef.current.abort();
+    setMaxBattleResult(null); setMaxBattleModel(""); setSelectedMaxBoss(null); setError(null); setStreaming(false); setLoading(false);
   };
 
   const runCompare = useCallback(async (targetEntry) => {
@@ -785,17 +832,73 @@ export default function Home() {
             <div style={s.sectionHeader}>
               <span style={{ fontSize: 28 }}>📅</span>
               <div>
-                <div style={{ fontSize: 15, fontWeight: 700, color: "#e0e0e0" }}>진행 중 & 예정 이벤트</div>
-                <div style={{ fontSize: 11, color: "#8899aa" }}>LeekDuck 데이터 자동 반영</div>
+                <div style={{ fontSize: 15, fontWeight: 700, color: "#e0e0e0" }}>이벤트 & 맥스배틀</div>
+                <div style={{ fontSize: 11, color: "#8899aa" }}>LeekDuck · snacknap 자동 반영</div>
               </div>
             </div>
 
-            {eventsLoading && (
-              <div style={{ textAlign: "center", padding: "30px 0", color: "#8899aa", fontSize: 13 }}>이벤트 로딩 중...</div>
+            {/* ─── 현재 파워스팟 (맥스배틀) ─── */}
+            {(maxBattlesLoading || maxBattles.length > 0) && (
+              <div style={{ marginBottom: 20 }}>
+                <div style={{ fontSize: 12, fontWeight: 700, color: "#a890f0", marginBottom: 8, display: "flex", alignItems: "center", gap: 6 }}>
+                  <span style={{ display: "inline-block", width: 8, height: 8, borderRadius: "50%", background: "#a890f0", animation: "blink 2s ease-in-out infinite" }} />
+                  ⚡ 현재 파워스팟 맥스배틀
+                  {maxBattlesLoading && <span style={{ fontSize: 10, color: "#576574" }}>로딩 중...</span>}
+                </div>
+                {maxBattleResult ? (
+                  <div>
+                    <div style={{ ...s.resultCard, marginBottom: 12 }} ref={resultRef}>
+                      <div style={{ ...s.imgContainer, background: "radial-gradient(ellipse at center,rgba(168,144,240,0.1) 0%,transparent 70%)", padding: "16px 20px 8px" }}>
+                        {selectedMaxBoss?.id
+                          ? <img src={`https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/other/official-artwork/${selectedMaxBoss.id}.png`} alt={selectedMaxBoss.nameKr} style={{ ...s.pokemonImg, width: 100, height: 100 }} onError={(e) => { e.target.style.display = "none"; }} />
+                          : <div style={{ fontSize: 48 }}>⚡</div>}
+                      </div>
+                      <div style={{ padding: "4px 16px 0", display: "flex", gap: 6, flexWrap: "wrap" }}>
+                        <span style={{ fontSize: 11, padding: "2px 8px", borderRadius: 20, background: "rgba(168,144,240,0.15)", color: "#a890f0", fontWeight: 600 }}>
+                          {selectedMaxBoss?.isGmax ? "거다이맥스" : "다이맥스"} {selectedMaxBoss?.nameKr}
+                        </span>
+                        <span style={{ fontSize: 11, padding: "2px 8px", borderRadius: 20, background: "rgba(168,144,240,0.08)", color: "#8899aa" }}>
+                          {selectedMaxBoss?.tier}
+                        </span>
+                      </div>
+                      <div style={s.resultContent}>{formatResult(maxBattleResult)}{streaming && <span style={s.cursor}>▌</span>}</div>
+                      {maxBattleModel && !streaming && <div style={{ padding: "4px 20px 0", fontSize: 10, color: "#576574", textAlign: "right" }}>⚡ {maxBattleModel.replace("gemini-", "").replace("-preview", "")}</div>}
+                    </div>
+                    {!streaming && (
+                      <button onClick={resetMaxBattle} style={{ ...s.resetBtn, margin: "0 0 8px 0", width: "100%", borderColor: "#a890f0", color: "#a890f0" }}>
+                        🔄 다른 파워스팟 보기
+                      </button>
+                    )}
+                  </div>
+                ) : (
+                  <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+                    {maxBattles.filter(b => b.isPriority).map((boss, i) => (
+                      <button key={`${boss.id}-${boss.tierKey}-${i}`}
+                        onClick={() => !loading && analyzeMaxBattle(boss)}
+                        style={{ ...s.raidBossChip, borderColor: boss.isGmax ? "rgba(168,144,240,0.5)" : "rgba(168,144,240,0.25)", opacity: loading ? 0.6 : 1 }}>
+                        <img src={`https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/${boss.id}.png`} alt={boss.nameKr} style={{ width: 24, height: 24, imageRendering: "pixelated" }} onError={(e) => { e.target.style.display = "none"; }} />
+                        <span style={{ fontSize: 12, fontWeight: 600, color: "#e0e0e0" }}>
+                          {boss.isGmax ? "거✨" : "다⚡"}{boss.nameKr}
+                        </span>
+                        <span style={{ fontSize: 9, color: "#a890f0" }}>{boss.tier}</span>
+                      </button>
+                    ))}
+                    {maxBattles.filter(b => !b.isPriority).length > 0 && (
+                      <button style={{ ...s.raidBossChip, borderColor: "rgba(87,101,116,0.3)", cursor: "default" }}>
+                        <span style={{ fontSize: 11, color: "#576574" }}>+{maxBattles.filter(b => !b.isPriority).length} 일반</span>
+                      </button>
+                    )}
+                  </div>
+                )}
+              </div>
             )}
 
-            {!eventsLoading && events.length === 0 && (
-              <div style={{ textAlign: "center", padding: "30px 0", color: "#8899aa", fontSize: 13 }}>
+            {eventsLoading && (
+              <div style={{ textAlign: "center", padding: "20px 0", color: "#8899aa", fontSize: 13 }}>이벤트 로딩 중...</div>
+            )}
+
+            {!eventsLoading && events.length === 0 && maxBattles.length === 0 && (
+              <div style={{ textAlign: "center", padding: "20px 0", color: "#8899aa", fontSize: 13 }}>
                 <div style={{ fontSize: 32, marginBottom: 8 }}>📭</div>
                 현재 진행 중인 이벤트가 없습니다
               </div>
@@ -804,12 +907,17 @@ export default function Home() {
             {/* 진행 중 */}
             {events.filter(e => e.isActive).length > 0 && (
               <div style={{ marginBottom: 16 }}>
-                <div style={{ fontSize: 11, fontWeight: 700, color: "#4ecdc4", marginBottom: 8, display: "flex", alignItems: "center", gap: 6 }}>
-                  <span style={{ display: "inline-block", width: 7, height: 7, borderRadius: "50%", background: "#4ecdc4", animation: "blink 2s ease-in-out infinite" }} />
-                  진행 중
+                <div style={{ fontSize: 11, fontWeight: 700, color: "#4ecdc4", marginBottom: 8, display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                    <span style={{ display: "inline-block", width: 7, height: 7, borderRadius: "50%", background: "#4ecdc4", animation: "blink 2s ease-in-out infinite" }} />
+                    진행 중 ({events.filter(e => e.isActive).length})
+                  </div>
+                  <button onClick={() => setEventsExpanded(!eventsExpanded)} style={{ background: "none", border: "none", color: "#8899aa", fontSize: 11, cursor: "pointer", fontFamily: "'Outfit',sans-serif" }}>
+                    {eventsExpanded ? "▲ 접기" : "▼ 펼치기"}
+                  </button>
                 </div>
                 <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-                  {events.filter(e => e.isActive).map((event, i) => (
+                  {(eventsExpanded ? events.filter(e => e.isActive) : events.filter(e => e.isActive).slice(0, 3)).map((event, i) => (
                     <div key={i} style={s.eventCardActive}>
                       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 8 }}>
                         <div style={{ flex: 1, minWidth: 0 }}>
@@ -834,6 +942,11 @@ export default function Home() {
                       )}
                     </div>
                   ))}
+                  {!eventsExpanded && events.filter(e => e.isActive).length > 3 && (
+                    <button onClick={() => setEventsExpanded(true)} style={{ background: "none", border: "1px solid #2a3a5c", borderRadius: 8, color: "#8899aa", fontSize: 12, padding: "8px", cursor: "pointer", fontFamily: "'Outfit',sans-serif" }}>
+                      +{events.filter(e => e.isActive).length - 3}개 더 보기
+                    </button>
+                  )}
                 </div>
               </div>
             )}
@@ -842,7 +955,7 @@ export default function Home() {
             {events.filter(e => e.isUpcoming).length > 0 && (
               <div>
                 <div style={{ fontSize: 11, fontWeight: 700, color: "#ffd93d", marginBottom: 8 }}>
-                  🔜 예정
+                  🔜 예정 ({events.filter(e => e.isUpcoming).length})
                 </div>
                 <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
                   {events.filter(e => e.isUpcoming).map((event, i) => (
@@ -875,7 +988,7 @@ export default function Home() {
             )}
 
             <div style={{ fontSize: 10, color: "#576574", textAlign: "right", marginTop: 16 }}>
-              데이터 출처: LeekDuck.com via ScrapedDuck
+              이벤트: LeekDuck via ScrapedDuck · 맥스배틀: snacknap.com
             </div>
           </div>
         )}
