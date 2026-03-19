@@ -58,7 +58,9 @@ export default function Home() {
   // ─── Events ───
   const [events, setEvents] = useState([]);
   const [eventsLoading, setEventsLoading] = useState(false);
-  const [eventsExpanded, setEventsExpanded] = useState(false); // 이벤트 접기
+  const [eventsExpanded, setEventsExpanded] = useState(false); // 진행중 접기
+  const [upcomingExpanded, setUpcomingExpanded] = useState(false); // 예정 접기
+  const [maxBattlesExpanded, setMaxBattlesExpanded] = useState(false); // 맥스배틀 접기
 
   // ─── Max Battles ───
   const [maxBattles, setMaxBattles] = useState([]);
@@ -840,12 +842,15 @@ export default function Home() {
             {/* ─── 현재 파워스팟 (맥스배틀) ─── */}
             {(maxBattlesLoading || maxBattles.length > 0) && (
               <div style={{ marginBottom: 20 }}>
-                <div style={{ fontSize: 12, fontWeight: 700, color: "#a890f0", marginBottom: 8, display: "flex", alignItems: "center", gap: 6 }}>
+                <div style={{ fontSize: 12, fontWeight: 700, color: "#a890f0", marginBottom: maxBattlesExpanded ? 8 : 0, display: "flex", alignItems: "center", gap: 6 }}>
                   <span style={{ display: "inline-block", width: 8, height: 8, borderRadius: "50%", background: "#a890f0", animation: "blink 2s ease-in-out infinite" }} />
                   ⚡ 현재 파워스팟 맥스배틀
                   {maxBattlesLoading && <span style={{ fontSize: 10, color: "#576574" }}>로딩 중...</span>}
+                  <button onClick={() => setMaxBattlesExpanded(!maxBattlesExpanded)} style={{ background: "none", border: "none", color: "#8899aa", fontSize: 11, cursor: "pointer", fontFamily: "'Outfit',sans-serif", marginLeft: "auto" }}>
+                    {maxBattlesExpanded ? `▲ 접기` : `▼ 전체 보기 (${maxBattles.length})`}
+                  </button>
                 </div>
-                {maxBattleResult ? (
+                {maxBattlesExpanded && (maxBattleResult ? (
                   <div>
                     <div style={{ ...s.resultCard, marginBottom: 12 }} ref={resultRef}>
                       <div style={{ ...s.imgContainer, background: "radial-gradient(ellipse at center,rgba(168,144,240,0.1) 0%,transparent 70%)", padding: "16px 20px 8px" }}>
@@ -855,7 +860,7 @@ export default function Home() {
                       </div>
                       <div style={{ padding: "4px 16px 0", display: "flex", gap: 6, flexWrap: "wrap" }}>
                         <span style={{ fontSize: 11, padding: "2px 8px", borderRadius: 20, background: "rgba(168,144,240,0.15)", color: "#a890f0", fontWeight: 600 }}>
-                          {selectedMaxBoss?.isGmax ? "거다이맥스" : "다이맥스"} {selectedMaxBoss?.nameKr}
+                          {selectedMaxBoss?.isGmax ? "G-Max" : "D-Max"} {selectedMaxBoss?.nameKr}
                         </span>
                         <span style={{ fontSize: 11, padding: "2px 8px", borderRadius: 20, background: "rgba(168,144,240,0.08)", color: "#8899aa" }}>
                           {selectedMaxBoss?.tier}
@@ -871,40 +876,20 @@ export default function Home() {
                     )}
                   </div>
                 ) : (
-                  {(() => {
-                    const priorityBosses = maxBattles.filter(b => b.isPriority);
-                    // priority 없으면 최고 티어(tier3→tier2→tier1 순)로 fallback
-                    const tierOrder = ["tier5", "gmax", "tier3", "tier2", "tier1"];
-                    let displayBosses = priorityBosses;
-                    if (displayBosses.length === 0) {
-                      for (const tk of tierOrder) {
-                        const found = maxBattles.filter(b => b.tierKey === tk);
-                        if (found.length > 0) { displayBosses = found; break; }
-                      }
-                    }
-                    const hiddenCount = maxBattles.length - displayBosses.length;
-                    return (
-                      <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
-                        {displayBosses.map((boss, i) => (
-                          <button key={`${boss.id}-${boss.tierKey}-${i}`}
-                            onClick={() => !loading && analyzeMaxBattle(boss)}
-                            style={{ ...s.raidBossChip, borderColor: boss.isGmax ? "rgba(168,144,240,0.5)" : "rgba(168,144,240,0.25)", opacity: loading ? 0.6 : 1 }}>
-                            <img src={`https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/${boss.id}.png`} alt={boss.nameKr} style={{ width: 24, height: 24, imageRendering: "pixelated" }} onError={(e) => { e.target.style.display = "none"; }} />
-                            <span style={{ fontSize: 12, fontWeight: 600, color: "#e0e0e0" }}>
-                              {boss.isGmax ? "거✨" : "다⚡"}{boss.nameKr}
-                            </span>
-                            <span style={{ fontSize: 9, color: "#a890f0" }}>{boss.tier}</span>
-                          </button>
-                        ))}
-                        {hiddenCount > 0 && (
-                          <button style={{ ...s.raidBossChip, borderColor: "rgba(87,101,116,0.3)", cursor: "default" }}>
-                            <span style={{ fontSize: 11, color: "#576574" }}>+{hiddenCount} 낮은티어</span>
-                          </button>
-                        )}
-                      </div>
-                    );
-                  })()}
-                )}
+                  <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+                    {maxBattles.map((boss, i) => (
+                      <button key={`${boss.id}-${boss.tierKey}-${i}`}
+                        onClick={() => !loading && analyzeMaxBattle(boss)}
+                        style={{ ...s.raidBossChip, borderColor: boss.isGmax ? "rgba(168,144,240,0.5)" : "rgba(168,144,240,0.25)", opacity: loading ? 0.6 : 1 }}>
+                        <img src={`https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/${boss.id}.png`} alt={boss.nameKr} style={{ width: 24, height: 24, imageRendering: "pixelated" }} onError={(e) => { e.target.style.display = "none"; }} />
+                        <span style={{ fontSize: 12, fontWeight: 600, color: "#e0e0e0" }}>
+                          {boss.isGmax ? "G✨ " : "D⚡ "}{boss.nameKr}
+                        </span>
+                        <span style={{ fontSize: 9, color: "#a890f0" }}>{boss.tier}</span>
+                      </button>
+                    ))}
+                  </div>
+                ))}
               </div>
             )}
 
@@ -922,7 +907,7 @@ export default function Home() {
             {/* 진행 중 */}
             {events.filter(e => e.isActive).length > 0 && (
               <div style={{ marginBottom: 16 }}>
-                <div style={{ fontSize: 11, fontWeight: 700, color: "#4ecdc4", marginBottom: 8, display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                <div style={{ fontSize: 11, fontWeight: 700, color: "#4ecdc4", marginBottom: eventsExpanded ? 8 : 0, display: "flex", alignItems: "center", justifyContent: "space-between" }}>
                   <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
                     <span style={{ display: "inline-block", width: 7, height: 7, borderRadius: "50%", background: "#4ecdc4", animation: "blink 2s ease-in-out infinite" }} />
                     진행 중 ({events.filter(e => e.isActive).length})
@@ -931,8 +916,9 @@ export default function Home() {
                     {eventsExpanded ? "▲ 접기" : "▼ 펼치기"}
                   </button>
                 </div>
+                {eventsExpanded && (
                 <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-                  {(eventsExpanded ? events.filter(e => e.isActive) : events.filter(e => e.isActive).slice(0, 3)).map((event, i) => (
+                  {events.filter(e => e.isActive).map((event, i) => (
                     <div key={i} style={s.eventCardActive}>
                       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 8 }}>
                         <div style={{ flex: 1, minWidth: 0 }}>
@@ -957,21 +943,21 @@ export default function Home() {
                       )}
                     </div>
                   ))}
-                  {!eventsExpanded && events.filter(e => e.isActive).length > 3 && (
-                    <button onClick={() => setEventsExpanded(true)} style={{ background: "none", border: "1px solid #2a3a5c", borderRadius: 8, color: "#8899aa", fontSize: 12, padding: "8px", cursor: "pointer", fontFamily: "'Outfit',sans-serif" }}>
-                      +{events.filter(e => e.isActive).length - 3}개 더 보기
-                    </button>
-                  )}
                 </div>
+                )}
               </div>
             )}
 
             {/* 예정 */}
             {events.filter(e => e.isUpcoming).length > 0 && (
               <div>
-                <div style={{ fontSize: 11, fontWeight: 700, color: "#ffd93d", marginBottom: 8 }}>
-                  🔜 예정 ({events.filter(e => e.isUpcoming).length})
+                <div style={{ fontSize: 11, fontWeight: 700, color: "#ffd93d", marginBottom: upcomingExpanded ? 8 : 0, display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                  <span>🔜 예정 ({events.filter(e => e.isUpcoming).length})</span>
+                  <button onClick={() => setUpcomingExpanded(!upcomingExpanded)} style={{ background: "none", border: "none", color: "#8899aa", fontSize: 11, cursor: "pointer", fontFamily: "'Outfit',sans-serif" }}>
+                    {upcomingExpanded ? "▲ 접기" : "▼ 펼치기"}
+                  </button>
                 </div>
+                {upcomingExpanded && (
                 <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
                   {events.filter(e => e.isUpcoming).map((event, i) => (
                     <div key={i} style={s.eventCardUpcoming}>
@@ -999,6 +985,7 @@ export default function Home() {
                     </div>
                   ))}
                 </div>
+                )}
               </div>
             )}
 
