@@ -34,7 +34,7 @@ export default function Home() {
   const resultRef = useRef(null);
 
   // ─── Tab / Mode ───
-  const [activeTab, setActiveTab] = useState("analyze"); // "analyze" | "raid"
+  const [activeTab, setActiveTab] = useState("analyze"); // "analyze" | "raid" | "events"
 
   // ─── Raid counter ───
   const [raidBossName, setRaidBossName] = useState("");
@@ -47,10 +47,17 @@ export default function Home() {
   // ─── Collection filter ───
   const [collFilter, setCollFilter] = useState("all");
 
-  // ─── Current raid bosses ───
+  // ─── Current raid bosses (raw from API) ───
   const [currentRaidBosses, setCurrentRaidBosses] = useState([]);
   const [raidBossesLoading, setRaidBossesLoading] = useState(false);
   const [raidBossesExpanded, setRaidBossesExpanded] = useState(false);
+
+  // ─── Raid bosses enriched with Korean names ───
+  const [enrichedRaidBosses, setEnrichedRaidBosses] = useState([]);
+
+  // ─── Events ───
+  const [events, setEvents] = useState([]);
+  const [eventsLoading, setEventsLoading] = useState(false);
 
   // ─── Compare ───
   const [showCompare, setShowCompare] = useState(false);
@@ -62,7 +69,6 @@ export default function Home() {
   const getIvColor = () => ivPercent >= 93 ? "#4ecdc4" : ivPercent >= 82 ? "#ffd93d" : "#ff6b6b";
   const getIvLabel = () => ivPercent >= 98 ? "거의 완벽!" : ivPercent >= 93 ? "매우 우수" : ivPercent >= 82 ? "괜찮음" : ivPercent >= 67 ? "보통" : "별로";
 
-  // PvP IV evaluation: low attack + high def/hp = better for GL/UL
   const getPvpTag = () => {
     if (atkIv <= 3 && defIv >= 13 && staIv >= 13) return { text: "🏆 PvP 최적 (그레이트/울트라)", color: "#a890f0" };
     if (atkIv <= 7 && defIv >= 11 && staIv >= 11) return { text: "👍 PvP 적합", color: "#7c8db5" };
@@ -71,10 +77,8 @@ export default function Home() {
     return null;
   };
 
-  // Move name helper: English → Korean (fallback to English)
   const krMove = (engName) => moveNamesKr[engName] || engName;
 
-  // Collection category helper
   const getCollCategory = (item) => {
     const v = (item.verdict || "").toLowerCase();
     if (v.includes("pvp")) return "pvp";
@@ -97,6 +101,7 @@ export default function Home() {
     ? collection
     : collection.filter((item) => getCollCategory(item) === collFilter);
 
+  // ─── 포켓몬 데이터 로드 ───
   useEffect(() => {
     fetch("/api/pokemon-data")
       .then((r) => r.json())
@@ -107,7 +112,7 @@ export default function Home() {
       .catch(() => setDataLoading(false));
   }, []);
 
-  // Load collection from localStorage
+  // ─── 컬렉션 로드 ───
   useEffect(() => {
     try {
       const saved = localStorage.getItem("pogo-collection");
@@ -115,7 +120,7 @@ export default function Home() {
     } catch {}
   }, []);
 
-  // Fetch current raid bosses
+  // ─── 레이드 보스 로드 ───
   useEffect(() => {
     setRaidBossesLoading(true);
     fetch("/api/raid-bosses")
@@ -127,7 +132,37 @@ export default function Home() {
       .catch(() => setRaidBossesLoading(false));
   }, []);
 
-  // Save collection to localStorage
+  // ─── 이벤트 로드 ───
+  useEffect(() => {
+    setEventsLoading(true);
+    fetch("/api/events")
+      .then((r) => r.json())
+      .then((data) => {
+        if (Array.isArray(data)) setEvents(data);
+        setEventsLoading(false);
+      })
+      .catch(() => setEventsLoading(false));
+  }, []);
+
+  // ─── 레이드 보스에 한국어 이름 매칭 (allPokemon 로드 후) ───
+  // ScrapedDuck은 영어 이름만 제공하므로 dex ID로 매칭
+  useEffect(() => {
+    if (currentRaidBosses.length === 0) return;
+    if (allPokemon.length === 0) {
+      setEnrichedRaidBosses(currentRaidBosses);
+      return;
+    }
+    const enriched = currentRaidBosses.map((boss) => {
+      if (boss.id) {
+        const match = allPokemon.find((p) => p.id === boss.id);
+        if (match) return { ...boss, nameKr: match.nameKr };
+      }
+      return boss;
+    });
+    setEnrichedRaidBosses(enriched);
+  }, [allPokemon, currentRaidBosses]);
+
+  // ─── 컬렉션 저장 ───
   useEffect(() => {
     try {
       localStorage.setItem("pogo-collection", JSON.stringify(collection));
@@ -141,7 +176,6 @@ export default function Home() {
     setChargedMove("");
     if (val.length >= 1) {
       const q = val.toLowerCase();
-      // Allow Normal + meaningful regional forms, exclude costume/event forms
       const REGIONAL_FORMS = ["Alola", "Galarian", "Hisuian", "Paldea"];
       const matches = allPokemon
         .filter((p) => {
@@ -167,7 +201,6 @@ export default function Home() {
     setSuggestions([]);
     setShowSugg(false);
 
-    // Fetch Korean names for this pokemon's moves only (4-8 calls, fast)
     const allMoves = [...(poke.fast || []), ...(poke.charged || []), ...(poke.eliteFast || []), ...(poke.eliteCharged || [])];
     const toFetch = allMoves.filter((m) => !moveNamesKr[m]);
     if (toFetch.length > 0) {
@@ -185,9 +218,7 @@ export default function Home() {
       ).then((results) => {
         const newNames = {};
         results.forEach((r) => { if (r.status === "fulfilled" && r.value) newNames[r.value.eng] = r.value.kr; });
-        if (Object.keys(newNames).length > 0) {
-          setMoveNamesKr((prev) => ({ ...prev, ...newNames }));
-        }
+        if (Object.keys(newNames).length > 0) setMoveNamesKr((prev) => ({ ...prev, ...newNames }));
       });
     }
   };
@@ -252,7 +283,6 @@ export default function Home() {
     } else { setRaidSuggestions([]); setShowRaidSugg(false); }
   };
 
-  // ─── Select current raid boss from chip → auto analyze ───
   const [autoAnalyzeRaid, setAutoAnalyzeRaid] = useState(false);
 
   const selectCurrentRaidBoss = (boss) => {
@@ -266,23 +296,20 @@ export default function Home() {
     }
     setRaidSuggestions([]);
     setShowRaidSugg(false);
+    setActiveTab("raid");
     setAutoAnalyzeRaid(true);
   };
 
-  // Trigger raid analysis after chip selection
   useEffect(() => {
     if (autoAnalyzeRaid && (raidSelectedPoke || raidBossName)) {
       setAutoAnalyzeRaid(false);
-      // Small delay to ensure state is set
       setTimeout(() => {
         const poke = raidSelectedPoke;
         if (!poke && !raidBossName.trim()) return;
         setLoading(true); setStreaming(true); setError(null); setRaidResult(null); setRaidModel("");
         const raidBoss = poke ? { name: poke.name, nameKr: poke.nameKr, id: poke.id, baseAttack: poke.baseAttack, baseDefense: poke.baseDefense, baseStamina: poke.baseStamina } : { name: raidBossName };
         streamFetch(
-          { mode: "raid", raidBoss,
-            collection: collection.map((c) => ({ name: c.name, pokemonId: c.pokemonId, cp: c.cp, ivPercent: c.ivPercent, verdict: c.verdict, isShiny: c.isShiny, isShadow: c.isShadow })),
-          },
+          { mode: "raid", raidBoss, collection: collection.map((c) => ({ name: c.name, pokemonId: c.pokemonId, cp: c.cp, ivPercent: c.ivPercent, verdict: c.verdict, isShiny: c.isShiny, isShadow: c.isShadow })) },
           (text) => setRaidResult(text), (model) => setRaidModel(model),
           () => { setLoading(false); setStreaming(false); },
           (err) => { setError(err); setLoading(false); setStreaming(false); }
@@ -291,7 +318,6 @@ export default function Home() {
     }
   }, [autoAnalyzeRaid, raidSelectedPoke, raidBossName]);
 
-  // ─── Auto-scroll while streaming ───
   useEffect(() => {
     if (streaming && resultRef.current) resultRef.current.scrollIntoView({ behavior: "smooth", block: "end" });
   }, [result, streaming, raidResult, compareResult]);
@@ -301,14 +327,7 @@ export default function Home() {
     setLoading(true); setStreaming(true); setError(null); setResult(null); setCurrentKept(false); setUsedModel("");
 
     const pokemonData = selectedPokemon
-      ? {
-          name: selectedPokemon.name, nameKr: selectedPokemon.nameKr, id: selectedPokemon.id,
-          form: selectedPokemon.form,
-          baseAttack: selectedPokemon.baseAttack, baseDefense: selectedPokemon.baseDefense,
-          baseStamina: selectedPokemon.baseStamina, fast: selectedPokemon.fast,
-          charged: selectedPokemon.charged, eliteFast: selectedPokemon.eliteFast,
-          eliteCharged: selectedPokemon.eliteCharged,
-        }
+      ? { name: selectedPokemon.name, nameKr: selectedPokemon.nameKr, id: selectedPokemon.id, form: selectedPokemon.form, baseAttack: selectedPokemon.baseAttack, baseDefense: selectedPokemon.baseDefense, baseStamina: selectedPokemon.baseStamina, fast: selectedPokemon.fast, charged: selectedPokemon.charged, eliteFast: selectedPokemon.eliteFast, eliteCharged: selectedPokemon.eliteCharged }
       : { name: pokemonName, note: "API에서 매칭 안됨" };
 
     const fastMoveDisplay = fastMove ? `${krMove(fastMove)} (${fastMove})` : "";
@@ -316,22 +335,7 @@ export default function Home() {
     const pvpTag = getPvpTag();
 
     await streamFetch(
-      {
-        pokemonData,
-        userInput: {
-          name: selectedPokemon ? displayName : pokemonName,
-          cp, atkIv, defIv, staIv, ivPercent,
-          fastMove: fastMoveDisplay || fastMove,
-          chargedMove: chargedMoveDisplay || chargedMove,
-          isShiny, isShadow,
-          pvpIvTag: pvpTag ? pvpTag.text : null,
-        },
-        collection: collection.map((c) => ({
-          name: c.name, pokemonId: c.pokemonId, cp: c.cp,
-          ivPercent: c.ivPercent, verdict: c.verdict,
-          isShiny: c.isShiny, isShadow: c.isShadow,
-        })),
-      },
+      { pokemonData, userInput: { name: selectedPokemon ? displayName : pokemonName, cp, atkIv, defIv, staIv, ivPercent, fastMove: fastMoveDisplay || fastMove, chargedMove: chargedMoveDisplay || chargedMove, isShiny, isShadow, pvpIvTag: pvpTag ? pvpTag.text : null }, collection: collection.map((c) => ({ name: c.name, pokemonId: c.pokemonId, cp: c.cp, ivPercent: c.ivPercent, verdict: c.verdict, isShiny: c.isShiny, isShadow: c.isShadow })) },
       (text) => setResult(text),
       (model) => setUsedModel(model),
       () => { setLoading(false); setStreaming(false); },
@@ -347,7 +351,6 @@ export default function Home() {
     setStreaming(false); setLoading(false); setShowCompare(false); setCompareResult(null); setCompareTarget(null);
   };
 
-  // ─── Re-analyze with different IV (keep pokemon) ───
   const resetForReanalyze = () => {
     if (abortRef.current) abortRef.current.abort();
     setCp(""); setAtkIv(15); setDefIv(15); setStaIv(15);
@@ -356,16 +359,13 @@ export default function Home() {
     setStreaming(false); setLoading(false); setShowCompare(false); setCompareResult(null); setCompareTarget(null);
   };
 
-  // ─── Raid counter (streaming) ───
   const analyzeRaid = useCallback(async () => {
     const poke = raidSelectedPoke;
     if (!poke && !raidBossName.trim()) { setError("레이드 보스를 선택해주세요!"); return; }
     setLoading(true); setStreaming(true); setError(null); setRaidResult(null); setRaidModel("");
     const raidBoss = poke ? { name: poke.name, nameKr: poke.nameKr, id: poke.id, baseAttack: poke.baseAttack, baseDefense: poke.baseDefense, baseStamina: poke.baseStamina } : { name: raidBossName };
     await streamFetch(
-      { mode: "raid", raidBoss,
-        collection: collection.map((c) => ({ name: c.name, pokemonId: c.pokemonId, cp: c.cp, ivPercent: c.ivPercent, verdict: c.verdict, isShiny: c.isShiny, isShadow: c.isShadow })),
-      },
+      { mode: "raid", raidBoss, collection: collection.map((c) => ({ name: c.name, pokemonId: c.pokemonId, cp: c.cp, ivPercent: c.ivPercent, verdict: c.verdict, isShiny: c.isShiny, isShadow: c.isShadow })) },
       (text) => setRaidResult(text), (model) => setRaidModel(model),
       () => { setLoading(false); setStreaming(false); },
       (err) => { setError(err); setLoading(false); setStreaming(false); }
@@ -377,7 +377,6 @@ export default function Home() {
     setRaidResult(null); setRaidModel(""); setError(null); setStreaming(false); setLoading(false);
   };
 
-  // ─── Compare (streaming) ───
   const runCompare = useCallback(async (targetEntry) => {
     if (!selectedPokemon || !targetEntry) return;
     setCompareTarget(targetEntry); setShowCompare(true);
@@ -392,7 +391,6 @@ export default function Home() {
     );
   }, [selectedPokemon, cp, atkIv, defIv, staIv, fastMove, chargedMove, isShiny, isShadow, krMove]);
 
-  // ─── Keep / Collection ───
   const handleKeep = () => {
     if (!selectedPokemon || !result || currentKept) return;
     const verdict = result.match(/(영구 보존|킵|보류|사탕행|PvP용 킵)/)?.[0] || "킵";
@@ -418,11 +416,8 @@ export default function Home() {
     setCurrentKept(true);
   };
 
-  const removeFromCollection = (entryId) => {
-    setCollection((prev) => prev.filter((e) => e.id !== entryId));
-  };
+  const removeFromCollection = (entryId) => setCollection((prev) => prev.filter((e) => e.id !== entryId));
 
-  // ─── Collection export/import ───
   const exportCollection = () => {
     const data = JSON.stringify(collection, null, 2);
     const blob = new Blob([data], { type: "application/json" });
@@ -482,6 +477,34 @@ export default function Home() {
     return <div key={i} style={{ padding: "2px 0", fontSize: 13 }}>{renderBold(line)}</div>;
   });
 
+  // ─── 이벤트 시간 포맷 ───
+  const formatEventTime = (ts) => {
+    if (!ts) return "";
+    const d = new Date(ts);
+    return `${d.getMonth() + 1}/${d.getDate()} ${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+  };
+
+  const formatEventDuration = (event) => {
+    const now = Date.now();
+    if (event.isActive && event.end) {
+      const diff = event.end - now;
+      const days = Math.floor(diff / (1000 * 60 * 60 * 24));
+      const hours = Math.floor((diff % (1000 * 60 * 60 * 24)) / (1000 * 60 * 60));
+      if (days > 0) return `${days}일 ${hours}시간 남음`;
+      if (hours > 0) return `${hours}시간 남음`;
+      return "곧 종료";
+    }
+    if (event.isUpcoming && event.start) {
+      const diff = event.start - now;
+      const days = Math.floor(diff / (1000 * 60 * 60 * 24));
+      const hours = Math.floor((diff % (1000 * 60 * 60 * 24)) / (1000 * 60 * 60));
+      if (days > 0) return `${days}일 후 시작`;
+      if (hours > 0) return `${hours}시간 후 시작`;
+      return "곧 시작";
+    }
+    return "";
+  };
+
   const hasFast = selectedPokemon && selectedPokemon.fast && selectedPokemon.fast.length > 0;
   const hasCharged = selectedPokemon && selectedPokemon.charged && selectedPokemon.charged.length > 0;
   const displayName = selectedPokemon ? selectedPokemon.nameKr + (selectedPokemon.form !== "Normal" ? ` (${selectedPokemon.form})` : "") : pokemonName;
@@ -498,14 +521,16 @@ export default function Home() {
           </div>
         </div>
 
-        {/* ─── Tab Switcher (hide when showing results) ─── */}
+        {/* ─── Tab Switcher (결과 표시 중에는 숨김) ─── */}
         {!result && !raidResult && (
           <div style={s.tabRow}>
             <button onClick={() => { setActiveTab("analyze"); setError(null); }} style={activeTab === "analyze" ? s.tabActive : s.tab}>🔍 분석</button>
             <button onClick={() => { setActiveTab("raid"); setError(null); }} style={activeTab === "raid" ? s.tabActive : s.tab}>⚔️ 레이드</button>
+            <button onClick={() => { setActiveTab("events"); setError(null); }} style={activeTab === "events" ? s.tabActive : s.tab}>📅 이벤트</button>
           </div>
         )}
 
+        {/* ═══ ANALYZE TAB ═══ */}
         {activeTab === "analyze" && !result ? (
           <div style={s.card}>
             <div style={s.group}>
@@ -588,7 +613,7 @@ export default function Home() {
                     <select style={s.select} value={fastMove} onChange={(e) => setFastMove(e.target.value)}>
                       <option value="">선택</option>
                       {selectedPokemon.fast.map((m) => <option key={m} value={m}>{krMove(m)} ({m})</option>)}
-                      {selectedPokemon.eliteFast && selectedPokemon.eliteFast.length > 0 && (
+                      {selectedPokemon.eliteFast?.length > 0 && (
                         <optgroup label="── 한정기술 ──">
                           {selectedPokemon.eliteFast.map((m) => <option key={m} value={m}>⭐ {krMove(m)} ({m})</option>)}
                         </optgroup>
@@ -602,7 +627,7 @@ export default function Home() {
                     <select style={s.select} value={chargedMove} onChange={(e) => setChargedMove(e.target.value)}>
                       <option value="">선택</option>
                       {selectedPokemon.charged.map((m) => <option key={m} value={m}>{krMove(m)} ({m})</option>)}
-                      {selectedPokemon.eliteCharged && selectedPokemon.eliteCharged.length > 0 && (
+                      {selectedPokemon.eliteCharged?.length > 0 && (
                         <optgroup label="── 한정기술 ──">
                           {selectedPokemon.eliteCharged.map((m) => <option key={m} value={m}>⭐ {krMove(m)} ({m})</option>)}
                         </optgroup>
@@ -619,7 +644,6 @@ export default function Home() {
             </div>
 
             {error && <div style={s.error}>{error}</div>}
-
             <button onClick={analyze} style={s.analyzeBtn} disabled={loading}>
               {loading ? <span>⚡ 분석 중...</span> : "🔍 포켓몬 분석하기"}
             </button>
@@ -633,26 +657,21 @@ export default function Home() {
                 {isShadow && <span style={s.shadowBadge}>👤 그림자</span>}
               </div>
             )}
-
             <div style={s.ivSummary}>
               {[["공격", atkIv], ["방어", defIv], ["HP", staIv]].map(([l, v]) => (
                 <div key={l} style={s.ivSumItem}><span style={{ fontSize: 11, opacity: 0.6 }}>{l}</span><span style={{ fontWeight: 700 }}>{v}</span></div>
               ))}
               <div style={{ ...s.ivSumItem, borderRight: "none" }}><span style={{ fontSize: 11, opacity: 0.6 }}>IV</span><span style={{ fontWeight: 700, color: getIvColor() }}>{ivPercent}%</span></div>
             </div>
-
             <div style={s.resultContent}>
               {formatResult(result)}
               {streaming && <span style={s.cursor}>▌</span>}
             </div>
-
             {usedModel && !streaming && (
               <div style={{ padding: "4px 20px 0", fontSize: 10, color: "#576574", textAlign: "right" }}>
                 ⚡ {usedModel.replace("gemini-", "").replace("-preview", "")}
               </div>
             )}
-
-            {/* ─── Keep + Compare buttons ─── */}
             {selectedPokemon && !streaming && (
               <div style={{ padding: "12px 20px 0", display: "flex", gap: 8 }}>
                 <button onClick={handleKeep} disabled={currentKept} style={{ ...(currentKept ? s.keepBtnKept : s.keepBtn), flex: 1 }}>
@@ -669,7 +688,6 @@ export default function Home() {
                 })()}
               </div>
             )}
-
             {!streaming && (
               <div style={{ padding: "0 20px", display: "flex", gap: 8, marginTop: 20 }}>
                 <button onClick={resetForReanalyze} style={{ ...s.resetBtn, margin: 0, flex: 1, borderColor: "#4ecdc4", color: "#4ecdc4" }}>🔄 IV 바꿔서 재분석</button>
@@ -692,8 +710,7 @@ export default function Home() {
             <div style={s.group}>
               <label style={s.label}>레이드 보스 검색</label>
 
-              {/* ─── Current Raid Bosses ─── */}
-              {currentRaidBosses.length > 0 && (
+              {enrichedRaidBosses.length > 0 && (
                 <div style={{ marginBottom: 12 }}>
                   <div style={{ fontSize: 12, fontWeight: 700, color: "#ff9f43", marginBottom: 8, display: "flex", alignItems: "center", justifyContent: "space-between" }}>
                     <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
@@ -701,16 +718,19 @@ export default function Home() {
                       지금 레이드 중
                     </div>
                     <button onClick={() => setRaidBossesExpanded(!raidBossesExpanded)} style={{ background: "none", border: "none", color: "#8899aa", fontSize: 11, cursor: "pointer", fontFamily: "'Outfit',sans-serif" }}>
-                      {raidBossesExpanded ? "▲ 접기" : `▼ 전체 보기 (${currentRaidBosses.length})`}
+                      {raidBossesExpanded ? "▲ 접기" : `▼ 전체 보기 (${enrichedRaidBosses.length})`}
                     </button>
                   </div>
                   <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
-                    {(raidBossesExpanded ? currentRaidBosses : currentRaidBosses.filter((b) => b.isPriority)).map((boss, i) => (
-                      <button key={`${boss.id}-${boss.tierKey}-${i}`} onClick={() => selectCurrentRaidBoss(boss)} style={{ ...s.raidBossChip, ...(boss.tierKey === "shadow_lvl5" ? { borderColor: "rgba(112,88,152,0.4)" } : boss.tierKey === "mega" ? { borderColor: "rgba(255,107,107,0.4)" } : {}) }}>
+                    {(raidBossesExpanded ? enrichedRaidBosses : enrichedRaidBosses.filter((b) => b.isPriority)).map((boss, i) => (
+                      <button key={`${boss.id}-${boss.tierKey}-${i}`} onClick={() => selectCurrentRaidBoss(boss)}
+                        style={{ ...s.raidBossChip, ...(boss.tierKey?.startsWith("shadow") ? { borderColor: "rgba(112,88,152,0.4)" } : boss.tierKey === "mega" ? { borderColor: "rgba(255,107,107,0.4)" } : {}) }}>
                         <img src={`https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/${boss.id}.png`} alt={boss.nameKr} style={{ width: 24, height: 24, imageRendering: "pixelated" }} onError={(e) => { e.target.style.display = "none"; }} />
-                        <span style={{ fontSize: 12, fontWeight: 600, color: "#e0e0e0" }}>{boss.nameKr}</span>
-                        <span style={{ fontSize: 9, color: boss.tierKey === "shadow_lvl5" ? "#a890f0" : boss.tierKey === "mega" ? "#ff6b6b" : "#8899aa" }}>
-                          {boss.tierKey.startsWith("shadow") ? "👤" : ""}{boss.tierKey === "mega" ? "메가" : boss.tierKey === "ultra_beast" ? "UB" : boss.tier}
+                        <span style={{ fontSize: 12, fontWeight: 600, color: "#e0e0e0" }}>
+                          {boss.isShadow ? "👤" : ""}{boss.nameKr}
+                        </span>
+                        <span style={{ fontSize: 9, color: boss.tierKey?.startsWith("shadow") ? "#a890f0" : boss.tierKey === "mega" ? "#ff6b6b" : "#8899aa" }}>
+                          {boss.tier}
                         </span>
                       </button>
                     ))}
@@ -718,6 +738,7 @@ export default function Home() {
                 </div>
               )}
               {raidBossesLoading && <div style={{ fontSize: 11, color: "#8899aa", marginBottom: 8 }}>레이드 보스 로딩 중...</div>}
+
               <div style={{ position: "relative" }}>
                 <input style={s.input} value={raidBossName} onChange={(e) => handleRaidBossSearch(e.target.value)} onFocus={() => raidSuggestions.length > 0 && setShowRaidSugg(true)} onBlur={() => setTimeout(() => setShowRaidSugg(false), 200)} placeholder="예: 가이오가, Mewtwo..." />
                 {raidSelectedPoke && (
@@ -740,15 +761,17 @@ export default function Home() {
             </div>
             {collection.length > 0 && <div style={s.collNote}>📋 보유목록 {collection.length}마리 반영 — 내 포켓몬 중 카운터 우선 추천</div>}
             {error && <div style={s.error}>{error}</div>}
-            <button onClick={analyzeRaid} style={{ ...s.analyzeBtn, background: "linear-gradient(135deg,#ff9f43,#ee5a24)" }} disabled={loading}>{loading ? "⚔️ 분석 중..." : "⚔️ 카운터 추천받기"}</button>
+            <button onClick={analyzeRaid} style={{ ...s.analyzeBtn, background: "linear-gradient(135deg,#ff9f43,#ee5a24)" }} disabled={loading}>
+              {loading ? "⚔️ 분석 중..." : "⚔️ 카운터 추천받기"}
+            </button>
           </div>
         )}
         {activeTab === "raid" && raidResult && (
           <div style={s.resultCard} ref={resultRef}>
             <div style={{ ...s.imgContainer, background: "radial-gradient(ellipse at center,rgba(255,159,67,0.12) 0%,transparent 70%)" }}>
-              {raidSelectedPoke ? (
-                <img src={`https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/other/official-artwork/${raidSelectedPoke.id}.png`} alt={raidSelectedPoke.nameKr} style={s.pokemonImg} onError={(e) => { e.target.style.display = "none"; }} />
-              ) : <div style={{ fontSize: 64 }}>⚔️</div>}
+              {raidSelectedPoke
+                ? <img src={`https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/other/official-artwork/${raidSelectedPoke.id}.png`} alt={raidSelectedPoke.nameKr} style={s.pokemonImg} onError={(e) => { e.target.style.display = "none"; }} />
+                : <div style={{ fontSize: 64 }}>⚔️</div>}
             </div>
             <div style={s.resultContent}>{formatResult(raidResult)}{streaming && <span style={s.cursor}>▌</span>}</div>
             {raidModel && !streaming && <div style={{ padding: "4px 20px 0", fontSize: 10, color: "#576574", textAlign: "right" }}>⚡ {raidModel.replace("gemini-", "").replace("-preview", "")}</div>}
@@ -756,8 +779,109 @@ export default function Home() {
           </div>
         )}
 
+        {/* ═══ EVENTS TAB ═══ */}
+        {activeTab === "events" && (
+          <div style={s.card}>
+            <div style={s.sectionHeader}>
+              <span style={{ fontSize: 28 }}>📅</span>
+              <div>
+                <div style={{ fontSize: 15, fontWeight: 700, color: "#e0e0e0" }}>진행 중 & 예정 이벤트</div>
+                <div style={{ fontSize: 11, color: "#8899aa" }}>LeekDuck 데이터 자동 반영</div>
+              </div>
+            </div>
+
+            {eventsLoading && (
+              <div style={{ textAlign: "center", padding: "30px 0", color: "#8899aa", fontSize: 13 }}>이벤트 로딩 중...</div>
+            )}
+
+            {!eventsLoading && events.length === 0 && (
+              <div style={{ textAlign: "center", padding: "30px 0", color: "#8899aa", fontSize: 13 }}>
+                <div style={{ fontSize: 32, marginBottom: 8 }}>📭</div>
+                현재 진행 중인 이벤트가 없습니다
+              </div>
+            )}
+
+            {/* 진행 중 */}
+            {events.filter(e => e.isActive).length > 0 && (
+              <div style={{ marginBottom: 16 }}>
+                <div style={{ fontSize: 11, fontWeight: 700, color: "#4ecdc4", marginBottom: 8, display: "flex", alignItems: "center", gap: 6 }}>
+                  <span style={{ display: "inline-block", width: 7, height: 7, borderRadius: "50%", background: "#4ecdc4", animation: "blink 2s ease-in-out infinite" }} />
+                  진행 중
+                </div>
+                <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                  {events.filter(e => e.isActive).map((event, i) => (
+                    <div key={i} style={s.eventCardActive}>
+                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 8 }}>
+                        <div style={{ flex: 1, minWidth: 0 }}>
+                          <div style={{ fontSize: 14, fontWeight: 700, color: "#e0e0e0", marginBottom: 4 }}>
+                            {event.emoji} {event.name}
+                          </div>
+                          <div style={{ fontSize: 11, color: "#8899aa" }}>
+                            {event.end ? `~ ${formatEventTime(event.end)}` : "종료 미정"}
+                          </div>
+                        </div>
+                        <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 4 }}>
+                          <span style={s.eventTypeBadge}>{event.label}</span>
+                          <span style={{ fontSize: 10, color: "#4ecdc4", fontWeight: 600, whiteSpace: "nowrap" }}>
+                            {formatEventDuration(event)}
+                          </span>
+                        </div>
+                      </div>
+                      {event.link && (
+                        <a href={event.link} target="_blank" rel="noopener noreferrer" style={s.eventLink}>
+                          상세 보기 →
+                        </a>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* 예정 */}
+            {events.filter(e => e.isUpcoming).length > 0 && (
+              <div>
+                <div style={{ fontSize: 11, fontWeight: 700, color: "#ffd93d", marginBottom: 8 }}>
+                  🔜 예정
+                </div>
+                <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                  {events.filter(e => e.isUpcoming).map((event, i) => (
+                    <div key={i} style={s.eventCardUpcoming}>
+                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 8 }}>
+                        <div style={{ flex: 1, minWidth: 0 }}>
+                          <div style={{ fontSize: 14, fontWeight: 600, color: "#c8d6e5", marginBottom: 4 }}>
+                            {event.emoji} {event.name}
+                          </div>
+                          <div style={{ fontSize: 11, color: "#8899aa" }}>
+                            {event.start ? formatEventTime(event.start) : ""}{event.end ? ` ~ ${formatEventTime(event.end)}` : ""}
+                          </div>
+                        </div>
+                        <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 4 }}>
+                          <span style={{ ...s.eventTypeBadge, background: "rgba(255,217,61,0.1)", color: "#ffd93d", borderColor: "rgba(255,217,61,0.2)" }}>{event.label}</span>
+                          <span style={{ fontSize: 10, color: "#ffd93d", fontWeight: 600, whiteSpace: "nowrap" }}>
+                            {formatEventDuration(event)}
+                          </span>
+                        </div>
+                      </div>
+                      {event.link && (
+                        <a href={event.link} target="_blank" rel="noopener noreferrer" style={s.eventLink}>
+                          상세 보기 →
+                        </a>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            <div style={{ fontSize: 10, color: "#576574", textAlign: "right", marginTop: 16 }}>
+              데이터 출처: LeekDuck.com via ScrapedDuck
+            </div>
+          </div>
+        )}
+
         <div style={s.footer}>
-          <p>포고박사 v1.0</p>
+          <p>포고박사 v1.1</p>
           <p style={{ fontSize: 10, opacity: 0.4, marginTop: 4 }}>Pokémon GO는 Niantic, Inc.의 상표입니다</p>
         </div>
       </div>
@@ -783,7 +907,6 @@ export default function Home() {
               </div>
             </div>
 
-            {/* ─── Collection Filter Tabs ─── */}
             {collection.length > 0 && !viewingEntry && (
               <div style={s.collFilterRow}>
                 {COLL_FILTERS.map((f) => {
@@ -807,14 +930,10 @@ export default function Home() {
                 <div style={{ fontSize: 12, marginTop: 4, opacity: 0.5 }}>분석 후 "킵" 버튼을 눌러 추가하세요</div>
               </div>
             ) : viewingEntry ? (
-              /* ─── Detail view: saved analysis ─── */
               <div>
                 <button onClick={() => setViewingEntry(null)} style={s.collBackBtn}>← 목록으로</button>
                 <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 16 }}>
-                  <img
-                    src={`https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/${viewingEntry.pokemonId}.png`}
-                    alt={viewingEntry.name} style={{ width: 48, height: 48, imageRendering: "pixelated" }}
-                  />
+                  <img src={`https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/${viewingEntry.pokemonId}.png`} alt={viewingEntry.name} style={{ width: 48, height: 48, imageRendering: "pixelated" }} />
                   <div>
                     <div style={{ fontSize: 16, fontWeight: 700, color: "#e0e0e0" }}>
                       {viewingEntry.isShiny ? "✨" : ""}{viewingEntry.isShadow ? "👤" : ""}{viewingEntry.name}
@@ -841,10 +960,7 @@ export default function Home() {
                 ) : filteredCollection.map((item) => (
                   <div key={item.id} style={s.collItem}>
                     <div style={s.collItemClickable} onClick={() => item.analysisResult ? setViewingEntry(item) : null}>
-                      <img
-                        src={`https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/${item.pokemonId}.png`}
-                        alt={item.name} style={{ width: 40, height: 40, imageRendering: "pixelated" }}
-                      />
+                      <img src={`https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/${item.pokemonId}.png`} alt={item.name} style={{ width: 40, height: 40, imageRendering: "pixelated" }} />
                       <div style={{ flex: 1, minWidth: 0 }}>
                         <div style={{ fontSize: 14, fontWeight: 700, color: "#e0e0e0" }}>
                           {item.isShiny ? "✨" : ""}{item.isShadow ? "👤" : ""}{item.name}
@@ -880,12 +996,9 @@ export default function Home() {
               <h2 style={{ fontSize: 18, fontWeight: 800, color: "#e0e0e0" }}>⚖️ 개체 비교</h2>
               <button style={s.collClose} onClick={() => { setShowCompare(false); setCompareResult(null); setCompareTarget(null); }}>✕</button>
             </div>
-
             {!compareResult ? (
               <div>
                 <div style={{ fontSize: 13, color: "#8899aa", marginBottom: 16 }}>현재 분석 중인 {selectedPokemon.nameKr}와 비교할 보유 개체를 선택하세요:</div>
-
-                {/* Current pokemon summary */}
                 <div style={{ ...s.compareCard, borderColor: "rgba(0,212,170,0.3)" }}>
                   <div style={{ fontSize: 11, color: "#4ecdc4", fontWeight: 600, marginBottom: 6 }}>현재 분석 중</div>
                   <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
@@ -896,10 +1009,7 @@ export default function Home() {
                     </div>
                   </div>
                 </div>
-
                 <div style={{ textAlign: "center", padding: "8px 0", color: "#576574", fontSize: 20 }}>⚖️</div>
-
-                {/* Collection entries of same species */}
                 {collection.filter((c) => c.pokemonId === selectedPokemon.id && (!c.form || c.form === selectedPokemon.form)).map((item) => (
                   <div key={item.id} style={s.compareCard} onClick={() => runCompare(item)}>
                     <div style={{ display: "flex", alignItems: "center", gap: 10, cursor: "pointer" }}>
@@ -915,7 +1025,6 @@ export default function Home() {
               </div>
             ) : (
               <div>
-                {/* Side-by-side summary */}
                 <div style={{ display: "flex", gap: 8, marginBottom: 16 }}>
                   <div style={{ ...s.compareMini, borderColor: "rgba(0,212,170,0.3)" }}>
                     <div style={{ fontSize: 10, color: "#4ecdc4", fontWeight: 600 }}>A (현재)</div>
@@ -929,7 +1038,6 @@ export default function Home() {
                     <div style={{ fontSize: 11, color: "#8899aa" }}>CP{compareTarget?.cp} IV{compareTarget?.ivPercent}%</div>
                   </div>
                 </div>
-
                 <div style={{ ...s.collAnalysis, lineHeight: 1.7, fontSize: 14 }}>
                   {formatResult(compareResult)}
                   {streaming && <span style={s.cursor}>▌</span>}
@@ -945,7 +1053,6 @@ export default function Home() {
 }
 
 const s = {
-  // ─── Existing styles (unchanged) ───
   container: { minHeight: "100vh", background: "linear-gradient(180deg,#0a1628 0%,#0f2035 50%,#0a1628 100%)", display: "flex", justifyContent: "center", padding: "20px 12px", WebkitTapHighlightColor: "transparent", touchAction: "manipulation" },
   inner: { maxWidth: 520, width: "100%" },
   header: { display: "flex", alignItems: "center", justifyContent: "center", gap: 12, textAlign: "center", marginBottom: 24, padding: "16px 0" },
@@ -993,16 +1100,10 @@ const s = {
   bulletLine: { padding: "6px 0", fontSize: 13, lineHeight: 1.8 },
   resetBtn: { display: "block", width: "calc(100% - 40px)", margin: "20px 20px 0", padding: 14, background: "transparent", border: "2px solid #2a3a5c", borderRadius: 12, color: "#8899aa", fontSize: 14, fontWeight: 600, fontFamily: "'Outfit',sans-serif", cursor: "pointer" },
   footer: { textAlign: "center", padding: "24px 0 8px", fontSize: 11, opacity: 0.3, color: "#c8d6e5" },
-
-  // ─── New styles: Keep button ───
   keepBtn: { width: "100%", padding: 12, background: "rgba(0,212,170,0.1)", border: "2px solid #00d4aa", borderRadius: 10, color: "#00d4aa", fontSize: 14, fontWeight: 700, fontFamily: "'Outfit',sans-serif", cursor: "pointer" },
   keepBtnKept: { width: "100%", padding: 12, background: "#00d4aa", border: "2px solid #00d4aa", borderRadius: 10, color: "#0a1628", fontSize: 14, fontWeight: 700, fontFamily: "'Outfit',sans-serif", cursor: "default" },
-
-  // ─── New styles: Collection FAB ───
   fab: { position: "fixed", bottom: 20, right: 20, width: 56, height: 56, background: "linear-gradient(135deg,#00d4aa,#00b894)", border: "none", borderRadius: "50%", fontSize: 24, cursor: "pointer", boxShadow: "0 4px 20px rgba(0,212,170,0.4)", zIndex: 100, display: "flex", alignItems: "center", justifyContent: "center" },
   fabBadge: { position: "absolute", top: -4, right: -4, background: "#ff6b6b", color: "#fff", fontSize: 11, fontWeight: 700, minWidth: 20, height: 20, borderRadius: 10, display: "flex", alignItems: "center", justifyContent: "center", padding: "0 5px" },
-
-  // ─── New styles: Collection Panel ───
   collOverlay: { position: "fixed", inset: 0, background: "rgba(10,22,40,0.95)", zIndex: 200, display: "flex", justifyContent: "center", overflowY: "auto" },
   collPanel: { width: "100%", maxWidth: 520, padding: 20, paddingBottom: 40 },
   collHeader: { display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16, position: "sticky", top: 0, background: "rgba(10,22,40,0.98)", padding: "12px 0", zIndex: 10 },
@@ -1011,37 +1112,27 @@ const s = {
   collList: { display: "flex", flexDirection: "column", gap: 8 },
   collItem: { display: "flex", alignItems: "center", gap: 10, background: "#1a2744", border: "1px solid #2a3a5c", borderRadius: 12, padding: "10px 12px" },
   collRemove: { background: "none", border: "none", fontSize: 16, cursor: "pointer", padding: 4, opacity: 0.5, filter: "grayscale(0.5)" },
-
-  // ─── PvP IV tag ───
   pvpTag: { marginTop: 10, padding: "8px 12px", background: "rgba(168,144,240,0.06)", border: "1px solid rgba(168,144,240,0.15)", borderRadius: 8, display: "flex", flexDirection: "column", gap: 2 },
   pvpHint: { fontSize: 10, color: "#576574" },
-
-  // ─── Collection detail view ───
   collBackBtn: { background: "none", border: "none", color: "#4ecdc4", fontSize: 14, fontWeight: 600, cursor: "pointer", padding: "8px 0", marginBottom: 8, fontFamily: "'Outfit',sans-serif" },
   collItemClickable: { display: "flex", alignItems: "center", gap: 10, flex: 1, minWidth: 0, cursor: "pointer" },
   collAnalysis: { background: "#0d1a2e", borderRadius: 10, padding: 16, border: "1px solid #2a3a5c" },
-
-  // ─── Streaming cursor ───
   cursor: { display: "inline-block", color: "#4ecdc4", animation: "blink 1s step-end infinite", fontWeight: 700, fontSize: 16 },
-
-  // ─── Tab switcher ───
   tabRow: { display: "flex", gap: 4, marginBottom: 16, background: "#0d1a2e", borderRadius: 12, padding: 4, border: "1px solid #2a3a5c" },
   tab: { flex: 1, padding: "10px 0", background: "transparent", border: "none", borderRadius: 10, color: "#8899aa", fontSize: 13, fontWeight: 600, fontFamily: "'Outfit',sans-serif", cursor: "pointer" },
   tabActive: { flex: 1, padding: "10px 0", background: "linear-gradient(135deg,#1a2744,#162038)", border: "1px solid rgba(0,212,170,0.2)", borderRadius: 10, color: "#4ecdc4", fontSize: 13, fontWeight: 700, fontFamily: "'Outfit',sans-serif", cursor: "pointer", boxShadow: "0 2px 8px rgba(0,0,0,0.2)" },
-
-  // ─── Section header (raid etc) ───
   sectionHeader: { display: "flex", alignItems: "center", gap: 12, marginBottom: 20, padding: "12px 16px", background: "rgba(255,159,67,0.08)", border: "1px solid rgba(255,159,67,0.2)", borderRadius: 12 },
   collNote: { padding: "8px 12px", background: "rgba(0,212,170,0.06)", border: "1px solid rgba(0,212,170,0.1)", borderRadius: 8, fontSize: 12, color: "#4ecdc4", marginBottom: 16 },
-
-  // ─── Compare ───
   compareCard: { padding: "12px 16px", background: "#1a2744", border: "1px solid #2a3a5c", borderRadius: 12, marginBottom: 8, cursor: "pointer" },
   compareMini: { flex: 1, padding: "10px 12px", background: "#0d1a2e", border: "1px solid #2a3a5c", borderRadius: 10, textAlign: "center" },
-
-  // ─── Collection filter tabs ───
   collFilterRow: { display: "flex", gap: 4, marginBottom: 12, overflowX: "auto", paddingBottom: 4 },
   collFilterBtn: { display: "flex", flexDirection: "column", alignItems: "center", gap: 1, padding: "6px 10px", background: "#0d1a2e", border: "1px solid #2a3a5c", borderRadius: 8, color: "#8899aa", cursor: "pointer", fontFamily: "'Outfit',sans-serif", whiteSpace: "nowrap", minWidth: 48 },
   collFilterActive: { display: "flex", flexDirection: "column", alignItems: "center", gap: 1, padding: "6px 10px", background: "rgba(0,212,170,0.1)", border: "1px solid rgba(0,212,170,0.3)", borderRadius: 8, color: "#4ecdc4", cursor: "pointer", fontFamily: "'Outfit',sans-serif", whiteSpace: "nowrap", minWidth: 48, fontWeight: 600 },
-
-  // ─── Current raid boss chips ───
   raidBossChip: { display: "flex", alignItems: "center", gap: 4, padding: "6px 10px", background: "#0d1a2e", border: "1px solid rgba(255,159,67,0.25)", borderRadius: 10, cursor: "pointer", fontFamily: "'Outfit',sans-serif", transition: "border-color 0.2s" },
+
+  // ─── 이벤트 스타일 ───
+  eventCardActive: { padding: "14px 16px", background: "rgba(0,212,170,0.06)", border: "1px solid rgba(0,212,170,0.2)", borderRadius: 12, display: "flex", flexDirection: "column", gap: 8 },
+  eventCardUpcoming: { padding: "14px 16px", background: "rgba(255,217,61,0.04)", border: "1px solid rgba(255,217,61,0.12)", borderRadius: 12, display: "flex", flexDirection: "column", gap: 8 },
+  eventTypeBadge: { fontSize: 10, padding: "2px 8px", borderRadius: 20, background: "rgba(0,212,170,0.12)", color: "#4ecdc4", border: "1px solid rgba(0,212,170,0.2)", fontWeight: 600, whiteSpace: "nowrap" },
+  eventLink: { fontSize: 12, color: "#4ecdc4", textDecoration: "none", fontWeight: 600, opacity: 0.8 },
 };
