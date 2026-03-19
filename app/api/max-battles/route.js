@@ -6,7 +6,8 @@ const CACHE_DURATION = 1000 * 60 * 30; // 30분 캐시 (snacknap은 5분마다 �
 
 const TIER_MAP = {
   "Tier 1": { key: "tier1", label: "1성", priority: false },
-  "Tier 3": { key: "tier3", label: "3성", priority: false },
+  "Tier 2": { key: "tier2", label: "2성", priority: false },
+  "Tier 3": { key: "tier3", label: "3성", priority: true },
   "Tier 5": { key: "tier5", label: "5성", priority: true },
   "Gigantamax": { key: "gmax", label: "거다이맥스", priority: true },
 };
