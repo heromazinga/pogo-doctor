@@ -871,24 +871,39 @@ export default function Home() {
                     )}
                   </div>
                 ) : (
-                  <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
-                    {maxBattles.filter(b => b.isPriority).map((boss, i) => (
-                      <button key={`${boss.id}-${boss.tierKey}-${i}`}
-                        onClick={() => !loading && analyzeMaxBattle(boss)}
-                        style={{ ...s.raidBossChip, borderColor: boss.isGmax ? "rgba(168,144,240,0.5)" : "rgba(168,144,240,0.25)", opacity: loading ? 0.6 : 1 }}>
-                        <img src={`https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/${boss.id}.png`} alt={boss.nameKr} style={{ width: 24, height: 24, imageRendering: "pixelated" }} onError={(e) => { e.target.style.display = "none"; }} />
-                        <span style={{ fontSize: 12, fontWeight: 600, color: "#e0e0e0" }}>
-                          {boss.isGmax ? "거✨" : "다⚡"}{boss.nameKr}
-                        </span>
-                        <span style={{ fontSize: 9, color: "#a890f0" }}>{boss.tier}</span>
-                      </button>
-                    ))}
-                    {maxBattles.filter(b => !b.isPriority).length > 0 && (
-                      <button style={{ ...s.raidBossChip, borderColor: "rgba(87,101,116,0.3)", cursor: "default" }}>
-                        <span style={{ fontSize: 11, color: "#576574" }}>+{maxBattles.filter(b => !b.isPriority).length} 일반</span>
-                      </button>
-                    )}
-                  </div>
+                  {(() => {
+                    const priorityBosses = maxBattles.filter(b => b.isPriority);
+                    // priority 없으면 최고 티어(tier3→tier2→tier1 순)로 fallback
+                    const tierOrder = ["tier5", "gmax", "tier3", "tier2", "tier1"];
+                    let displayBosses = priorityBosses;
+                    if (displayBosses.length === 0) {
+                      for (const tk of tierOrder) {
+                        const found = maxBattles.filter(b => b.tierKey === tk);
+                        if (found.length > 0) { displayBosses = found; break; }
+                      }
+                    }
+                    const hiddenCount = maxBattles.length - displayBosses.length;
+                    return (
+                      <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+                        {displayBosses.map((boss, i) => (
+                          <button key={`${boss.id}-${boss.tierKey}-${i}`}
+                            onClick={() => !loading && analyzeMaxBattle(boss)}
+                            style={{ ...s.raidBossChip, borderColor: boss.isGmax ? "rgba(168,144,240,0.5)" : "rgba(168,144,240,0.25)", opacity: loading ? 0.6 : 1 }}>
+                            <img src={`https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/${boss.id}.png`} alt={boss.nameKr} style={{ width: 24, height: 24, imageRendering: "pixelated" }} onError={(e) => { e.target.style.display = "none"; }} />
+                            <span style={{ fontSize: 12, fontWeight: 600, color: "#e0e0e0" }}>
+                              {boss.isGmax ? "거✨" : "다⚡"}{boss.nameKr}
+                            </span>
+                            <span style={{ fontSize: 9, color: "#a890f0" }}>{boss.tier}</span>
+                          </button>
+                        ))}
+                        {hiddenCount > 0 && (
+                          <button style={{ ...s.raidBossChip, borderColor: "rgba(87,101,116,0.3)", cursor: "default" }}>
+                            <span style={{ fontSize: 11, color: "#576574" }}>+{hiddenCount} 낮은티어</span>
+                          </button>
+                        )}
+                      </div>
+                    );
+                  })()}
                 )}
               </div>
             )}
