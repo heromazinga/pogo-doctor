@@ -19,7 +19,7 @@
   ├─ GET /api/raid-bosses   ← ScrapedDuck raids.min.json (LeekDuck)
   ├─ GET /api/events        ← ScrapedDuck events.min.json
   ├─ GET /api/max-battles   ← snacknap.com/max-battles HTML 파싱 (app/lib/maxBattles.js)
-  └─ POST /api/analyze      ← Gemini (스트리밍). 서버 교차검증 데이터 + 타입 상성(app/lib/typeChart.js) 주입
+  └─ POST /api/analyze      ← Gemini (스트리밍). 서버 교차검증 데이터 + 타입 상성(app/lib/typeChart.js: 방어 배율표(약점·반감 행)·천적 후보) + 용어집(app/lib/glossary.js) 주입. 천적 후보 = PvPoke released 인 포켓몬 중 약점 타입의 빠른+차징 기술 보유, 점수 = 공격 종족값 × 사이클 DPS(PokeMiners PvE 수치) × 자속 1.2 × 배율
 ```
 
 - **프레임워크**: Next.js 16 (App Router) + React 19, Vercel 배포

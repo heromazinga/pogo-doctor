@@ -228,12 +228,17 @@ function parsePvpoke(json) {
   if (!json || !Array.isArray(json.pokemon)) throw new Error("gamemaster.json 형식 불일치");
 
   const moveKinds = new Map();
+  const moveStats = new Map(); // PvP 수치(위력·쿨다운 ms) — PokeMiners PvE 수치가 없을 때 폴백
   for (const m of json.moves || []) {
     if (!m?.moveId) continue;
     const key = moveKey(m.moveId);
     if (!moveNames.has(key)) moveNames.set(key, { name: (m.name || titleCase(m.moveId)).replace(/^Aegislash Charge\s+/i, "") });
     // 빠른기술은 에너지를 얻고(energyGain>0), 차징기술은 에너지를 쓴다(energy>0)
-    if (!moveKinds.has(key)) moveKinds.set(key, (m.energyGain || 0) > 0 || (m.energy || 0) === 0 ? "fast" : "charged");
+    const kind = (m.energyGain || 0) > 0 || (m.energy || 0) === 0 ? "fast" : "charged";
+    if (!moveKinds.has(key)) moveKinds.set(key, kind);
+    if (!moveStats.has(key) && typeof m.power === "number" && m.cooldown) {
+      moveStats.set(key, { type: normType(m.type), kind, power: m.power, durationMs: m.cooldown, energy: kind === "fast" ? m.energyGain || 0 : m.energy || 0 });
+    }
   }
 
   for (const p of json.pokemon) {
@@ -265,9 +270,10 @@ function parsePvpoke(json) {
       types: (p.types || []).map(normType).filter(Boolean),
       fast, charged, eliteFast, eliteCharged,
       hasMoves: fastAll.length + chargedAll.length > 0,
+      released: typeof p.released === "boolean" ? p.released : null, // PvPoke 출시 여부
     });
   }
-  return { records, moveNames, moveKinds };
+  return { records, moveNames, moveKinds, moveStats };
 }
 
 function parsePogoapi(statsJson, movesJson) {
@@ -323,14 +329,20 @@ function parsePokeminers(json) {
     for (const f of fs.forms) if (f?.isCostume && f.form) costume.add(f.form);
   }
 
-  // 기술 템플릿: 숫자 ID → 기술 ID 매핑 (일부 포켓몬은 cinematicMoves 에 497 같은 숫자로 들어 있음), 빠른/차징 종류
+  // 기술 템플릿: 숫자 ID → 기술 ID 매핑 (일부 포켓몬은 cinematicMoves 에 497 같은 숫자로 들어 있음), 빠른/차징 종류, PvE 수치
   const moveIdByNumber = new Map();
   const moveKinds = new Map();
+  const moveStats = new Map(); // moveKey → { type, kind, power, durationMs, energy }
   for (const t of json) {
     const mt = String(t?.templateId || "").match(/^V(\d{4})_MOVE_(.+)$/);
     if (!mt) continue;
     moveIdByNumber.set(Number(mt[1]), mt[2]);
-    moveKinds.set(moveKey(mt[2]), /_FAST$/.test(mt[2]) ? "fast" : "charged");
+    const kind = /_FAST$/.test(mt[2]) ? "fast" : "charged";
+    moveKinds.set(moveKey(mt[2]), kind);
+    const ms = t?.data?.moveSettings;
+    if (ms && typeof ms.power === "number" && ms.durationMs) {
+      moveStats.set(moveKey(mt[2]), { type: normType(ms.pokemonType), kind, power: ms.power, durationMs: ms.durationMs, energy: Math.abs(ms.energyDelta || 0) });
+    }
   }
   // 폼 체인지(융합·왕관 등)로만 얻는 전용기: pokemonSettings.formChange[].moveReassignment → 대상 폼(availableForm)의 전용기
   const reassignByForm = new Map(); // formId → { fast:Set, charged:Set }
@@ -397,7 +409,7 @@ function parsePokeminers(json) {
     });
   }
   if (unresolvedNumeric) console.warn(`[pokemonData] pokeminers: 이름을 찾지 못한 숫자 기술 ID ${unresolvedNumeric}건 제외`);
-  return { records, moveNames, moveKinds };
+  return { records, moveNames, moveKinds, moveStats };
 }
 
 // ─── fetch ───
@@ -599,6 +611,13 @@ function crossValidate(loaded /* {sourceKey: {meta, parsed}} */) {
   }
   const moveDisplay = (k) => moveRegistry.get(k)?.name || k;
 
+  // 기술 수치: PokeMiners(PvE) 우선, 없으면 PvPoke(PvP) — 화력 점수 계산용
+  const statsByKey = new Map();
+  for (const name of ["pokeminers", "pvpoke"]) {
+    const s = active.find((x) => x.name === name);
+    for (const [k, v] of s?.moveStats || []) if (!statsByKey.has(k)) statsByKey.set(k, { ...v, source: name });
+  }
+
   // 기술 종류(빠른/차징) 전역 판정: 소스별 목록 위치가 아니라 기술 자체의 종류를 다수결로 정한다
   const kindVotes = new Map();
   for (const s of active) {
@@ -676,6 +695,7 @@ function crossValidate(loaded /* {sourceKey: {meta, parsed}} */) {
 
     const nameRec = recs.find((x) => x.rec.name)?.rec;
     const krRec = recs.find((x) => x.rec.nameKr)?.rec;
+    const releasedRec = recs.find((x) => typeof x.rec.released === "boolean");
     const [id, form] = [first.id, first.form];
     pokemon.push({
       id, name: nameRec?.name || first.name, nameKr: krRec?.nameKr || nameRec?.name || first.name, form,
@@ -690,6 +710,8 @@ function crossValidate(loaded /* {sourceKey: {meta, parsed}} */) {
       unverifiedFast: fastM.unverified.map(moveDisplay), unverifiedCharged: chM.unverified.map(moveDisplay),
       // 한정기(미검증): 1개 소스만 보고했고 그 소스가 한정기/전용기로 표시 (예: PvPoke 만 가진 Roar of Time)
       unverifiedEliteFast: fastM.unverifiedElite.map(moveDisplay), unverifiedEliteCharged: chM.unverifiedElite.map(moveDisplay),
+      // 출시 여부 (PvPoke released). 판단 근거가 없으면 null
+      released: releasedRec ? releasedRec.rec.released : null,
       sources: recs.map((x) => x.src),
     });
   }
@@ -700,13 +722,16 @@ function crossValidate(loaded /* {sourceKey: {meta, parsed}} */) {
 
   const moveNamesKr = {};
   const moveNamesAll = []; // 한국어명 보완 대상 파악용 (영문 표시명 전체)
-  for (const [, v] of moveRegistry) {
+  const moveStats = {}; // 표시명 → { type, kind, power, durationMs, energy, source }
+  for (const [k, v] of moveRegistry) {
     moveNamesAll.push(v.name);
     if (v.nameKr) moveNamesKr[v.name] = v.nameKr;
+    const st = statsByKey.get(k);
+    if (st) moveStats[v.name] = st;
   }
 
   return {
-    pokemon, moveNamesKr, moveNamesAll, warnings, counts,
+    pokemon, moveNamesKr, moveNamesAll, moveStats, warnings, counts,
     disputes: statDisputes + typeDisputes + moveDisputes,
     votableCount: fallbackToStale ? 0 : active.length,
     excludedStale: excluded,
@@ -755,7 +780,7 @@ export async function buildDataset({ fetchImpl = fetch } = {}) {
     loaded.pokeminers = { meta: { name: SOURCE_DEFS.pokeminers.name, url: SOURCE_DEFS.pokeminers.url, fetchedAt: null, ok: null, skipped: true, count: 0, reason: "1~3순위 소스 불일치 없음 → 조회 생략" }, parsed: null };
   }
 
-  const { pokemon, moveNamesKr, moveNamesAll, warnings, counts, votableCount, excludedStale, fallbackToStale } = cv;
+  const { pokemon, moveNamesKr, moveNamesAll, moveStats, warnings, counts, votableCount, excludedStale, fallbackToStale } = cv;
   const dataSources = SOURCE_ORDER.map((k) => loaded[k].meta);
 
   // 기술 한국어명 보완: pokemon-go-api → PokeAPI CSV → 수동 매핑. 그래도 없으면 목록에 남긴다.
@@ -810,6 +835,7 @@ export async function buildDataset({ fetchImpl = fetch } = {}) {
     pokemon,
     moveNamesKr,
     moveNamesKrMissing,
+    moveStats,
     nameSources,
     dataSources,
     dataWarnings: allWarnings.slice(0, 100),
