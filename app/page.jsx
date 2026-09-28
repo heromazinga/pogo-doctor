@@ -7,6 +7,7 @@ import { usageDate } from "./lib/aiUsage";
 // my_pokemon 행 → 화면/AI 용 항목 (판정은 저장하지 않으므로 없음)
 function toEntry(r) {
   const ivs = [r.atk_iv, r.def_iv, r.sta_iv];
+  const raw = { id: r.id, species_id: r.species_id, form: r.form, name_kr: r.name_kr, cp: r.cp, atk_iv: r.atk_iv, def_iv: r.def_iv, sta_iv: r.sta_iv, level: r.level, fast_move: r.fast_move, charged_moves: r.charged_moves || [], is_shadow: !!r.is_shadow, is_purified: !!r.is_purified, is_shiny: !!r.is_shiny, is_lucky: !!r.is_lucky, status: r.status, purposes: r.purposes || [], source: r.source, memo: r.memo, created_at: r.created_at, updated_at: r.updated_at };
   const hasIv = ivs.every((v) => Number.isInteger(v));
   return {
     id: r.id, pokemonId: r.species_id, form: r.form || "Normal",
@@ -17,6 +18,7 @@ function toEntry(r) {
     fastMove: r.fast_move || "", chargedMove: (r.charged_moves || [])[0] || "",
     isShiny: !!r.is_shiny, isShadow: !!r.is_shadow, isPurified: !!r.is_purified, isLucky: !!r.is_lucky,
     status: r.status || "keep", purposes: r.purposes || [], memo: r.memo || "", source: r.source || "web",
+    raw,
   };
 }
 
@@ -131,10 +133,14 @@ export default function Home() {
 
   const krMove = (engName) => moveNamesKr[engName] || engName;
 
-  const filteredCollection = collection.filter((item) =>
-    (collStatusFilter === "all" || item.status === collStatusFilter) &&
-    (collPurposeFilter === "all" || (item.purposes || []).includes(collPurposeFilter))
-  );
+  // 개체값 미입력 항목을 위쪽에 모으고, 그 안에서는 도감번호순
+  const filteredCollection = collection
+    .filter((item) =>
+      (collStatusFilter === "all" || item.status === collStatusFilter) &&
+      (collPurposeFilter === "all" || (item.purposes || []).includes(collPurposeFilter))
+    )
+    .sort((a, b) => (a.ivPercent === null ? 0 : 1) - (b.ivPercent === null ? 0 : 1) || a.pokemonId - b.pokemonId);
+  const ivMissingCount = collection.filter((i) => i.ivPercent === null).length;
 
   // AI 에 넘기는 내 포켓몬 목록 (verdict 없음, status·purposes 전달)
   const collectionForAI = () => collection.map((c) => ({ name: c.name, pokemonId: c.pokemonId, cp: c.cp, ivPercent: c.ivPercent, status: c.status, purposes: c.purposes, isShiny: c.isShiny, isShadow: c.isShadow }));
@@ -356,7 +362,11 @@ export default function Home() {
             flushText();
             const [reason, primary, used] = line.replace("__FALLBACK__:", "").split("|");
             const short = (m) => (m || "").replace("gemini-", "").replace("-preview", "");
-            setFallbackNotice(reason === "quota" ? `오늘 고급 모델(${short(primary)}) 한도 소진 → 기본 모델(${short(used)})로 분석 중` : `고급 모델(${short(primary)}) 응답 실패(${reason}) → 기본 모델(${short(used)})로 분석 중`);
+            setFallbackNotice(
+              reason === "quota_minute" ? `고급 모델(${short(primary)}) 분당 한도 초과 → 기본 모델(${short(used)})로 분석 중 · 잠시 후 고급 모델로 자동 복귀`
+              : reason === "quota_day" || reason === "quota" ? `오늘 고급 모델(${short(primary)}) 한도 소진 → 기본 모델(${short(used)})로 분석 중`
+              : `고급 모델(${short(primary)}) 응답 실패(${reason}) → 기본 모델(${short(used)})로 분석 중`
+            );
           }
           else textBuf.push(line);
         }
@@ -546,7 +556,8 @@ export default function Home() {
 
   // 내 목록 JSON 백업 다운로드 (서버 목록 기준, 가져오기는 범위 밖)
   const exportCollection = () => {
-    const data = JSON.stringify({ exportedAt: new Date().toISOString(), count: collection.length, items: collection }, null, 2);
+    // 서버 행 구조(my_pokemon 컬럼)로 내보내기. 향후 가져오기 호환용 schemaVersion 포함
+    const data = JSON.stringify({ schemaVersion: 1, exportedAt: new Date().toISOString(), count: collection.length, items: collection.map((c) => c.raw) }, null, 2);
     const blob = new Blob([data], { type: "application/json" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
@@ -566,7 +577,18 @@ export default function Home() {
 
   const saveEdit = async () => {
     if (!editing) return;
-    const { row, error } = await updateMyPokemon(editing.id, { status: editing.status, purposes: editing.purposes, memo: editing.memo.trim() || null });
+    // 개체값: 셋 다 비어 있으면 미입력(null) 유지, 하나라도 입력했으면 셋 다 0~15 정수여야 함
+    const ivRaw = [editing.atk, editing.def, editing.sta].map((v) => String(v ?? "").trim());
+    const anyIv = ivRaw.some((v) => v !== "");
+    const ivs = ivRaw.map((v) => (v === "" ? null : Number(v)));
+    if (anyIv && ivs.some((v) => !Number.isInteger(v) || v < 0 || v > 15)) { setCollError("개체값은 공격/방어/HP 모두 0~15 정수로 입력하세요"); return; }
+    const cpRaw = String(editing.cp ?? "").trim();
+    const cpVal = cpRaw === "" ? null : Number(cpRaw);
+    if (cpRaw !== "" && (!Number.isInteger(cpVal) || cpVal < 10 || cpVal > 9999)) { setCollError("CP 는 10~9999 정수로 입력하세요"); return; }
+    const { row, error } = await updateMyPokemon(editing.id, {
+      status: editing.status, purposes: editing.purposes, memo: editing.memo.trim() || null,
+      cp: cpVal, atk_iv: anyIv ? ivs[0] : null, def_iv: anyIv ? ivs[1] : null, sta_iv: anyIv ? ivs[2] : null,
+    });
     if (error) { setCollError(`수정 실패: ${error}`); return; }
     setCollection((prev) => prev.map((e) => (e.id === row.id ? toEntry(row) : e)));
     setEditing(null);
@@ -1209,6 +1231,7 @@ export default function Home() {
             {sessionNotice && <div style={s.sourceNotice}>{sessionNotice}</div>}
             {collError && <div style={s.error}>{collError}</div>}
 
+            {ivMissingCount > 0 && <div style={s.sourceNotice}>개체값 미입력 {ivMissingCount}건이 목록 위쪽에 있습니다 — ✏️ 로 개체값·CP 를 입력하세요</div>}
             {collection.length > 0 && (
               <div style={s.collFilterRow}>
                 {[["all", "전체"], ["keep", "보관"], ["transfer", "보낼 예정"]].map(([k, label]) => (
@@ -1257,7 +1280,7 @@ export default function Home() {
                         </div>
                       </div>
                       <button style={s.collIconBtn} title="다시 분석" onClick={() => reanalyzeEntry(item)}>🔄</button>
-                      <button style={s.collIconBtn} title="수정" onClick={() => setEditing(editing?.id === item.id ? null : { id: item.id, status: item.status, purposes: item.purposes || [], memo: item.memo || "" })}>✏️</button>
+                      <button style={s.collIconBtn} title="수정" onClick={() => setEditing(editing?.id === item.id ? null : { id: item.id, status: item.status, purposes: item.purposes || [], memo: item.memo || "", cp: item.cp || "", atk: Number.isInteger(item.atkIv) ? item.atkIv : "", def: Number.isInteger(item.defIv) ? item.defIv : "", sta: Number.isInteger(item.staIv) ? item.staIv : "" })}>✏️</button>
                       <button style={s.collRemove} onClick={() => removeFromCollection(item.id)}>🗑</button>
                     </div>
                     {editing?.id === item.id && (
@@ -1272,6 +1295,13 @@ export default function Home() {
                             <button key={k} onClick={() => setEditing((e) => ({ ...e, purposes: togglePurpose(e.purposes, k) }))} style={editing.purposes.includes(k) ? s.chipActive : s.chip}>{label}</button>
                           ))}
                         </div>
+                        <div style={{ display: "flex", gap: 6, marginTop: 8 }}>
+                          <input style={{ ...s.input, fontSize: 13, padding: "8px 10px" }} type="number" placeholder="CP" value={editing.cp} onChange={(e) => setEditing((ed) => ({ ...ed, cp: e.target.value }))} />
+                          {[["atk", "공격"], ["def", "방어"], ["sta", "HP"]].map(([k, label]) => (
+                            <input key={k} style={{ ...s.input, fontSize: 13, padding: "8px 10px" }} type="number" min={0} max={15} placeholder={label} value={editing[k]} onChange={(e) => setEditing((ed) => ({ ...ed, [k]: e.target.value }))} />
+                          ))}
+                        </div>
+                        {(editing.atk === "" && editing.def === "" && editing.sta === "") && <div style={{ fontSize: 10, color: "#ffd93d", marginTop: 4 }}>개체값 미입력 — 공격/방어/HP 를 입력하면 저장 시 반영됩니다</div>}
                         <input style={{ ...s.input, marginTop: 8, fontSize: 13 }} placeholder="메모" value={editing.memo} onChange={(e) => setEditing((ed) => ({ ...ed, memo: e.target.value }))} />
                         <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
                           <button onClick={saveEdit} style={{ ...s.keepBtn, flex: 1, padding: 8 }}>저장</button>

@@ -547,7 +547,8 @@ PvP 메타 포켓몬이면 PvP 기준으로, PvE 메타면 PvE 기준으로 IV�
                 .join(",");
               errors.push(`${model}: ${msg} (HTTP ${res.status})`);
               if (res.status === 429) rateLimited = true;
-              if (mi === 0) primaryRejectReason = res.status === 429 ? "quota" : `http${res.status}`;
+              // 429 사유 세분화: quotaId 에 PerDay/PerMinute 가 있으면 일일·분당 구분
+              if (mi === 0) primaryRejectReason = res.status === 429 ? (/perday|per_day/i.test(quotaInfo) ? "quota_day" : /perminute|per_minute/i.test(quotaInfo) ? "quota_minute" : "quota") : `http${res.status}`;
               // 폴백 사유 로그 (429 한도 초과, 404 모델 없음, 503 과부하 등)
               console.warn(`[analyze] fallback: ${model} 거절 HTTP ${res.status}${retryAfter ? ` retry-after=${retryAfter}` : ""}${quotaInfo ? ` quota=${quotaInfo}` : ""} (${msg}) → ${isLast ? "남은 모델 없음" : "다음 모델"}`);
               continue;
