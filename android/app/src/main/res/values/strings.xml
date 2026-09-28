@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">포고박사 수집기</string>
+    <string name="notif_channel">화면 캡처</string>
+    <string name="notif_title">포고박사 수집기 실행 중</string>
+    <string name="notif_text">떠 있는 버튼을 누르면 현재 화면 1장을 분석합니다</string>
+</resources>

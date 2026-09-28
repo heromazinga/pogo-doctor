@@ -1,0 +1,61 @@
+package com.pogodoctor.app
+
+import org.json.JSONObject
+import java.io.BufferedReader
+import java.net.HttpURLConnection
+import java.net.URL
+
+// 웹앱 API 호출 (HttpURLConnection, 추가 의존 없음). 토큰 원문은 로그에 남기지 않는다.
+class Api(private val prefs: Prefs) {
+    class ApiException(val status: Int, message: String) : Exception(message)
+
+    private fun request(method: String, path: String, body: JSONObject? = null, token: String? = null, timeoutMs: Int = 20000): JSONObject {
+        val conn = (URL(prefs.serverUrl + path).openConnection() as HttpURLConnection).apply {
+            requestMethod = method
+            connectTimeout = timeoutMs; readTimeout = timeoutMs
+            setRequestProperty("Accept", "application/json")
+            setRequestProperty("User-Agent", "pogo-doctor-android/${BuildConfig.VERSION_NAME}")
+            if (token != null) setRequestProperty("Authorization", "Bearer $token")
+            if (body != null) { doOutput = true; setRequestProperty("Content-Type", "application/json; charset=utf-8") }
+        }
+        try {
+            if (body != null) conn.outputStream.use { it.write(body.toString().toByteArray(Charsets.UTF_8)) }
+            val status = conn.responseCode
+            val stream = if (status in 200..299) conn.inputStream else conn.errorStream
+            val text = stream?.bufferedReader(Charsets.UTF_8)?.use(BufferedReader::readText) ?: ""
+            val json = try { JSONObject(text) } catch (_: Exception) { JSONObject().put("error", "응답 형식 오류 (HTTP $status)") }
+            if (status !in 200..299) throw ApiException(status, json.optString("error", "HTTP $status") + (json.optJSONArray("details")?.let { " — " + it.join(", ") } ?: ""))
+            return json
+        } finally { conn.disconnect() }
+    }
+
+    fun requestRaw(path: String, timeoutMs: Int = 60000): String {
+        val conn = (URL(prefs.serverUrl + path).openConnection() as HttpURLConnection).apply { connectTimeout = timeoutMs; readTimeout = timeoutMs }
+        try {
+            if (conn.responseCode !in 200..299) throw ApiException(conn.responseCode, "HTTP ${conn.responseCode}")
+            return conn.inputStream.bufferedReader(Charsets.UTF_8).use(BufferedReader::readText)
+        } finally { conn.disconnect() }
+    }
+
+    // 연결 코드 → 장기 토큰 (1회 반환). 성공 시 토큰을 암호화 저장
+    fun pair(code: String): String {
+        val res = request("POST", "/api/device/pair", JSONObject().put("code", code).put("deviceName", prefs.deviceName))
+        val token = res.optString("token", "")
+        if (token.isBlank()) throw ApiException(500, "토큰이 응답에 없습니다")
+        prefs.deviceToken = token
+        return res.optString("name", prefs.deviceName)
+    }
+
+    // 연결 상태 확인 (토큰 유효성). 401 이면 토큰 삭제
+    fun status(): JSONObject {
+        val token = prefs.deviceToken ?: throw ApiException(401, "기기 연결 필요")
+        try { return request("GET", "/api/device/pokemon", token = token) }
+        catch (e: ApiException) { if (e.status == 401) prefs.deviceToken = null; throw e }
+    }
+
+    fun savePokemon(row: JSONObject): JSONObject {
+        val token = prefs.deviceToken ?: throw ApiException(401, "기기 연결 필요")
+        try { return request("POST", "/api/device/pokemon", row, token) }
+        catch (e: ApiException) { if (e.status == 401) prefs.deviceToken = null; throw e }
+    }
+}

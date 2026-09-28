@@ -1,0 +1,166 @@
+package com.pogodoctor.app
+
+import android.Manifest
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.Context
+import android.content.Intent
+import android.content.pm.PackageManager
+import android.media.projection.MediaProjectionManager
+import android.net.Uri
+import android.os.Build
+import android.os.Bundle
+import android.provider.Settings
+import androidx.activity.ComponentActivity
+import androidx.activity.compose.setContent
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.Button
+import androidx.compose.material3.Card
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Surface
+import androidx.compose.material3.Switch
+import androidx.compose.material3.Text
+import androidx.compose.material3.darkColorScheme
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import androidx.core.content.ContextCompat
+import androidx.lifecycle.lifecycleScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+
+// 설정 화면: 기기 연결(코드 입력), 서버 주소, 오버레이·캡처 시작/중지, 데이터 갱신, 디버그 로그
+class MainActivity : ComponentActivity() {
+    private lateinit var prefs: Prefs
+    private lateinit var api: Api
+    private lateinit var repo: DataRepo
+    private var status by mutableStateOf("")
+    private var paired by mutableStateOf(false)
+    private var running by mutableStateOf(false)
+
+    private val projectionLauncher = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { r ->
+        if (r.resultCode == RESULT_OK && r.data != null) {
+            val i = Intent(this, CaptureService::class.java).putExtra(CaptureService.EXTRA_RESULT_CODE, r.resultCode).putExtra(CaptureService.EXTRA_RESULT_DATA, r.data)
+            ContextCompat.startForegroundService(this, i)
+            running = true; status = "실행 중 — 포켓몬GO 로 이동해 ⚡ 버튼을 누르세요"
+        } else status = "화면 캡처 권한이 거부되었습니다"
+    }
+    private val notifLauncher = registerForActivityResult(ActivityResultContracts.RequestPermission()) { }
+
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        prefs = Prefs(this); api = Api(prefs); repo = DataRepo(this, prefs)
+        paired = prefs.isPaired
+        if (Build.VERSION.SDK_INT >= 33 && ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) notifLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+        setContent { Surface(Modifier.fillMaxSize(), color = Color(0xFF0F2035)) { MaterialTheme(colorScheme = darkColorScheme()) { Screen() } } }
+    }
+
+    override fun onResume() { super.onResume(); running = CaptureService.running; paired = prefs.isPaired }
+
+    private fun startCapture() {
+        if (!Settings.canDrawOverlays(this)) {
+            status = "다른 앱 위에 표시 권한을 허용한 뒤 다시 누르세요"
+            startActivity(Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:$packageName"))); return
+        }
+        val mpm = getSystemService(Context.MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
+        projectionLauncher.launch(mpm.createScreenCaptureIntent())
+    }
+    private fun stopCapture() { startService(Intent(this, CaptureService::class.java).setAction(CaptureService.ACTION_STOP)); running = false; status = "중지됨" }
+
+    @Composable
+    private fun Screen() {
+        var code by remember { mutableStateOf("") }
+        var server by remember { mutableStateOf(prefs.serverUrl) }
+        var deviceName by remember { mutableStateOf(prefs.deviceName) }
+        var debug by remember { mutableStateOf(prefs.debugMode) }
+        var busy by remember { mutableStateOf(false) }
+        var log by remember { mutableStateOf("") }
+        val scroll = rememberScrollState()
+
+        Column(Modifier.fillMaxSize().verticalScroll(scroll).padding(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            Text("⚡ 포고박사 수집기", fontSize = 24.sp, color = Color(0xFF00D4AA))
+            Text("화면을 읽고 보여주기만 합니다. 게임을 대신 조작하지 않습니다.", fontSize = 12.sp, color = Color(0xFF8899AA))
+            if (status.isNotBlank()) Text(status, fontSize = 13.sp, color = Color(0xFFFFD93D))
+
+            Card(Modifier.fillMaxWidth()) {
+                Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(if (paired) "✅ 기기 연결됨 (${prefs.deviceName})" else "🔗 기기 연결 필요", fontSize = 16.sp)
+                    Text("웹 포고박사 상태줄의 \"📱 기기 연결\" → 코드 발급 → 아래에 입력 (10분 안에)", fontSize = 12.sp, color = Color(0xFF8899AA))
+                    if (!paired) {
+                        OutlinedTextField(value = deviceName, onValueChange = { deviceName = it }, label = { Text("기기 이름") }, modifier = Modifier.fillMaxWidth())
+                        OutlinedTextField(value = code, onValueChange = { code = it.uppercase() }, label = { Text("연결 코드 (8자리)") }, modifier = Modifier.fillMaxWidth())
+                        Button(enabled = !busy && code.replace(Regex("[\\s-]"), "").length == 8, onClick = {
+                            busy = true; prefs.deviceName = deviceName.ifBlank { Build.MODEL }
+                            lifecycleScope.launch {
+                                try { val n = withContext(Dispatchers.IO) { api.pair(code) }; paired = true; status = "연결 완료: $n"; code = "" }
+                                catch (e: Exception) { status = "연결 실패: ${e.message}" }
+                                busy = false
+                            }
+                        }) { Text(if (busy) "연결 중…" else "연결하기") }
+                    } else {
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            OutlinedButton(enabled = !busy, onClick = { busy = true; lifecycleScope.launch { try { val s = withContext(Dispatchers.IO) { api.status() }; status = "연결 정상 · 내 목록 ${s.optInt("pokemonCount", -1)}마리" } catch (e: Exception) { status = "연결 확인 실패: ${e.message}"; paired = prefs.isPaired }; busy = false } }) { Text("연결 확인") }
+                            OutlinedButton(onClick = { prefs.deviceToken = null; paired = false; status = "이 기기의 토큰을 지웠습니다 (웹에서도 해제하세요)" }) { Text("연결 끊기") }
+                        }
+                    }
+                }
+            }
+
+            Card(Modifier.fillMaxWidth()) {
+                Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(if (running) "🟢 오버레이 실행 중" else "⚪ 오버레이 꺼짐", fontSize = 16.sp)
+                    Text("1) 다른 앱 위에 표시 허용 → 2) 화면 캡처 허용 → 3) 포켓몬GO 에서 포켓몬 상세 화면을 열고 ⚡ 버튼. 평가(감정) 화면에서 한 번 더 누르면 개체값을 확정합니다. 연결 전에도 분석은 되고 저장만 막힙니다.", fontSize = 12.sp, color = Color(0xFF8899AA))
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Button(enabled = !running, onClick = { startCapture() }) { Text("오버레이 시작") }
+                        OutlinedButton(enabled = running, onClick = { stopCapture() }) { Text("중지") }
+                    }
+                }
+            }
+
+            Card(Modifier.fillMaxWidth()) {
+                Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text("설정", fontSize = 16.sp)
+                    OutlinedTextField(value = server, onValueChange = { server = it }, label = { Text("서버 주소") }, modifier = Modifier.fillMaxWidth())
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        OutlinedButton(onClick = { prefs.serverUrl = server; status = "서버 주소 저장: ${prefs.serverUrl}" }) { Text("저장") }
+                        OutlinedButton(enabled = !busy, onClick = { busy = true; lifecycleScope.launch { try { val d = withContext(Dispatchers.IO) { repo.refresh(api, force = true) }; status = "데이터 갱신: 종 ${d.species.size} · 기술명 ${d.allMoveNamesKr.size} (${d.generatedAt ?: "시각 미상"})" } catch (e: Exception) { status = "데이터 갱신 실패: ${e.message}" }; busy = false } }) { Text("데이터 갱신") }
+                    }
+                    Text("캐시: " + (repo.loadCached()?.let { "종 ${it.species.size}" } ?: "없음"), fontSize = 12.sp, color = Color(0xFF8899AA))
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Text("디버그 모드 (인식 텍스트·결과를 기기에 기록)", fontSize = 13.sp, modifier = Modifier.padding(top = 12.dp))
+                        Switch(checked = debug, onCheckedChange = { debug = it; prefs.debugMode = it })
+                    }
+                    if (debug) {
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            OutlinedButton(onClick = { log = DebugLog.asText(this@MainActivity) }) { Text("로그 보기") }
+                            OutlinedButton(onClick = { val cm = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager; cm.setPrimaryClip(ClipData.newPlainText("pogo-debug", DebugLog.asText(this@MainActivity))); status = "로그를 클립보드에 복사했습니다" }) { Text("복사") }
+                            OutlinedButton(onClick = { DebugLog.clear(this@MainActivity); log = "" }) { Text("지우기") }
+                        }
+                        if (log.isNotBlank()) Text(log, fontSize = 10.sp, color = Color(0xFFC8D6E5))
+                    }
+                }
+            }
+            Spacer(Modifier.height(24.dp))
+            Text("v${BuildConfig.VERSION_NAME} · 기기 토큰은 Android Keystore 로 암호화 저장 · 이미지는 기기 밖으로 나가지 않음", fontSize = 10.sp, color = Color(0xFF576574))
+        }
+    }
+}
