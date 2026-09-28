@@ -1,4 +1,8 @@
 import { NextResponse } from "next/server";
+import { getPokemonDataset, findPokemon } from "../../lib/pokemonData";
+import { analyzeDefender } from "../../lib/typeChart";
+
+export const maxDuration = 60;
 
 const SYSTEM_PROMPT = `당신은 포켓몬GO 최고 권위자 "포고박사"입니다.
 초보자에게는 친절하되, 별의 모래와 사탕 낭비를 막기 위해 아주 단호하고 냉철하게(팩트 폭격) 분석하세요.
@@ -41,7 +45,7 @@ const RAID_SYSTEM_PROMPT = `당신은 포켓몬GO 레이드 전투 지휘관이�
 모바일 앱 가독성을 위해 추천 카운터는 반드시 **표(Table)**로 정리하세요.
 
 ## 🧠 분석 및 추천 원리 (자체 메타 데이터 활용)
-- **이중 약점(4배 데미지)**이 있다면 무조건 그 타입을 최우선으로 강조하세요.
+- **이중 약점(2.56배)**이 있다면 무조건 그 타입을 최우선으로 강조하세요.
 - **DPS(초당 데미지)와 TDO(총 누적 데미지)**를 속으로 계산하여, 무조건 오래 버티는 녀석보다 빨리 잡는 그림자/메가 위주로 추천하세요.
 - 사용자 보유목록이 주어지면, 그 중에서 쓸만한 녀석을 골라주되, **보유 덱이 너무 처참하면 팩트 폭격**을 날리고 야생에서 흔히 구하는 '가성비 카운터'를 대안으로 제시하세요.
 
@@ -90,7 +94,7 @@ const MAX_BATTLE_SYSTEM_PROMPT = `당신은 포켓몬GO 맥스배틀 전문 지�
 - 최대 4명이서 협동. 거다이맥스는 최대 100명(4명씩 팀).
 
 ## 🧠 추천 원리
-- 타입 상성이 최우선. **이중 약점(4배)** 있으면 무조건 강조.
+- 타입 상성이 최우선. **이중 약점(2.56배)** 있으면 무조건 강조.
 - 현재 포켓몬GO에 존재하는 다이맥스/거다이맥스 포켓몬 기준으로 추천.
 - 사용자 보유목록이 있다면 보유 다이맥스 포켓몬 우선 추천.
 
@@ -107,13 +111,114 @@ const MAX_BATTLE_SYSTEM_PROMPT = `당신은 포켓몬GO 맥스배틀 전문 지�
 
 한국어로 답변하세요.`;
 
-// quality first → speed fallback (all free tier)
-const MODELS = [
+// 기본 폴백 순서 (전부 무료 티어). 환경변수 GEMINI_MODELS(쉼표 구분)로 교체 가능.
+// - gemini-2.0-flash: 2026-06-01 종료 → 삭제
+// - gemini-2.5-pro: 무료 티어 미제공 + 2026-10-16 종료 → 삭제
+// - gemini-3.1-flash-lite-preview: 2026-05-25 종료 → 정식 gemini-3.1-flash-lite 로 교체
+const DEFAULT_MODELS = [
+  "gemini-3.6-flash",
+  "gemini-3.1-flash-lite",
   "gemini-3-flash-preview",
-  "gemini-2.5-pro",
-  "gemini-3.1-flash-lite-preview",
-  "gemini-2.0-flash",
 ];
+
+function getModels() {
+  const fromEnv = (process.env.GEMINI_MODELS || "")
+    .split(",")
+    .map((m) => m.trim())
+    .filter(Boolean);
+  return fromEnv.length > 0 ? fromEnv : DEFAULT_MODELS;
+}
+
+// ─── 최신성 규칙: 오늘 날짜 + "제공 데이터 우선" 을 모든 시스템 프롬프트에 덧붙인다 ───
+function todayKST() {
+  const now = new Date();
+  const iso = now.toLocaleDateString("sv-SE", { timeZone: "Asia/Seoul" }); // YYYY-MM-DD
+  const human = now.toLocaleDateString("ko-KR", { timeZone: "Asia/Seoul", year: "numeric", month: "long", day: "numeric", weekday: "long" });
+  return `${iso} (${human})`;
+}
+
+// 기술명을 "한국어(영어)" 로 표기 (서버가 모은 moveNamesKr 사용, 없으면 영어만)
+function mvName(dataset, en) {
+  const kr = dataset?.moveNamesKr?.[en];
+  return kr ? `${kr}(${en})` : en;
+}
+const mvList = (dataset, arr) => (arr || []).map((m) => mvName(dataset, m)).join(", ");
+
+// 포켓몬GO 용어집: 프롬프트에 고정 포함. 여기 없는 용어를 새로 만들지 않도록 한다.
+const GLOSSARY_BLOCK = `
+
+## 📖 용어집 (반드시 이 표기만 사용, 여기 없는 용어를 새로 만들지 말 것)
+- 기술 종류: **빠른 기술** / **차징 기술** 두 가지뿐. ("노멀기술", "일반기술", "메인기술", "필살기" 같은 표현 금지)
+- 기술 습득 수단: **기술머신(노말)**, **기술머신(스페셜)**, **대단한 기술머신(노말)**, **대단한 기술머신(스페셜)**. 레거시 기술은 대단한 기술머신으로만 습득.
+- 전용기 아이템: **메테오나이트**(레쿠쟈 화룡점정). "운석", "운석 아이템" 등 다른 표현 금지. 그 외 전용기는 폼 체인지(융합·왕관)로 습득.
+- 자원: **별의모래**, **사탕**, **XL사탕**
+- 시스템: **메가진화**, **섀도**(섀도 포켓몬), **정화**, **개체값(공격/방어/HP)**, **레이드**, **맥스배틀**(다이맥스/거다이맥스)
+- 타입 배율(포켓몬GO 기준): **약점 1.6배**, **이중 약점 2.56배**, **반감 0.625배**, **이중 반감 0.39배**. 본가 표현("4배 약점", "2배", "무효", "1/4") 금지.
+- 이름 표기: 포켓몬명·기술명은 제공된 데이터의 **한국어(영어)** 표기를 그대로 사용. 제공되지 않은 한국어 이름을 임의로 번역·창작하지 말고 영어 그대로 쓸 것.`;
+
+function freshnessBlock(dataset) {
+  const stamp = dataset?.generatedAt ? new Date(dataset.generatedAt).toLocaleString("ko-KR", { timeZone: "Asia/Seoul" }) : "확인 불가";
+  const okSources = (dataset?.dataSources || []).filter((s) => s.ok).map((s) => s.name).join(", ") || "없음";
+  return GLOSSARY_BLOCK + `
+
+## 📅 데이터 최신성 규칙 (최우선 준수)
+- 오늘 날짜: ${todayKST()} 기준 한국 시간. 당신의 학습 지식은 이 날짜보다 오래되었을 수 있습니다.
+- 사용자 메시지에 포함된 **"교차검증 데이터"**(종족값, 타입, 기술 목록, 상성, CP)가 당신의 학습 지식과 다르면 **반드시 제공된 데이터를 따르세요.** 학습 지식으로 덮어쓰지 마세요.
+- 제공된 데이터에 없는 내용(현재 메타 순위, 진행 중 이벤트, 최근 밸런스 변경, 신규 기술 등)은 단정하지 말고 **"데이터 없음"**이라고 명시한 뒤 일반 원칙만 설명하세요. 추측 금지.
+- "미검증 기술"은 교차검증 소스가 1개뿐이라는 뜻이며 **미출시라는 뜻이 아닙니다.** 추천에서 배제하지 말고, 언급할 때 반드시 "(미검증)"이라고 표시하세요. 주력 추천은 검증된 기술을 우선하세요.
+- 데이터 기준 시각: ${stamp} / 정상 소스: ${okSources}`;
+}
+
+// 데이터셋 조회 (실패해도 분석은 계속 진행)
+async function loadDatasetSafe() {
+  try {
+    return await getPokemonDataset();
+  } catch (e) {
+    console.warn(`[analyze] 데이터셋 로드 실패: ${e.message}`);
+    return null;
+  }
+}
+
+// 기술 구분 목록 (일반 / 레거시 / 전용기 / 한정기(미검증) / 미검증) — 기술명은 한국어(영어)
+function moveCategoryLines(dataset, p) {
+  return [
+    `- 빠른 기술(일반, 기술머신으로 습득 가능): ${mvList(dataset, p.fast) || "데이터 없음"}`,
+    `- 차징 기술(일반, 기술머신으로 습득 가능): ${mvList(dataset, p.charged) || "데이터 없음"}`,
+    `- 레거시 기술(대단한 기술머신 필요): ${mvList(dataset, [...(p.eliteFast || []), ...(p.eliteCharged || [])]) || "없음"}`,
+    `- 전용기(메테오나이트 등 아이템·폼 체인지로만 습득, 기술머신 불가): ${mvList(dataset, [...(p.signatureFast || []), ...(p.signatureCharged || [])]) || "없음"}`,
+    `- 한정기(미검증: 교차검증 소스 1개가 한정기로 보고, 대단한 기술머신 또는 전용기일 수 있음): ${mvList(dataset, [...(p.unverifiedEliteFast || []), ...(p.unverifiedEliteCharged || [])]) || "없음"}`,
+    `- 미검증 기술(교차검증 소스 1개 — 미출시라는 뜻이 아님): ${mvList(dataset, [...(p.unverifiedFast || []), ...(p.unverifiedCharged || [])]) || "없음"}`,
+    `- ⚠️ 위 구분을 그대로 따르세요. "일반" 기술을 대단한 기술머신 필요라고 안내하지 마세요.`,
+  ];
+}
+
+function verifiedBlock(label, p, dataset) {
+  if (!p) return `## ${label}\n- 데이터 없음 (서버 교차검증 데이터에서 찾지 못함)`;
+  const t = analyzeDefender(p.types);
+  const lines = [
+    `## ${label} (서버 교차검증 데이터 — 소스: ${(p.sources || []).join(", ")})`,
+    `- 이름: ${p.nameKr}(${p.name}) #${p.id} / 폼: ${p.form}`,
+    `- 종족값: 공격 ${p.baseAttack} / 방어 ${p.baseDefense} / 체력 ${p.baseStamina}`,
+    `- 타입: ${(p.types || []).join("/") || "데이터 없음"}`,
+    ...moveCategoryLines(dataset, p),
+  ];
+  if (t) {
+    lines.push(`- 약점(받는 피해 증가, 서버 계산): ${t.weaknesses.join(", ") || "없음"}`);
+    lines.push(`- 저항(받는 피해 감소, 서버 계산): ${t.resistances.join(", ") || "없음"}`);
+  }
+  return lines.join("\n");
+}
+
+function metaHeader(dataset, extra = {}) {
+  const meta = {
+    generatedAt: dataset?.generatedAt || null,
+    stale: Boolean(dataset?.stale),
+    dataSources: (dataset?.dataSources || []).map((s) => ({ name: s.name, ok: s.ok, fetchedAt: s.fetchedAt })),
+    dataWarningCount: dataset?.dataWarningCount || 0,
+    ...extra,
+  };
+  return encodeURIComponent(JSON.stringify(meta));
+}
 
 // ─── CP 계산 (서버에서 미리 계산해서 AI 환각 방지) ───
 const CPM_40 = 0.7903;
@@ -169,12 +274,22 @@ export async function POST(req) {
 
   try {
     const body = await req.json();
-    const { pokemonData, userInput, collection, mode, raidBoss, compareA, compareB } = body;
+    const { userInput, collection, mode, raidBoss, compareA, compareB } = body;
+    let { pokemonData } = body;
+
+    const dataset = await loadDatasetSafe();
+    let verifiedCount = 0;
 
     let systemPrompt, userMessage;
 
     if (mode === "maxbattle") {
       systemPrompt = MAX_BATTLE_SYSTEM_PROMPT;
+
+      const boss = dataset ? findPokemon(dataset, { id: raidBoss?.id, form: raidBoss?.form, name: raidBoss?.name }) : null;
+      if (boss) verifiedCount++;
+      // snacknap 이 준 타입이 있으면 우선, 없으면 교차검증 데이터의 타입
+      const bossTypes = raidBoss?.types?.length ? raidBoss.types : boss?.types || [];
+      const bossBlock = verifiedBlock("맥스배틀 보스 교차검증 데이터", boss ? { ...boss, types: bossTypes } : null, dataset);
 
       let collectionContext = "";
       if (collection && collection.length > 0) {
@@ -184,13 +299,20 @@ export async function POST(req) {
         collectionContext = `\n\n## 사용자 보유 포켓몬 (${collection.length}마리)\n${relevant}\n→ 이 중 다이맥스/거다이맥스 가능한 포켓몬이 있다면 우선 추천해주세요.`;
       }
 
-      userMessage = `## 맥스배틀 보스 정보
+      userMessage = `## 맥스배틀 보스 정보 (snacknap)
 ${JSON.stringify(raidBoss, null, 2)}
+
+${bossBlock}
 ${collectionContext}
 
-이 맥스배틀 보스의 최적 다이맥스 카운터를 추천해주세요. 맥스배틀 규칙(다이맥스 포켓몬만 가능)을 반드시 고려하세요.`;
+이 맥스배틀 보스의 최적 다이맥스 카운터를 추천해주세요. 맥스배틀 규칙(다이맥스 포켓몬만 가능)을 반드시 고려하세요.
+약점/저항은 위 "서버 계산" 값을 그대로 사용하세요.`;
     } else if (mode === "raid") {
       systemPrompt = RAID_SYSTEM_PROMPT;
+
+      const boss = dataset ? findPokemon(dataset, { id: raidBoss?.id, form: raidBoss?.form, name: raidBoss?.name }) : null;
+      if (boss) verifiedCount++;
+      const bossBlock = verifiedBlock("레이드 보스 교차검증 데이터", boss, dataset);
 
       let collectionContext = "";
       if (collection && collection.length > 0) {
@@ -200,23 +322,54 @@ ${collectionContext}
         collectionContext = `\n\n## 사용자 보유 포켓몬 (${collection.length}마리)\n${relevant}\n→ 가능하면 보유 포켓몬 중에서 카운터를 우선 추천해주세요. 보유하지 않은 추천 포켓몬도 함께 알려주세요.`;
       }
 
-      userMessage = `## 레이드 보스 정보
+      userMessage = `## 레이드 보스 정보 (사용자 선택)
 ${JSON.stringify(raidBoss, null, 2)}
+
+${bossBlock}
 ${collectionContext}
 
-이 레이드 보스의 최적 카운터를 추천해주세요. 보스의 타입/약점을 분석하고, 초보자도 이해하기 쉽게 설명해주세요.`;
+이 레이드 보스의 최적 카운터를 추천해주세요. 보스의 타입/약점은 위 "서버 계산" 값을 그대로 사용하고, 초보자도 이해하기 쉽게 설명해주세요.`;
     } else if (mode === "compare") {
       systemPrompt = COMPARE_SYSTEM_PROMPT;
+
+      const vA = dataset ? findPokemon(dataset, { id: compareA?.id, form: compareA?.form, name: compareA?.enName }) : null;
+      const vB = dataset ? findPokemon(dataset, { id: compareB?.pokemonId, form: compareB?.form, name: compareB?.enName }) : null;
+      if (vA) verifiedCount++;
+      if (vB) verifiedCount++;
 
       userMessage = `## 비교 대상 A (현재 분석 중)
 ${JSON.stringify(compareA, null, 2)}
 
+${verifiedBlock("A 교차검증 데이터", vA, dataset)}
+
 ## 비교 대상 B (보유목록)
 ${JSON.stringify(compareB, null, 2)}
+
+${verifiedBlock("B 교차검증 데이터", vB, dataset)}
 
 이 두 포켓몬을 비교 분석해주세요. 어느 쪽을 키워야 할지, 둘 다 킵해야 할지 판정해주세요.`;
     } else {
       systemPrompt = SYSTEM_PROMPT;
+
+      // 클라이언트가 보낸 값 대신 서버 교차검증 데이터를 우선 사용 (종족값·기술·타입)
+      const verified = dataset ? findPokemon(dataset, { id: pokemonData?.id, form: pokemonData?.form, name: pokemonData?.name }) : null;
+      if (verified) {
+        verifiedCount++;
+        pokemonData = {
+          ...pokemonData,
+          name: verified.name, nameKr: verified.nameKr, id: verified.id, form: verified.form,
+          baseAttack: verified.baseAttack, baseDefense: verified.baseDefense, baseStamina: verified.baseStamina,
+          types: verified.types, fast: verified.fast, charged: verified.charged,
+          eliteFast: verified.eliteFast, eliteCharged: verified.eliteCharged,
+          signatureFast: verified.signatureFast, signatureCharged: verified.signatureCharged,
+          unverifiedFast: verified.unverifiedFast, unverifiedCharged: verified.unverifiedCharged,
+          unverifiedEliteFast: verified.unverifiedEliteFast, unverifiedEliteCharged: verified.unverifiedEliteCharged,
+          dataSources: verified.sources,
+        };
+      }
+      const typeInfo = analyzeDefender(pokemonData?.types);
+      // 기술 구분(일반/레거시/전용기/한정기(미검증)/미검증)을 한국어(영어) 표기로 명시적으로 전달
+      const categoryText = pokemonData ? moveCategoryLines(dataset, pokemonData).join("\n") : "";
 
       let collectionContext = "";
       if (collection && collection.length > 0) {
@@ -226,8 +379,14 @@ ${JSON.stringify(compareB, null, 2)}
         collectionContext = `\n\n## 사용자 보유목록 (${collection.length}마리)\n${relevant}\n→ 이미 보유 중인 포켓몬과 비교해서 판정에 반영해주세요.`;
       }
 
-      userMessage = `## API에서 가져온 정확한 데이터
+      userMessage = `## 교차검증 데이터 (${verified ? `서버 교차검증 완료 — 소스: ${verified.sources.join(", ")}` : "서버 데이터 없음 — 클라이언트 값"})
 ${JSON.stringify(pokemonData, null, 2)}
+${typeInfo ? `- 약점(받는 피해 증가, 서버 계산): ${typeInfo.weaknesses.join(", ") || "없음"}
+- 저항(받는 피해 감소, 서버 계산): ${typeInfo.resistances.join(", ") || "없음"}` : "- 타입/상성: 데이터 없음"}
+
+## 기술 구분 (서버 교차검증 데이터 기준, 표기: 한국어(영어))
+- 포켓몬: ${pokemonData?.nameKr || "?"}(${pokemonData?.name || "?"})
+${categoryText}
 
 ## 사용자 입력
 - 포켓몬: ${userInput.name}
@@ -253,37 +412,67 @@ ${(() => {
 - UL(2500): ${cpInfo.ulFit}`;
 })()}${collectionContext}
 
-위 API 데이터를 기반으로 이 포켓몬을 분석해주세요.
+위 교차검증 데이터를 기반으로 이 포켓몬을 분석해주세요. 기술 목록·종족값·상성은 위 데이터를 그대로 사용하세요.
 CP를 기반으로 어떤 리그에 적합한지, 강화가 필요한지도 분석해주세요.
 PvP 메타 포켓몬이면 PvP 기준으로, PvE 메타면 PvE 기준으로 IV를 평가하세요.
 "**판정:**" 줄은 반드시 포함하세요.
 ⚠️ 핵심만 간결하게. 너무 길지 않게 답변하세요.`;
     }
 
-    let lastError = "";
+    systemPrompt += freshnessBlock(dataset);
+    const metaValue = metaHeader(dataset, { verified: verifiedCount });
+    if (process.env.POGO_DEBUG_PROMPT) {
+      console.log("[analyze] system prompt tail:\n" + systemPrompt.slice(-3000));
+      console.log("[analyze] user message:\n" + userMessage);
+    }
 
-    for (const model of MODELS) {
+    const errors = []; // 모델별 실패 사유 (전부 실패 시 한 번에 보여준다)
+
+    // thinking 수준을 낮춰 thinking 토큰 소모를 줄인다 (Gemini 3.x: generationConfig.thinkingConfig.thinkingLevel).
+    // 환경변수 GEMINI_THINKING_LEVEL 로 조정, "off" 면 파라미터 자체를 보내지 않는다.
+    const thinkingLevel = (process.env.GEMINI_THINKING_LEVEL || "low").trim().toLowerCase();
+    const callGemini = (model, withThinking) => {
+      const generationConfig = {
+        temperature: 0.8,
+        // Gemini 3.x 는 생각(thinking) 토큰도 이 한도에 포함되므로 2000 이면 본문이 중간에 잘린다 (안전장치로 8192 유지)
+        maxOutputTokens: 8192,
+      };
+      if (withThinking) generationConfig.thinkingConfig = { thinkingLevel };
+      return fetch(
+        `https://generativelanguage.googleapis.com/v1beta/models/${model}:streamGenerateContent?alt=sse&key=${apiKey}`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            system_instruction: { parts: [{ text: systemPrompt }] },
+            contents: [{ parts: [{ text: userMessage }] }],
+            generationConfig,
+          }),
+        }
+      );
+    };
+
+    for (const model of getModels()) {
       try {
         // Use Gemini streaming SSE endpoint
-        const res = await fetch(
-          `https://generativelanguage.googleapis.com/v1beta/models/${model}:streamGenerateContent?alt=sse&key=${apiKey}`,
-          {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              system_instruction: { parts: [{ text: systemPrompt }] },
-              contents: [{ parts: [{ text: userMessage }] }],
-              generationConfig: {
-                temperature: 0.8,
-                maxOutputTokens: 2000,
-              },
-            }),
+        let res = await callGemini(model, thinkingLevel !== "off");
+
+        if (!res.ok && thinkingLevel !== "off" && res.status === 400) {
+          // 모델이 thinkingConfig/thinkingLevel 을 지원하지 않으면 파라미터 없이 한 번 더 시도
+          const errData = await res.json().catch(() => ({}));
+          const msg = errData?.error?.message || "";
+          if (/thinking/i.test(msg)) {
+            console.warn(`[analyze] ${model}: thinkingLevel 미지원 → 파라미터 없이 재시도 (${msg})`);
+            res = await callGemini(model, false);
+          } else {
+            errors.push(`${model}: ${msg || res.statusText} (HTTP ${res.status})`);
+            continue;
           }
-        );
+        }
 
         if (!res.ok) {
           const errData = await res.json().catch(() => ({}));
-          lastError = `${model}: ${errData?.error?.message || res.statusText}`;
+          errors.push(`${model}: ${errData?.error?.message || res.statusText} (HTTP ${res.status})`);
           continue;
         }
 
@@ -298,31 +487,43 @@ PvP 메타 포켓몬이면 PvP 기준으로, PvE 메타면 PvE 기준으로 IV�
             controller.enqueue(encoder.encode(`__MODEL__:${model}\n`));
 
             let buffer = "";
+            let finishReason = null;
+            let usage = null;
+            const handleLine = (line) => {
+              if (!line.startsWith("data:")) return;
+              const jsonStr = line.slice(5).trim();
+              if (!jsonStr || jsonStr === "[DONE]") return;
+              try {
+                const parsed = JSON.parse(jsonStr);
+                const cand = parsed?.candidates?.[0];
+                // 생각(thought) 파트는 제외하고 텍스트 파트를 전부 이어 붙인다 (parts[0] 만 읽으면 본문이 누락됨)
+                for (const part of cand?.content?.parts || []) {
+                  if (part?.thought) continue;
+                  if (part?.text) controller.enqueue(encoder.encode(part.text));
+                }
+                if (cand?.finishReason) finishReason = cand.finishReason;
+                if (parsed?.usageMetadata) usage = parsed.usageMetadata;
+              } catch {}
+            };
             try {
               while (true) {
                 const { done, value } = await reader.read();
                 if (done) break;
-
                 buffer += decoder.decode(value, { stream: true });
                 const lines = buffer.split("\n");
                 buffer = lines.pop() || "";
-
-                for (const line of lines) {
-                  if (!line.startsWith("data: ")) continue;
-                  const jsonStr = line.slice(6).trim();
-                  if (!jsonStr || jsonStr === "[DONE]") continue;
-
-                  try {
-                    const parsed = JSON.parse(jsonStr);
-                    const text = parsed?.candidates?.[0]?.content?.parts?.[0]?.text;
-                    if (text) {
-                      controller.enqueue(encoder.encode(text));
-                    }
-                  } catch {}
-                }
+                for (const line of lines) handleLine(line);
               }
+              buffer += decoder.decode();
+              if (buffer.trim()) handleLine(buffer);
             } catch (e) {
               controller.enqueue(encoder.encode(`\n__ERROR__:스트리밍 중 오류 발생`));
+            }
+            if (finishReason && finishReason !== "STOP") {
+              console.warn(`[analyze] ${model} finishReason=${finishReason} usage=${JSON.stringify(usage)}`);
+              if (finishReason === "MAX_TOKENS") controller.enqueue(encoder.encode("\n\n⚠️ 응답이 출력 길이 제한으로 잘렸습니다. 다시 시도해 주세요."));
+            } else if (process.env.POGO_DEBUG_PROMPT) {
+              console.log(`[analyze] ${model} finishReason=${finishReason} usage=${JSON.stringify(usage)}`);
             }
             controller.close();
           },
@@ -333,14 +534,17 @@ PvP 메타 포켓몬이면 PvP 기준으로, PvE 메타면 PvE 기준으로 IV�
             "Content-Type": "text/plain; charset=utf-8",
             "Transfer-Encoding": "chunked",
             "Cache-Control": "no-cache",
+            // 데이터 기준 시각·소스 상태 (URL 인코딩된 JSON)
+            "X-Pogo-Meta": metaValue,
           },
         });
       } catch (e) {
-        lastError = `${model}: ${e.message}`;
+        errors.push(`${model}: ${e.message}`);
       }
     }
 
-    return NextResponse.json({ error: `Gemini 오류: ${lastError}` }, { status: 500 });
+    console.error("[analyze] 모든 Gemini 모델 실패: " + errors.join(" | "));
+    return NextResponse.json({ error: `Gemini 오류: ${errors.join(" / ")}` }, { status: 500 });
   } catch (e) {
     return NextResponse.json({ error: `서버 오류: ${e.message}` }, { status: 500 });
   }

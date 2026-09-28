@@ -8,7 +8,6 @@ export const metadata = {
     icon: "/icon-192.png",
     apple: "/icon-192.png",
   },
-  themeColor: "#00d4aa",
   appleWebApp: {
     capable: true,
     statusBarStyle: "black-translucent",
@@ -16,12 +15,19 @@ export const metadata = {
   },
 };
 
+// Next.js 14+ 에서는 themeColor/viewport 를 metadata 가 아닌 viewport export 로 지정
+export const viewport = {
+  themeColor: "#00d4aa",
+  width: "device-width",
+  initialScale: 1,
+  maximumScale: 1,
+};
+
 export default function RootLayout({ children }) {
   return (
     <html lang="ko">
       <head>
         <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
-        <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1" />
         <link rel="apple-touch-icon" href="/icon-192.png" />
         <meta name="apple-mobile-web-app-capable" content="yes" />
         <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />

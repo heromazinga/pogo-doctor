@@ -28,6 +28,10 @@ export default function Home() {
   const [usedModel, setUsedModel] = useState("");
   const [viewingEntry, setViewingEntry] = useState(null);
 
+  // ─── 데이터 기준 시각 / 소스 상태 (서버 교차검증 메타) ───
+  const [dataMeta, setDataMeta] = useState(null);
+  const [analysisMeta, setAnalysisMeta] = useState(null);
+
   // ─── Streaming ───
   const [streaming, setStreaming] = useState(false);
   const abortRef = useRef(null);
@@ -54,6 +58,12 @@ export default function Home() {
 
   // ─── Raid bosses enriched with Korean names ───
   const [enrichedRaidBosses, setEnrichedRaidBosses] = useState([]);
+
+  // ─── 외부 소스 장애 안내 (해당 기능만 비활성화, 나머지는 정상 동작) ───
+  const [raidBossesError, setRaidBossesError] = useState(null);
+  const [eventsError, setEventsError] = useState(null);
+  const [maxBattlesError, setMaxBattlesError] = useState(null);
+  const pokeapiDownRef = useRef(false); // PokeAPI 한국어 기술명 폴백이 죽었으면 더 이상 호출하지 않음
 
   // ─── Events ───
   const [events, setEvents] = useState([]);
@@ -116,7 +126,17 @@ export default function Home() {
     fetch("/api/pokemon-data")
       .then((r) => r.json())
       .then((data) => {
-        if (Array.isArray(data)) setAllPokemon(data);
+        if (Array.isArray(data)) {
+          setAllPokemon(data); // 구버전 응답 호환
+        } else if (data && Array.isArray(data.pokemon)) {
+          setAllPokemon(data.pokemon);
+          // 서버가 모아준 한국어 기술명 (pokemon-go-api) → PokeAPI 호출 최소화
+          if (data.moveNamesKr) setMoveNamesKr((prev) => ({ ...data.moveNamesKr, ...prev }));
+          setDataMeta({ generatedAt: data.generatedAt, stale: data.stale, dataSources: data.dataSources || [], dataWarningCount: data.dataWarningCount || 0, dataWarningCounts: data.dataWarningCounts || {}, votableCount: data.votableCount });
+        } else if (data && data.error) {
+          setError(`포켓몬 데이터 로드 실패: ${data.error}`);
+          if (data.dataSources) setDataMeta({ generatedAt: null, dataSources: data.dataSources, dataWarningCount: 0 });
+        }
         setDataLoading(false);
       })
       .catch(() => setDataLoading(false));
@@ -137,9 +157,10 @@ export default function Home() {
       .then((r) => r.json())
       .then((data) => {
         if (Array.isArray(data)) setCurrentRaidBosses(data);
+        else setRaidBossesError(data?.error || "응답 형식 오류");
         setRaidBossesLoading(false);
       })
-      .catch(() => setRaidBossesLoading(false));
+      .catch(() => { setRaidBossesError("네트워크 오류"); setRaidBossesLoading(false); });
   }, []);
 
   // ─── 이벤트 로드 ───
@@ -149,32 +170,38 @@ export default function Home() {
       .then((r) => r.json())
       .then((data) => {
         if (Array.isArray(data)) setEvents(data);
+        else setEventsError(data?.error || "응답 형식 오류");
         setEventsLoading(false);
       })
-      .catch(() => setEventsLoading(false));
+      .catch(() => { setEventsError("네트워크 오류"); setEventsLoading(false); });
   }, []);
 
-  // ─── 맥스배틀 로드 ───
+  // ─── 맥스배틀 로드 (1회) ───
+  const [rawMaxBattles, setRawMaxBattles] = useState([]);
   useEffect(() => {
     setMaxBattlesLoading(true);
     fetch("/api/max-battles")
       .then((r) => r.json())
       .then((data) => {
-        if (Array.isArray(data)) {
-          // allPokemon으로 한국어 이름 매칭
-          const enriched = data.map((b) => {
-            if (b.id && allPokemon.length > 0) {
-              const match = allPokemon.find((p) => p.id === b.id);
-              if (match) return { ...b, nameKr: match.nameKr };
-            }
-            return b;
-          });
-          setMaxBattles(enriched);
-        }
+        if (Array.isArray(data)) setRawMaxBattles(data);
+        else setMaxBattlesError(data?.error || "응답 형식 오류");
         setMaxBattlesLoading(false);
       })
-      .catch(() => setMaxBattlesLoading(false));
-  }, [allPokemon]);
+      .catch(() => { setMaxBattlesError("네트워크 오류"); setMaxBattlesLoading(false); });
+  }, []);
+
+  // ─── 맥스배틀 보스에 한국어 이름 매칭 (allPokemon 로드 후, 재요청 없이) ───
+  useEffect(() => {
+    if (rawMaxBattles.length === 0) return;
+    const enriched = rawMaxBattles.map((b) => {
+      if (b.id && allPokemon.length > 0) {
+        const match = allPokemon.find((p) => p.id === b.id);
+        if (match) return { ...b, nameKr: match.nameKr };
+      }
+      return b;
+    });
+    setMaxBattles(enriched);
+  }, [allPokemon, rawMaxBattles]);
 
   // ─── 레이드 보스에 한국어 이름 매칭 (allPokemon 로드 후) ───
   // ScrapedDuck은 영어 이름만 제공하므로 dex ID로 매칭
@@ -233,9 +260,10 @@ export default function Home() {
     setSuggestions([]);
     setShowSugg(false);
 
-    const allMoves = [...(poke.fast || []), ...(poke.charged || []), ...(poke.eliteFast || []), ...(poke.eliteCharged || [])];
+    const allMoves = [...(poke.fast || []), ...(poke.charged || []), ...(poke.eliteFast || []), ...(poke.eliteCharged || []), ...(poke.signatureFast || []), ...(poke.signatureCharged || []), ...(poke.unverifiedEliteFast || []), ...(poke.unverifiedEliteCharged || []), ...(poke.unverifiedFast || []), ...(poke.unverifiedCharged || [])];
+    // 서버(pokemon-go-api)가 준 한국어 기술명이 없을 때만 PokeAPI 로 보충
     const toFetch = allMoves.filter((m) => !moveNamesKr[m]);
-    if (toFetch.length > 0) {
+    if (toFetch.length > 0 && !pokeapiDownRef.current) {
       Promise.allSettled(
         toFetch.map(async (engName) => {
           const slug = engName.toLowerCase().replace(/[()'']/g, "").replace(/\s+/g, "-").replace(/--+/g, "-");
@@ -245,7 +273,7 @@ export default function Home() {
             const d = await r.json();
             const kr = d.names?.find((n) => n.language.name === "ko");
             if (kr) return { eng: engName, kr: kr.name };
-          } catch {}
+          } catch { pokeapiDownRef.current = true; }
         })
       ).then((results) => {
         const newNames = {};
@@ -267,6 +295,10 @@ export default function Home() {
         signal: controller.signal,
       });
       const contentType = res.headers.get("content-type") || "";
+      try {
+        const metaRaw = res.headers.get("x-pogo-meta");
+        setAnalysisMeta(metaRaw ? JSON.parse(decodeURIComponent(metaRaw)) : null);
+      } catch { setAnalysisMeta(null); }
       if (contentType.includes("application/json")) {
         const data = await res.json();
         if (data.error) { onError(data.error); return; }
@@ -339,7 +371,7 @@ export default function Home() {
         const poke = raidSelectedPoke;
         if (!poke && !raidBossName.trim()) return;
         setLoading(true); setStreaming(true); setError(null); setRaidResult(null); setRaidModel("");
-        const raidBoss = poke ? { name: poke.name, nameKr: poke.nameKr, id: poke.id, baseAttack: poke.baseAttack, baseDefense: poke.baseDefense, baseStamina: poke.baseStamina } : { name: raidBossName };
+        const raidBoss = poke ? { name: poke.name, nameKr: poke.nameKr, id: poke.id, form: poke.form, types: poke.types, baseAttack: poke.baseAttack, baseDefense: poke.baseDefense, baseStamina: poke.baseStamina } : { name: raidBossName };
         streamFetch(
           { mode: "raid", raidBoss, collection: collection.map((c) => ({ name: c.name, pokemonId: c.pokemonId, cp: c.cp, ivPercent: c.ivPercent, verdict: c.verdict, isShiny: c.isShiny, isShadow: c.isShadow })) },
           (text) => setRaidResult(text), (model) => setRaidModel(model),
@@ -359,7 +391,7 @@ export default function Home() {
     setLoading(true); setStreaming(true); setError(null); setResult(null); setCurrentKept(false); setUsedModel("");
 
     const pokemonData = selectedPokemon
-      ? { name: selectedPokemon.name, nameKr: selectedPokemon.nameKr, id: selectedPokemon.id, form: selectedPokemon.form, baseAttack: selectedPokemon.baseAttack, baseDefense: selectedPokemon.baseDefense, baseStamina: selectedPokemon.baseStamina, fast: selectedPokemon.fast, charged: selectedPokemon.charged, eliteFast: selectedPokemon.eliteFast, eliteCharged: selectedPokemon.eliteCharged }
+      ? { name: selectedPokemon.name, nameKr: selectedPokemon.nameKr, id: selectedPokemon.id, form: selectedPokemon.form, types: selectedPokemon.types, baseAttack: selectedPokemon.baseAttack, baseDefense: selectedPokemon.baseDefense, baseStamina: selectedPokemon.baseStamina, fast: selectedPokemon.fast, charged: selectedPokemon.charged, eliteFast: selectedPokemon.eliteFast, eliteCharged: selectedPokemon.eliteCharged, signatureFast: selectedPokemon.signatureFast, signatureCharged: selectedPokemon.signatureCharged, unverifiedEliteFast: selectedPokemon.unverifiedEliteFast, unverifiedEliteCharged: selectedPokemon.unverifiedEliteCharged, unverifiedFast: selectedPokemon.unverifiedFast, unverifiedCharged: selectedPokemon.unverifiedCharged }
       : { name: pokemonName, note: "API에서 매칭 안됨" };
 
     const fastMoveDisplay = fastMove ? `${krMove(fastMove)} (${fastMove})` : "";
@@ -395,7 +427,7 @@ export default function Home() {
     const poke = raidSelectedPoke;
     if (!poke && !raidBossName.trim()) { setError("레이드 보스를 선택해주세요!"); return; }
     setLoading(true); setStreaming(true); setError(null); setRaidResult(null); setRaidModel("");
-    const raidBoss = poke ? { name: poke.name, nameKr: poke.nameKr, id: poke.id, baseAttack: poke.baseAttack, baseDefense: poke.baseDefense, baseStamina: poke.baseStamina } : { name: raidBossName };
+    const raidBoss = poke ? { name: poke.name, nameKr: poke.nameKr, id: poke.id, form: poke.form, types: poke.types, baseAttack: poke.baseAttack, baseDefense: poke.baseDefense, baseStamina: poke.baseStamina } : { name: raidBossName };
     await streamFetch(
       { mode: "raid", raidBoss, collection: collection.map((c) => ({ name: c.name, pokemonId: c.pokemonId, cp: c.cp, ivPercent: c.ivPercent, verdict: c.verdict, isShiny: c.isShiny, isShadow: c.isShadow })) },
       (text) => setRaidResult(text), (model) => setRaidModel(model),
@@ -514,6 +546,13 @@ export default function Home() {
   };
 
   const formatResult = (text) => text.split("\n").map((line, i) => {
+    // 마크다운 제목(#, ##, ###...) → 제목 스타일
+    const heading = line.match(/^\s{0,3}(#{1,6})\s+(.*)$/);
+    if (heading) {
+      const level = heading[1].length;
+      return <div key={i} style={{ ...s.resultTitle, fontSize: level <= 2 ? 17 : level === 3 ? 15 : 14, marginTop: 10 }}>{renderBold(heading[2].replace(/\s+#+\s*$/, ""))}</div>;
+    }
+    if (/^\s*(-{3,}|\*{3,}|_{3,})\s*$/.test(line)) return <div key={i} style={{ borderTop: "1px solid rgba(255,255,255,0.08)", margin: "8px 0" }} />;
     if (line.startsWith("**") && line.includes("👉")) return <div key={i} style={s.resultTitle}>{line.replace(/\*\*/g, "")}</div>;
     if (line.includes("**판정:**") || line.includes("**판정:")) {
       const color = line.includes("영구 보존") || line.includes("킵") ? "#4ecdc4" : line.includes("보류") ? "#ffd93d" : line.includes("사탕행") ? "#ff6b6b" : "#a890f0";
@@ -553,6 +592,23 @@ export default function Home() {
     }
     return "";
   };
+
+  // ─── 데이터 기준 시각 표시 ───
+  const fmtStamp = (iso) => {
+    if (!iso) return "확인 불가";
+    const d = new Date(iso);
+    if (isNaN(d.getTime())) return "확인 불가";
+    // 연도 포함, 브라우저 로컬 시간대
+    return `${d.getFullYear()}/${String(d.getMonth() + 1).padStart(2, "0")}/${String(d.getDate()).padStart(2, "0")} ${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+  };
+  const sourceStatus = (src) => {
+    if (src.skipped) return `${src.name} 생략`;
+    if (!src.ok) return `${src.name} ✗`;
+    if (src.stale) return `${src.name} 오래됨(투표 제외, 갱신 ${fmtStamp(src.updatedAt)}, ${src.ageDays}일 경과)`;
+    if (!src.updatedAt) return `${src.name} ✓ (갱신 시각 미상)`;
+    return `${src.name} ✓ (갱신 ${fmtStamp(src.updatedAt)}${src.updatedAtTzUnknown ? " · 시간대 미표기" : ""})`;
+  };
+  const modelLine = (model) => `⚡ ${model.replace("gemini-", "").replace("-preview", "")}${analysisMeta?.generatedAt ? ` · 데이터 ${fmtStamp(analysisMeta.generatedAt)}${analysisMeta.verified ? " ✓검증" : ""}` : ""}`;
 
   const hasFast = selectedPokemon && selectedPokemon.fast && selectedPokemon.fast.length > 0;
   const hasCharged = selectedPokemon && selectedPokemon.charged && selectedPokemon.charged.length > 0;
@@ -667,6 +723,21 @@ export default function Home() {
                           {selectedPokemon.eliteFast.map((m) => <option key={m} value={m}>⭐ {krMove(m)} ({m})</option>)}
                         </optgroup>
                       )}
+                      {selectedPokemon.signatureFast?.length > 0 && (
+                        <optgroup label="── 전용기 (아이템/폼체인지) ──">
+                          {selectedPokemon.signatureFast.map((m) => <option key={m} value={m}>🔑 {krMove(m)} ({m})</option>)}
+                        </optgroup>
+                      )}
+                      {selectedPokemon.unverifiedEliteFast?.length > 0 && (
+                        <optgroup label="── 한정기 (미검증) ──">
+                          {selectedPokemon.unverifiedEliteFast.map((m) => <option key={m} value={m}>⭐❔ {krMove(m)} ({m})</option>)}
+                        </optgroup>
+                      )}
+                      {selectedPokemon.unverifiedFast?.length > 0 && (
+                        <optgroup label="── 미검증 (교차검증 소스 1개) ──">
+                          {selectedPokemon.unverifiedFast.map((m) => <option key={m} value={m}>❔ {krMove(m)} ({m})</option>)}
+                        </optgroup>
+                      )}
                     </select>
                   ) : <input style={s.input} value={fastMove} onChange={(e) => setFastMove(e.target.value)} />}
                 </div>
@@ -679,6 +750,21 @@ export default function Home() {
                       {selectedPokemon.eliteCharged?.length > 0 && (
                         <optgroup label="── 한정기술 ──">
                           {selectedPokemon.eliteCharged.map((m) => <option key={m} value={m}>⭐ {krMove(m)} ({m})</option>)}
+                        </optgroup>
+                      )}
+                      {selectedPokemon.signatureCharged?.length > 0 && (
+                        <optgroup label="── 전용기 (아이템/폼체인지) ──">
+                          {selectedPokemon.signatureCharged.map((m) => <option key={m} value={m}>🔑 {krMove(m)} ({m})</option>)}
+                        </optgroup>
+                      )}
+                      {selectedPokemon.unverifiedEliteCharged?.length > 0 && (
+                        <optgroup label="── 한정기 (미검증) ──">
+                          {selectedPokemon.unverifiedEliteCharged.map((m) => <option key={m} value={m}>⭐❔ {krMove(m)} ({m})</option>)}
+                        </optgroup>
+                      )}
+                      {selectedPokemon.unverifiedCharged?.length > 0 && (
+                        <optgroup label="── 미검증 (교차검증 소스 1개) ──">
+                          {selectedPokemon.unverifiedCharged.map((m) => <option key={m} value={m}>❔ {krMove(m)} ({m})</option>)}
                         </optgroup>
                       )}
                     </select>
@@ -718,7 +804,7 @@ export default function Home() {
             </div>
             {usedModel && !streaming && (
               <div style={{ padding: "4px 20px 0", fontSize: 10, color: "#576574", textAlign: "right" }}>
-                ⚡ {usedModel.replace("gemini-", "").replace("-preview", "")}
+                {modelLine(usedModel)}
               </div>
             )}
             {selectedPokemon && !streaming && (
@@ -787,6 +873,9 @@ export default function Home() {
                 </div>
               )}
               {raidBossesLoading && <div style={{ fontSize: 11, color: "#8899aa", marginBottom: 8 }}>레이드 보스 로딩 중...</div>}
+              {raidBossesError && (
+                <div style={s.sourceNotice}>⚠️ 현재 레이드 보스 목록을 불러오지 못했습니다 (ScrapedDuck: {raidBossesError}). 아래 검색으로 보스를 직접 선택하세요.</div>
+              )}
 
               <div style={{ position: "relative" }}>
                 <input style={s.input} value={raidBossName} onChange={(e) => handleRaidBossSearch(e.target.value)} onFocus={() => raidSuggestions.length > 0 && setShowRaidSugg(true)} onBlur={() => setTimeout(() => setShowRaidSugg(false), 200)} placeholder="예: 가이오가, Mewtwo..." />
@@ -823,7 +912,7 @@ export default function Home() {
                 : <div style={{ fontSize: 64 }}>⚔️</div>}
             </div>
             <div style={s.resultContent}>{formatResult(raidResult)}{streaming && <span style={s.cursor}>▌</span>}</div>
-            {raidModel && !streaming && <div style={{ padding: "4px 20px 0", fontSize: 10, color: "#576574", textAlign: "right" }}>⚡ {raidModel.replace("gemini-", "").replace("-preview", "")}</div>}
+            {raidModel && !streaming && <div style={{ padding: "4px 20px 0", fontSize: 10, color: "#576574", textAlign: "right" }}>{modelLine(raidModel)}</div>}
             {!streaming && <button onClick={resetRaid} style={s.resetBtn}>🔄 다른 보스 분석하기</button>}
           </div>
         )}
@@ -838,6 +927,14 @@ export default function Home() {
                 <div style={{ fontSize: 11, color: "#8899aa" }}>LeekDuck · snacknap 자동 반영</div>
               </div>
             </div>
+
+            {/* ─── 외부 소스 장애 안내 ─── */}
+            {maxBattlesError && (
+              <div style={s.sourceNotice}>⚠️ 맥스배틀 정보를 불러오지 못했습니다 (snacknap.com: {maxBattlesError}). 이 기능은 소스가 복구될 때까지 비활성화됩니다.</div>
+            )}
+            {eventsError && (
+              <div style={s.sourceNotice}>⚠️ 이벤트 정보를 불러오지 못했습니다 (ScrapedDuck: {eventsError}).</div>
+            )}
 
             {/* ─── 현재 파워스팟 (맥스배틀) ─── */}
             {(maxBattlesLoading || maxBattles.length > 0) && (
@@ -867,7 +964,7 @@ export default function Home() {
                         </span>
                       </div>
                       <div style={s.resultContent}>{formatResult(maxBattleResult)}{streaming && <span style={s.cursor}>▌</span>}</div>
-                      {maxBattleModel && !streaming && <div style={{ padding: "4px 20px 0", fontSize: 10, color: "#576574", textAlign: "right" }}>⚡ {maxBattleModel.replace("gemini-", "").replace("-preview", "")}</div>}
+                      {maxBattleModel && !streaming && <div style={{ padding: "4px 20px 0", fontSize: 10, color: "#576574", textAlign: "right" }}>{modelLine(maxBattleModel)}</div>}
                     </div>
                     {!streaming && (
                       <button onClick={resetMaxBattle} style={{ ...s.resetBtn, margin: "0 0 8px 0", width: "100%", borderColor: "#a890f0", color: "#a890f0" }}>
@@ -897,7 +994,7 @@ export default function Home() {
               <div style={{ textAlign: "center", padding: "20px 0", color: "#8899aa", fontSize: 13 }}>이벤트 로딩 중...</div>
             )}
 
-            {!eventsLoading && events.length === 0 && maxBattles.length === 0 && (
+            {!eventsLoading && !eventsError && !maxBattlesError && events.length === 0 && maxBattles.length === 0 && (
               <div style={{ textAlign: "center", padding: "20px 0", color: "#8899aa", fontSize: 13 }}>
                 <div style={{ fontSize: 32, marginBottom: 8 }}>📭</div>
                 현재 진행 중인 이벤트가 없습니다
@@ -996,7 +1093,18 @@ export default function Home() {
         )}
 
         <div style={s.footer}>
-          <p>포고박사 v1.1</p>
+          <p>포고박사 v1.2</p>
+          {dataMeta && (
+            <p style={{ fontSize: 10, opacity: 0.7, marginTop: 4, lineHeight: 1.6 }}>
+              데이터 기준 시각: {fmtStamp(dataMeta.generatedAt)}{dataMeta.stale ? " (이전 캐시)" : ""}
+              <br />
+              {dataMeta.dataSources.map(sourceStatus).join(" · ")}
+              {typeof dataMeta.votableCount === "number" && dataMeta.votableCount < 2 && (
+                <><br /><span style={{ color: "#ff6b6b", fontWeight: 700 }}>⚠️ 투표 가능 소스 {dataMeta.votableCount}개 — 교차검증이 불가하므로 데이터 신뢰도가 낮습니다</span></>
+              )}
+              {dataMeta.dataWarningCount > 0 ? ` · 소스 불일치 ${dataMeta.dataWarningCount}건 (종족값 ${dataMeta.dataWarningCounts?.stat ?? 0} · 타입 ${dataMeta.dataWarningCounts?.type ?? 0} · 기술 다수결 ${dataMeta.dataWarningCounts?.moveMajority ?? 0} · 기술 미검증 ${dataMeta.dataWarningCounts?.moveUnverified ?? 0})` : ""}
+            </p>
+          )}
           <p style={{ fontSize: 10, opacity: 0.4, marginTop: 4 }}>Pokémon GO는 Niantic, Inc.의 상표입니다</p>
         </div>
       </div>
@@ -1157,7 +1265,7 @@ export default function Home() {
                   {formatResult(compareResult)}
                   {streaming && <span style={s.cursor}>▌</span>}
                 </div>
-                {compareModel && !streaming && <div style={{ padding: "4px 0 0", fontSize: 10, color: "#576574", textAlign: "right" }}>⚡ {compareModel.replace("gemini-", "").replace("-preview", "")}</div>}
+                {compareModel && !streaming && <div style={{ padding: "4px 0 0", fontSize: 10, color: "#576574", textAlign: "right" }}>{modelLine(compareModel)}</div>}
               </div>
             )}
           </div>
@@ -1238,6 +1346,7 @@ const s = {
   tabActive: { flex: 1, padding: "10px 0", background: "linear-gradient(135deg,#1a2744,#162038)", border: "1px solid rgba(0,212,170,0.2)", borderRadius: 10, color: "#4ecdc4", fontSize: 13, fontWeight: 700, fontFamily: "'Outfit',sans-serif", cursor: "pointer", boxShadow: "0 2px 8px rgba(0,0,0,0.2)" },
   sectionHeader: { display: "flex", alignItems: "center", gap: 12, marginBottom: 20, padding: "12px 16px", background: "rgba(255,159,67,0.08)", border: "1px solid rgba(255,159,67,0.2)", borderRadius: 12 },
   collNote: { padding: "8px 12px", background: "rgba(0,212,170,0.06)", border: "1px solid rgba(0,212,170,0.1)", borderRadius: 8, fontSize: 12, color: "#4ecdc4", marginBottom: 16 },
+  sourceNotice: { padding: "8px 12px", background: "rgba(255,217,61,0.08)", border: "1px solid rgba(255,217,61,0.25)", borderRadius: 8, fontSize: 11, color: "#ffd93d", marginBottom: 12, lineHeight: 1.5 },
   compareCard: { padding: "12px 16px", background: "#1a2744", border: "1px solid #2a3a5c", borderRadius: 12, marginBottom: 8, cursor: "pointer" },
   compareMini: { flex: 1, padding: "10px 12px", background: "#0d1a2e", border: "1px solid #2a3a5c", borderRadius: 10, textAlign: "center" },
   collFilterRow: { display: "flex", gap: 4, marginBottom: 12, overflowX: "auto", paddingBottom: 4 },
