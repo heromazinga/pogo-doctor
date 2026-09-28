@@ -148,11 +148,21 @@ const DEFAULT_MODELS = [
   "gemini-3-flash-preview",
 ];
 
-function getModels() {
-  const fromEnv = (process.env.GEMINI_MODELS || "")
-    .split(",")
-    .map((m) => m.trim())
-    .filter(Boolean);
+// 박사 코멘트(mode=team)는 기본 모델로 고정한다: 고급 모델(gemini-3.6-flash)의 무료 일일 한도(약 20회)는 개체값 분석용으로 남긴다.
+// 환경변수 GEMINI_MODELS_TEAM(쉼표 구분)으로 교체 가능.
+const DEFAULT_TEAM_MODELS = [
+  "gemini-3.1-flash-lite",
+  "gemini-3-flash-preview",
+];
+
+const parseModels = (s) => (s || "").split(",").map((m) => m.trim()).filter(Boolean);
+
+function getModels(mode) {
+  if (mode === "team") {
+    const fromEnv = parseModels(process.env.GEMINI_MODELS_TEAM);
+    return fromEnv.length > 0 ? fromEnv : DEFAULT_TEAM_MODELS;
+  }
+  const fromEnv = parseModels(process.env.GEMINI_MODELS);
   return fromEnv.length > 0 ? fromEnv : DEFAULT_MODELS;
 }
 
@@ -550,7 +560,7 @@ PvP 메타 포켓몬이면 PvP 기준으로, PvE 메타면 PvE 기준으로 IV�
         // 이미 전달한 텍스트는 __RESET__ 마커로 클라이언트가 지우고 새 모델의 출력으로 대체한다.
         // 박사 코멘트(team)는 3~5줄이 정상이므로 짧은 응답 기준을 낮춘다
         const MIN_CHARS = mode === "team" ? (Number(process.env.GEMINI_MIN_CHARS_TEAM) || 60) : (Number(process.env.GEMINI_MIN_CHARS) || 400);
-        const models = getModels();
+        const models = getModels(mode);
         let accepted = null; // { model, fullText, finishReason, usage, abnormal }
         let lastAttempt = null;
         let primaryRejectReason = null; // 1순위 모델이 거절/비정상이었던 사유 (폴백 안내용)
@@ -673,7 +683,8 @@ PvP 메타 포켓몬이면 PvP 기준으로, PvE 메타면 PvE 기준으로 IV�
           // 모든 모델이 비정상이어서 마지막 응답을 그대로 보낸 경우 안내
           if (abnormal) controller.enqueue(encoder.encode("\n\n⚠️ 응답이 불완전할 수 있습니다. 다시 시도해 주세요."));
           // 1순위 모델이 아닌 모델이 답한 경우 폴백 안내 (사유: quota=무료 한도 소진, 그 외=오류/비정상)
-          if (index > 0) controller.enqueue(encoder.encode(`\n__FALLBACK__:${primaryRejectReason || "unknown"}|${models[0]}|${model}\n`));
+          // 4번째 필드 mode: 클라이언트가 안내 문구를 구분(team 은 "고급 모델" 이 아니므로)
+          if (index > 0) controller.enqueue(encoder.encode(`\n__FALLBACK__:${primaryRejectReason || "unknown"}|${models[0]}|${model}|${mode || "analyze"}\n`));
           // 용어집 금지 표현 검사 → 서버 로그 경고 (답변은 그대로 전달)
           const forbidden = findForbidden(fullText);
           if (forbidden.length) {
