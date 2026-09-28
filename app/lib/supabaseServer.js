@@ -25,7 +25,8 @@ export async function getUserFromRequest(req) {
 }
 
 let serviceClient = null;
-function getServiceClient() {
+// 서비스 역할 클라이언트 (RLS 우회). API 라우트에서만 사용
+export function getServiceClient() {
   if (!SUPABASE_URL || !SECRET_KEY) return null;
   if (!serviceClient) serviceClient = createClient(SUPABASE_URL, SECRET_KEY, { auth: { persistSession: false, autoRefreshToken: false } });
   return serviceClient;

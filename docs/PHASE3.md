@@ -22,18 +22,28 @@
 
 ---
 
-## 3-0. 계정 연결 (웹앱, 선행 필수)
+## 3-0. 계정 연결 (웹앱, 선행 필수) — 기기 연결 코드 방식으로 확정
 **이유**: 지금은 기기마다 익명 계정이 따로 생긴다. 안드로이드 앱이 기록한 포켓몬이 웹앱의 "내 목록"에 나오려면 두 곳이 같은 계정을 써야 한다.
 
-- 웹앱에 "계정 연결" 추가: 현재 익명 계정에 **이메일 인증(OTP 코드 또는 매직링크)** 을 붙여 정식 계정으로 전환. 기존 목록·사용 횟수는 그대로 유지(같은 user id).
-- 다른 기기(안드로이드 앱, 다른 브라우저)에서는 같은 이메일로 로그인 → 같은 목록.
-- 이미 다른 기기에 익명 목록이 있는 상태에서 로그인하면: 익명 목록을 로그인 계정으로 합칠지 묻고 병합(중복은 종·CP·개체값 동일 기준).
-- 이메일 연결 전에는 지금처럼 익명으로 계속 사용 가능(강제하지 않음).
-- Supabase 대시보드에서 사용자가 해야 할 설정(이메일 인증 활성화, 리다이렉트 URL 등)이 있으면 보고서 맨 위에 절차 기재.
-- 완료 기준: 브라우저 A(익명→이메일 연결) 목록이 브라우저 B(같은 이메일 로그인)에서 보임, RLS 로 타인 목록 차단 유지.
+**결정 (PR #19 이후)**: 이메일 계정 연결은 사용하지 않는다. Supabase 는 커스텀 SMTP 없이 이메일 템플릿을 수정할 수 없어 OTP 코드(`{{ .Token }}`)를 보낼 수 없고, 기본 발송은 수신자·발송량 제약이 있다. 단일 사용자라 SMTP 도입은 과하다. PR #19 코드는 삭제하지 않고 UI 만 숨긴다(`NEXT_PUBLIC_ENABLE_EMAIL_LINK=true` 일 때만 표시). 익명 행 보존 로직은 그대로 유지.
+
+**기기 연결 코드 방식 (웹앱)**
+- 테이블(마이그레이션 `supabase/migrations/0002_device_pairing.sql`, 적용은 사용자가 SQL Editor 에서):
+  - `device_pair_codes(code_hash, user_id, expires_at, attempts, used_at)`
+  - `device_tokens(id, user_id, name, token_hash, created_at, last_used_at, revoked_at)`
+  - RLS: 둘 다 본인 행만 select. `device_tokens` 는 본인 행 revoke(`revoked_at` 갱신)만 허용. insert·검증은 서버(service role)에서만.
+- 흐름:
+  1. 웹 "📱 기기 연결" → `POST /api/device/pair-code` (로그인 세션 필요) → 8자리 코드(혼동 문자 O/0/1/I/L 제외), 10분 유효, 해시로 저장
+  2. 앱 → `POST /api/device/pair {code, deviceName}` → 장기 토큰(32바이트 랜덤) 1회 반환, 해시로 저장. 코드는 1회용, 실패 5회면 무효화, IP 당 요청 제한
+  3. 앱 → `POST /api/device/pokemon` (`Authorization: Bearer 토큰`) → 서버가 토큰으로 user_id 를 결정하고 `my_pokemon` 에 insert (`source='overlay'`). 요청 본문의 user_id 는 무시. 필드 검증 필수
+  4. 웹 설정에 연결된 기기 목록 + 해제 버튼
+- 토큰·코드 원문은 로그에 남기지 않는다.
+- Supabase 휴면 방지: Vercel Cron(하루 1회) → `GET /api/keep-alive` (`Authorization: Bearer CRON_SECRET`) → DB 가벼운 조회 1건.
+- 완료 기준: 코드 발급→교환→curl 로 저장→웹 목록 표시 / 해제 후 401 / 만료·재사용 코드 거부 / 다른 사용자 목록에 안 보임(RLS)
 
 ## 3-1. 안드로이드 수집기 MVP
-- 기술: Kotlin + Jetpack Compose(설정 화면), Foreground Service + MediaProjection(캡처), `SYSTEM_ALERT_WINDOW` 오버레이, Google ML Kit Text Recognition **Korean**(기기 내부), Supabase Kotlin 클라이언트(3-0 의 이메일 로그인 공유).
+- 기술: Kotlin + Jetpack Compose(설정 화면), Foreground Service + MediaProjection(캡처), `SYSTEM_ALERT_WINDOW` 오버레이, Google ML Kit Text Recognition **Korean**(기기 내부). **Supabase Kotlin 클라이언트·이메일 로그인은 사용하지 않는다.** 인증은 3-0 의 기기 토큰만 사용(Android Keystore 기반 암호화 저장).
+- 앱 첫 실행: 연결 코드 입력 화면. 미연결 상태에서도 분석·결과 카드는 동작하고, 저장 버튼만 "기기 연결 필요" 안내.
 - 종족값·기술·CP 배율 표: 웹앱 `/api/pokemon-data` 를 받아 기기에 캐시.
 - 기능 (이것만):
   1. 떠 있는 작은 버튼. 누르면 **현재 화면 1장**을 캡처해 분석.
@@ -55,5 +65,5 @@
 ---
 
 ## 사용자가 해야 하는 일 (예상)
-- 3-0: Supabase 이메일 인증 설정(절차는 PR 보고서에 기재됨)
+- 3-0: 마이그레이션 `0002_device_pairing.sql` 적용, Vercel 에 `CRON_SECRET` 등록(절차는 PR 보고서에 기재됨)
 - 3-1: GitHub Secrets 에 서명 키 등록(필요 시), A90 에 APK 설치·권한 허용, 포켓몬 30마리 표본 캡처 테스트
