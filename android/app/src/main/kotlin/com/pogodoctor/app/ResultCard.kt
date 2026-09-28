@@ -19,7 +19,7 @@ import org.json.JSONObject
 
 // 결과 카드 View 생성 (오버레이 카드와 결과 액티비티가 공용). 계산은 기기 내 결정적 공식, AI 미사용.
 class ResultCard(private val ctx: Context, private val repo: DataRepo, private val paired: Boolean) {
-    data class Computed(val summary: IvCalc.Summary?, val ivText: String, val verdict: Verdict.Line?, val ivs: Triple<Int, Int, Int>?)
+    data class Computed(val summary: IvCalc.Summary?, val ivText: String, val verdict: Verdict.Line?, val ivs: Triple<Int, Int, Int>?, val notes: List<String> = emptyList())
     interface Actions {
         fun onChooseSpecies(sp: SpeciesRef)
         fun onSave(info: ScreenInfo, sp: SpeciesRef, c: Computed, status: String)
@@ -29,25 +29,37 @@ class ResultCard(private val ctx: Context, private val repo: DataRepo, private v
     private fun dp(v: Int) = TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_DIP, v.toFloat(), ctx.resources.displayMetrics).toInt()
     private fun r(x: IntRange) = if (x.first == x.last) "${x.first}" else "${x.first}~${x.last}"
 
-    fun compute(info: ScreenInfo, sp: SpeciesRef?, ap: Appraisal?): Computed {
+    fun compute(info: ScreenInfo, sp: SpeciesRef?, ap: Appraisal?, stars: Int? = null, levels: List<Double>? = null): Computed {
         val base = sp?.let { IvCalc.Base(it.atk, it.def, it.sta) }
         val cp = info.cp
         if (base == null || cp == null) return Computed(null, "개체값: 종 또는 CP 미인식", null, null)
-        var cands = IvCalc.candidates(base, cp, info.hp)
-        if (ap != null) cands = IvCalc.filterByAppraisal(cands, ap.atk, ap.def, ap.sta)
-        val s = IvCalc.summarize(cands)
+        val all = IvCalc.candidates(base, cp, info.hp)
+        // 제약(강화 비용 레벨 → 별 → 막대)을 적용하되, CP/HP 후보와 모순되는 제약은 버리고 "불확실" 로 표시
+        val con = IvCalc.constrain(all, ap, stars, levels)
+        val s = IvCalc.summarize(con.candidates)
+        val notes = ArrayList<String>()
+        if (con.levelUncertain) notes.add("강화 비용으로 읽은 레벨이 CP/HP 와 맞지 않아 무시했습니다")
+        if (con.starsUncertain) notes.add("별 개수 판독이 CP/HP 후보와 맞지 않아 무시했습니다")
+        if (con.barsUncertain) notes.add("막대 판독 불확실 — 일치하는 축만 적용, CP/HP 후보 유지")
+        val useBars = ap != null && !con.barsUncertain
         val apA = ap?.atk; val apD = ap?.def; val apS = ap?.sta
         val ivs: Triple<Int, Int, Int>? = when {
-            apA != null && apD != null && apS != null -> Triple(apA, apD, apS)
             s.exact -> Triple(s.candidates[0].atk, s.candidates[0].def, s.candidates[0].sta)
+            useBars && apA != null && apD != null && apS != null -> Triple(apA, apD, apS)
             else -> null
+        }
+        val how = buildString {
+            if (useBars) append("평가 막대")
+            if (levels != null && !con.levelUncertain) append(if (isEmpty()) "강화 비용" else "+강화 비용")
+            if (stars != null && !con.starsUncertain) append(if (isEmpty()) "별" else "+별")
+            if (isEmpty()) append("CP·HP") else append("+CP·HP")
         }
         val ivText = when {
             s.empty -> "개체값: 후보 없음 (CP/HP 인식 확인)"
-            ivs != null -> "개체값: ${ivs.first}/${ivs.second}/${ivs.third} (${Math.round((ivs.first + ivs.second + ivs.third) * 100.0 / 45)}%)${if (ap != null) " · 평가 화면 판독" else " · CP·HP 로 확정"}"
-            else -> { val lr = s.levelRange!!; "개체값 후보 ${s.candidates.size}개: 공${r(s.atkRange!!)} 방${r(s.defRange!!)} HP${r(s.staRange!!)} → ${r(s.percentRange!!)}% · L${lr.start}~${lr.endInclusive} (평가 화면을 캡처하면 확정)" }
+            ivs != null -> "개체값: ${ivs.first}/${ivs.second}/${ivs.third} (${Math.round((ivs.first + ivs.second + ivs.third) * 100.0 / 45)}%) · L${s.levelRange!!.start} · $how 로 확정"
+            else -> { val lr = s.levelRange!!; "개체값 후보 ${s.candidates.size}개: 공${r(s.atkRange!!)} 방${r(s.defRange!!)} HP${r(s.staRange!!)} → ${r(s.percentRange!!)}% · L${lr.start}~${lr.endInclusive} ($how${if (ap == null) " · 평가 화면을 캡처하면 확정" else ""})" }
         }
-        return Computed(s, ivText, if (!s.empty) Verdict.oneLiner(base, s) else null, ivs)
+        return Computed(s, ivText, if (!s.empty) Verdict.oneLiner(base, s) else null, ivs, notes)
     }
 
     // 저장용 행 (웹앱 my_pokemon 규약: 기술은 영어 ID, 첫 번째를 빠른기술로 가정)
@@ -92,6 +104,8 @@ class ResultCard(private val ctx: Context, private val repo: DataRepo, private v
                     root.addView(closeBtn()); return root
                 }
                 text("${sp?.nameKr ?: (info.nameRaw ?: "종 미인식")}  CP${info.cp ?: "?"}  HP${info.hp ?: "?"}", 16f, Color.WHITE, true)
+                if (result.merged) text("상세+평가 합침 (직전 상세 화면과 이름·CP 일치)", 11f, 0xFF4ECDC4.toInt())
+                if (result.stars != null) text("평가 별 ${result.stars}개", 11f, 0xFFFFD93D.toInt())
                 if (sp == null || info.nameScore < 0.85) {
                     val data = repo.loadCached()
                     val names = data?.species?.map { it.nameKr } ?: emptyList()
@@ -104,8 +118,10 @@ class ResultCard(private val ctx: Context, private val repo: DataRepo, private v
                         root.addView(row)
                     }
                 }
-                val c = compute(info, sp, ap)
+                val c = compute(info, sp, ap, result.stars, result.levels)
                 text(c.ivText, 12f)
+                for (n in c.notes) text("ⓘ $n", 10f, 0xFFFFD93D.toInt())
+                if (result.levels != null && result.levels.isNotEmpty()) text("강화 비용으로 본 레벨: L${result.levels.first()}~${result.levels.last()}", 10f, 0xFF8899AA.toInt())
                 if (info.moves.isNotEmpty()) text("기술: " + info.moves.joinToString(" / ") { it.nameKr }, 12f) else text("기술: 미인식", 12f, 0xFF8899AA.toInt())
                 c.verdict?.let { text(it.raid, 12f, 0xFF4ECDC4.toInt()); if (it.league.isNotBlank()) text(it.league, 12f, 0xFFA890F0.toInt()) }
                 for (w in info.warnings) text("⚠️ $w", 10f, 0xFFFFD93D.toInt())

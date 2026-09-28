@@ -101,6 +101,7 @@ class MainActivity : ComponentActivity() {
         var deviceName by remember { mutableStateOf(prefs.deviceName) }
         var debug by remember { mutableStateOf(prefs.debugMode) }
         var delayMs by remember { mutableStateOf(prefs.captureDelayMs.toString()) }
+        var webCode by remember { mutableStateOf("") }
         var busy by remember { mutableStateOf(false) }
         var log by remember { mutableStateOf("") }
         val scroll = rememberScrollState()
@@ -130,6 +131,9 @@ class MainActivity : ComponentActivity() {
                             OutlinedButton(enabled = !busy, onClick = { busy = true; lifecycleScope.launch { try { val s = withContext(Dispatchers.IO) { api.status() }; status = "연결 정상 · 내 목록 ${s.optInt("pokemonCount", -1)}마리" } catch (e: Exception) { status = "연결 확인 실패: ${e.message}"; paired = prefs.isPaired }; busy = false } }) { Text("연결 확인") }
                             OutlinedButton(onClick = { prefs.deviceToken = null; paired = false; status = "이 기기의 토큰을 지웠습니다 (웹에서도 해제하세요)" }) { Text("연결 끊기") }
                         }
+                        Text("웹 세션을 잃었을 때(브라우저 종료·시크릿 창): 아래 코드를 웹 \"📱 기기 연결 → 앱 코드로 로그인\" 에 입력하면 이 계정으로 돌아갑니다 (10분, 1회).", fontSize = 12.sp, color = Color(0xFF8899AA))
+                        Button(enabled = !busy, onClick = { busy = true; lifecycleScope.launch { try { val r = withContext(Dispatchers.IO) { api.webLoginCode() }; webCode = r.optString("code", ""); status = "웹 로그인 코드 발급 (10분 유효)" } catch (e: Exception) { status = "코드 발급 실패: ${e.message}"; paired = prefs.isPaired }; busy = false } }) { Text("🔑 웹 로그인 코드") }
+                        if (webCode.isNotBlank()) Text("${webCode.take(4)} ${webCode.drop(4)}", fontSize = 30.sp, color = Color(0xFF00D4AA))
                     }
                 }
             }
@@ -170,7 +174,7 @@ class MainActivity : ComponentActivity() {
                         OutlinedButton(modifier = Modifier.padding(top = 8.dp), onClick = { prefs.captureDelayMs = delayMs.toIntOrNull() ?: 800; delayMs = prefs.captureDelayMs.toString(); status = "캡처 지연 ${prefs.captureDelayMs}ms 저장" }) { Text("저장") }
                     }
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Text("디버그 모드 (인식 텍스트·결과를 기기에 기록)", fontSize = 13.sp, modifier = Modifier.padding(top = 12.dp))
+                        Text("디버그 모드 (인식 텍스트·결과를 기기에 기록 + 캡처를 서버에 업로드, 7일 보관)", fontSize = 13.sp, modifier = Modifier.padding(top = 12.dp))
                         Switch(checked = debug, onCheckedChange = { debug = it; prefs.debugMode = it })
                     }
                     if (debug) {

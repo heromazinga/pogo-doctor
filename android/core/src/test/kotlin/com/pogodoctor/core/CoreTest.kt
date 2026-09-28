@@ -77,8 +77,8 @@ class CoreTest {
         val src = BarReader.PixelSource { x, _ -> when { x in 100..189 -> 0xFFF07030.toInt(); x in 190..250 -> 0xFFC8C8C8.toInt(); else -> 0xFFFFFFFF.toInt() } }
         val r = BarReader.readRow(src, 10, 0, 299)
         assertEquals(9, r.value, "60% → 9칸")
-        val ap = BarReader.readAppraisal(src, 300, listOf(OcrLine("공격", 0, 0, 80, 20), OcrLine("방어", 0, 0, 80, 20), OcrLine("HP", 0, 0, 80, 20)))
-        assertEquals(9, ap.atk)
+        val ap = BarReader.readAppraisal(src, 300, 400, listOf(OcrLine("공격", 0, 0, 80, 20), OcrLine("방어", 0, 0, 80, 20), OcrLine("HP", 0, 0, 80, 20)))
+        assertEquals(9, ap.appraisal.atk)
         val none = BarReader.readRow({ _, _ -> 0xFFFFFFFF.toInt() }, 0, 0, 100)
         assertNull(none.value)
     }

@@ -204,6 +204,39 @@ Vercel 에서는 환경변수 `POGO_DISABLE_SOURCES` 를 Preview 환경에 잠�
 ### 검증 (이 환경, 모의 PostgREST)
 코드 발급 → 소문자·공백 섞인 입력으로 교환 성공 → 같은 코드 재사용 400 → `user_id` 위조 본문 저장 시 서버 결정 계정으로 `source='overlay'` 저장 → 검증 실패 400 → 토큰 없음/해제 후 401 → 만료 코드 400 → 실패 5회 누적 코드 400 → IP 제한 429 → keep-alive 비밀 없음 401/정상 200. 로그에 코드·토큰 원문 0건. RLS 는 실제 Supabase 에서 확인 필요.
 
+## 3-1c: 앱 → 웹 로그인 코드 · 평가/상세 병합 · 막대 재보정 · 디버그 캡처 업로드 · 강화 비용
+
+### 사용자가 해야 하는 설정
+1. Supabase SQL Editor 에서 `supabase/migrations/0003_web_login_debug.sql` 실행(멱등, 0002 이후). 내용: `device_pair_codes.kind`(pair|web), `device_debug_logs` 테이블, 비공개 Storage 버킷 `debug-captures`(JPEG, 2MB) + 본인 폴더 읽기·삭제 정책, 7일 정리 함수.
+2. Supabase Authentication → Sign In / Providers → **Email** 이 Enable 인지 확인(기본값). 앱 코드 로그인의 대체 경로(비밀번호 방식)가 이 설정을 쓴다. 이메일 발송은 없다.
+3. 추가 환경변수 없음.
+
+### 앱 → 웹 로그인 코드 (계정 복구) — `POST /api/device/web-code`, `POST /api/auth/web-login`
+- 앱(기기 토큰 인증) "🔑 웹 로그인 코드" → 8자리·10분·1회용 코드(`device_pair_codes`, `kind='web'`, 해시·시도 제한은 기기 연결 코드와 동일). `kind` 가 다르면 서로 통하지 않는다(웹 코드로 기기 연결 불가, 기기 코드로 웹 로그인 불가).
+- 웹 "📱 기기 연결 → 앱 코드로 로그인" → 서버가 코드를 소진하고 그 `user_id` 의 세션을 만든다. **이메일 발송 없이 동작하는 방식**:
+  1. 사용자에게 이메일이 없으면(익명) 내부용 주소 `u-<user_id>@app-login.pogo-doctor.invalid` 를 admin API 로 설정(`email_confirm`, 메일 없음. `.invalid` 는 RFC 2606 예약 TLD 라 수신 불가). 웹 화면은 이 주소를 사용자 이메일로 표시하지 않고 "앱 연결 계정" 으로 취급한다.
+  2. `auth.admin.generateLink({ type: "magiclink" })` 로 `hashed_token` 을 받아(메일 발송 없음) 클라이언트가 `verifyOtp({ token_hash, type: "magiclink" })` 로 세션 생성.
+  3. 2 가 실패하면 대체: 임의 비밀번호(32바이트) 설정 → 서버가 `signInWithPassword` 로 세션 발급 → 즉시 비밀번호를 다른 난수로 재회전. 응답에는 세션 토큰만 담긴다.
+  - 보안 근거: 코드 8자리(32^8≈1.1조)·10분·1회·실패 5회 무효·IP 10분 10회. 토큰 해시는 1회 응답 후 서버에 남지 않고 OTP 만료(기본 1시간) 내에서만 유효. 대체 방식의 비밀번호는 즉시 회전되어 재사용 불가. 로그에 코드·토큰 원문 없음.
+- 로그인 전 이 브라우저에 익명 목록이 있으면 PR #19 병합 로직 재사용(합칠지 질문, 종·폼·CP·개체값·섀도 동일 중복 제외).
+
+### 평가 화면 + 상세 화면 병합 (`android/core/Merge.kt`)
+평가 화면은 트레이너·평가창이 기술·사탕 영역을 가려 기술 미인식이 정상. 평가 캡처 시 **3분 이내 직전 상세 결과와 CP 가 같고(이름이 둘 다 있으면 유사도 0.8 이상)** 같은 개체로 보고 합쳐 표시·저장하며 결과 화면에 "상세+평가 합침" 표기.
+
+### 평가 막대 판독 재보정 (`android/core/BarReader.kt`, `IvCalc.constrain`)
+- 막대 위치는 OCR "공격/방어/HP" 라벨 기준 상대 좌표: 라벨 바로 아래 좁은 띠(라벨 높이 0.3~1.6배)와 라벨 오른쪽 같은 높이를 훑어 막대 픽셀이 가장 많은 행 채택. 채움색(주황·빨강) vs 빈 회색 비율 × 15, 행이 빨강 계열로 가득 차면 15.
+- 별 개수(0~3)는 첫 라벨 위 영역의 노란 덩어리 수 → 합계 범위(3별 37~45, 2별 30~36, 1별 23~29, 0별 0~22) 제약.
+- 제약은 강화 비용 레벨 → 별 → 막대 순으로 적용하되, **CP/HP 후보와 모순되면 그 제약은 버리고 "불확실" 표시**(막대는 일치하는 축만 부분 적용). 실기기 사례(에이스번 CP3002 HP161 → L40 15/14/14)를 단위 테스트로 고정.
+
+### 강화 비용 → 레벨 (`android/core/PowerUp.kt`)
+출처: PokeMiners `latest.json` `POKEMON_UPGRADE_SETTINGS.pokemonUpgrades` (`stardustCost[49]`, `candyCost[50]`, `xlCandyCost[10]`, `upgradesPerLevel=2`, `xlCandyMinPokemonLevel=40`). 인덱스 = floor(레벨)−1, 같은 정수 레벨의 두 반레벨 비용이 같다(Bulbapedia 표와 일치: 39~40.5 → 10000, 41~42.5 → 11000 …, 사탕 39 → 15, 40+ → 0, XL 40~41 → 10, 42~43 → 12 …). 상세 화면 하단(높이 65% 아래) OCR 숫자에서 별의모래(표에 있는 값, 섀도 ×1.2·정화 ×0.9 포함)·사탕(1~30)·XL(같은 줄 또는 다음 줄 "XL")을 읽어 레벨 목록으로 좁힌다.
+
+### 디버그 캡처 업로드 — `POST /api/device/debug`
+- 앱 디버그 모드에서 캡처마다: 상단 6%(상태바)·하단 좌측 28%×22%(평가 화면 트레이너 영역) 검게 가림 → 폭 720 축소 → JPEG 75 → base64 로 업로드(기기 토큰). 서버가 `debug-captures/<user_id>/<id>.jpg` 에 저장하고 `device_debug_logs` 에 OCR 원문·판독값 기록. JPEG·1.5MB 제한.
+- 웹 "📱 기기 연결 → 디버그 캡처 보기": 본인 것만(RLS·스토리지 정책) 목록·이미지(서명 URL 10분)·OCR·판독값, 삭제, JSON 내보내기.
+- 7일 후 `keep-alive` cron 이 이미지·행 삭제(`expired_device_debug_logs` → storage remove → `delete_device_debug_logs`).
+- **보정용 조회 방법**: 웹 디버그 패널에서 항목의 "JSON"(OCR·판독값·이미지 URL)과 이미지를 내려받아 대화에 붙여 주시면 막대 색 임계값·라벨 상대 좌표를 그 이미지로 보정한다. 또는 Supabase 대시보드 → Storage → `debug-captures/<user_id>/` 에서 직접 내려받을 수 있다(이 환경은 Supabase 접근이 차단되어 직접 조회 불가).
+
 ## 3-0단계: 계정 연결 (익명 → 이메일 인증) — 기본 숨김, 코드만 보존
 
 기기마다 따로 생기는 익명 계정을 이메일(OTP 6자리 코드)로 정식 계정에 연결해, 안드로이드 수집기(3-1)·다른 브라우저와 같은 목록을 쓰게 한다. 비밀번호 없음. 연결하지 않아도 익명으로 계속 사용 가능. **현재는 `NEXT_PUBLIC_ENABLE_EMAIL_LINK=true` 일 때만 UI 가 표시된다.**
