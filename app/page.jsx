@@ -1,5 +1,24 @@
 "use client";
 import { useState, useEffect, useCallback, useRef } from "react";
+import { ensureAnonymousSession, authHeader, supabaseConfigured } from "./lib/supabaseClient";
+import { listMyPokemon, insertMyPokemon, updateMyPokemon, deleteMyPokemon, migrateLocalCollection, getTodayUsage, STATUS_LABELS, PURPOSE_LABELS } from "./lib/myPokemon";
+import { usageDate } from "./lib/aiUsage";
+
+// my_pokemon 행 → 화면/AI 용 항목 (판정은 저장하지 않으므로 없음)
+function toEntry(r) {
+  const ivs = [r.atk_iv, r.def_iv, r.sta_iv];
+  const hasIv = ivs.every((v) => Number.isInteger(v));
+  return {
+    id: r.id, pokemonId: r.species_id, form: r.form || "Normal",
+    name: (r.name_kr || `#${r.species_id}`) + (r.form && r.form !== "Normal" ? ` (${r.form})` : ""),
+    nameKr: r.name_kr, cp: r.cp || 0,
+    atkIv: r.atk_iv, defIv: r.def_iv, staIv: r.sta_iv,
+    ivPercent: hasIv ? Math.round(((r.atk_iv + r.def_iv + r.sta_iv) / 45) * 100) : null,
+    fastMove: r.fast_move || "", chargedMove: (r.charged_moves || [])[0] || "",
+    isShiny: !!r.is_shiny, isShadow: !!r.is_shadow, isPurified: !!r.is_purified, isLucky: !!r.is_lucky,
+    status: r.status || "keep", purposes: r.purposes || [], memo: r.memo || "", source: r.source || "web",
+  };
+}
 
 export default function Home() {
   const [allPokemon, setAllPokemon] = useState([]);
@@ -21,12 +40,24 @@ export default function Home() {
   const [dataLoading, setDataLoading] = useState(true);
   const [error, setError] = useState(null);
 
-  // ─── Collection (킵 보유목록) ───
+  // ─── 내 포켓몬 목록 (Supabase my_pokemon) ───
   const [collection, setCollection] = useState([]);
   const [showCollection, setShowCollection] = useState(false);
   const [currentKept, setCurrentKept] = useState(false);
   const [usedModel, setUsedModel] = useState("");
-  const [viewingEntry, setViewingEntry] = useState(null);
+  const [session, setSession] = useState(null);
+  const [sessionNotice, setSessionNotice] = useState(null);
+  const [usageCount, setUsageCount] = useState(null);
+  const [saveOpts, setSaveOpts] = useState({ open: false, status: "keep", purposes: [], memo: "" });
+  const [saving, setSaving] = useState(false);
+  const [collError, setCollError] = useState(null);
+  const [collStatusFilter, setCollStatusFilter] = useState("all");
+  const [collPurposeFilter, setCollPurposeFilter] = useState("all");
+  const [editing, setEditing] = useState(null); // { id, status, purposes, memo }
+  const [thinking, setThinking] = useState(false); // 첫 텍스트 도착 전(모델 thinking 구간)
+  const [pendingReanalyze, setPendingReanalyze] = useState(false);
+  const [ivMissing, setIvMissing] = useState(false); // 이전된 항목 등 개체값이 없는 경우: 입력 전 분석 금지
+  const [fallbackNotice, setFallbackNotice] = useState(null); // 폴백 모델로 답한 경우 안내
 
   // ─── 데이터 기준 시각 / 소스 상태 (서버 교차검증 메타) ───
   const [dataMeta, setDataMeta] = useState(null);
@@ -47,9 +78,6 @@ export default function Home() {
   const [showRaidSugg, setShowRaidSugg] = useState(false);
   const [raidResult, setRaidResult] = useState(null);
   const [raidModel, setRaidModel] = useState("");
-
-  // ─── Collection filter ───
-  const [collFilter, setCollFilter] = useState("all");
 
   // ─── Current raid bosses (raw from API) ───
   const [currentRaidBosses, setCurrentRaidBosses] = useState([]);
@@ -85,6 +113,10 @@ export default function Home() {
   const [compareResult, setCompareResult] = useState(null);
   const [compareModel, setCompareModel] = useState("");
 
+  // 개체값을 하나라도 입력하면 "미입력" 상태 해제
+  const setAtkIvU = (v) => { setIvMissing(false); setAtkIv(v); };
+  const setDefIvU = (v) => { setIvMissing(false); setDefIv(v); };
+  const setStaIvU = (v) => { setIvMissing(false); setStaIv(v); };
   const ivPercent = Math.round(((atkIv + defIv + staIv) / 45) * 100);
   const getIvColor = () => ivPercent >= 93 ? "#4ecdc4" : ivPercent >= 82 ? "#ffd93d" : "#ff6b6b";
   const getIvLabel = () => ivPercent >= 98 ? "거의 완벽!" : ivPercent >= 93 ? "매우 우수" : ivPercent >= 82 ? "괜찮음" : ivPercent >= 67 ? "보통" : "별로";
@@ -99,27 +131,20 @@ export default function Home() {
 
   const krMove = (engName) => moveNamesKr[engName] || engName;
 
-  const getCollCategory = (item) => {
-    const v = (item.verdict || "").toLowerCase();
-    if (v.includes("pvp")) return "pvp";
-    if (v.includes("사탕행")) return "candy";
-    if (v.includes("보류")) return item.isShiny ? "collection" : "pending";
-    if (v.includes("영구 보존") || v.includes("킵")) return item.isShadow ? "raid" : (item.ivPercent >= 93 ? "raid" : "pvp");
-    return "collection";
+  const filteredCollection = collection.filter((item) =>
+    (collStatusFilter === "all" || item.status === collStatusFilter) &&
+    (collPurposeFilter === "all" || (item.purposes || []).includes(collPurposeFilter))
+  );
+
+  // AI 에 넘기는 내 포켓몬 목록 (verdict 없음, status·purposes 전달)
+  const collectionForAI = () => collection.map((c) => ({ name: c.name, pokemonId: c.pokemonId, cp: c.cp, ivPercent: c.ivPercent, status: c.status, purposes: c.purposes, isShiny: c.isShiny, isShadow: c.isShadow }));
+
+  const reloadCollection = async () => {
+    const { rows, error } = await listMyPokemon();
+    if (error && error !== "미설정") setCollError(`목록 불러오기 실패: ${error}`);
+    else { setCollError(null); setCollection(rows.map(toEntry)); }
   };
-
-  const COLL_FILTERS = [
-    { key: "all", label: "전체", emoji: "📋" },
-    { key: "raid", label: "레이드", emoji: "⚔️" },
-    { key: "pvp", label: "PvP", emoji: "🏆" },
-    { key: "collection", label: "관상용", emoji: "✨" },
-    { key: "candy", label: "사탕행", emoji: "🍬" },
-    { key: "pending", label: "보류", emoji: "🟡" },
-  ];
-
-  const filteredCollection = collFilter === "all"
-    ? collection
-    : collection.filter((item) => getCollCategory(item) === collFilter);
+  const refreshUsage = async () => { const n = await getTodayUsage(usageDate()); if (n !== null) setUsageCount(n); };
 
   // ─── 포켓몬 데이터 로드 ───
   useEffect(() => {
@@ -142,12 +167,19 @@ export default function Home() {
       .catch(() => setDataLoading(false));
   }, []);
 
-  // ─── 컬렉션 로드 ───
+  // ─── 익명 세션 → 기존 브라우저 목록 1회 이전 → 내 목록·사용 횟수 로드 ───
   useEffect(() => {
-    try {
-      const saved = localStorage.getItem("pogo-collection");
-      if (saved) setCollection(JSON.parse(saved));
-    } catch {}
+    (async () => {
+      if (!supabaseConfigured) { setSessionNotice("서버 저장 미설정 (Supabase 환경변수 없음) · 목록 기능 비활성화"); return; }
+      const s = await ensureAnonymousSession();
+      if (!s) { setSessionNotice("서버 저장 연결 실패 · 목록 기능 비활성화"); return; }
+      setSession(s);
+      const mig = await migrateLocalCollection();
+      if (mig.migrated > 0) setSessionNotice(`기존 브라우저 목록 ${mig.migrated}건을 내 목록으로 옮겼습니다`);
+      else if (mig.error) setSessionNotice(`기존 목록 이전 실패: ${mig.error} (원본 유지)`);
+      await reloadCollection();
+      await refreshUsage();
+    })();
   }, []);
 
   // ─── 레이드 보스 로드 ───
@@ -221,13 +253,6 @@ export default function Home() {
     setEnrichedRaidBosses(enriched);
   }, [allPokemon, currentRaidBosses]);
 
-  // ─── 컬렉션 저장 ───
-  useEffect(() => {
-    try {
-      localStorage.setItem("pogo-collection", JSON.stringify(collection));
-    } catch {}
-  }, [collection]);
-
   const handleNameChange = (val) => {
     setPokemonName(val);
     setSelectedPokemon(null);
@@ -287,10 +312,13 @@ export default function Home() {
   const streamFetch = async (body, onChunk, onModel, onDone, onError) => {
     const controller = new AbortController();
     abortRef.current = controller;
+    setThinking(true);
+    const rawOnChunk = onChunk;
+    onChunk = (t) => { setThinking(false); rawOnChunk(t); };
     try {
       const res = await fetch("/api/analyze", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", ...(await authHeader()) },
         body: JSON.stringify(body),
         signal: controller.signal,
       });
@@ -308,27 +336,40 @@ export default function Home() {
       const reader = res.body.getReader();
       const decoder = new TextDecoder();
       let accumulated = "";
-      let modelSent = false;
+      // 제어 마커(__MODEL__/__ERROR__/__RESET__/__USAGE__)는 항상 한 줄로 온다. 마커가 없는 조각은 그대로 본문.
+      const processChunk = (chunk) => {
+        if (!/__(MODEL|ERROR|RESET|USAGE|FALLBACK)__/.test(chunk)) {
+          accumulated += chunk; if (accumulated.trim()) onChunk(accumulated); return;
+        }
+        const lines = chunk.split("\n");
+        let textBuf = [];
+        const flushText = () => { if (textBuf.length) { accumulated += textBuf.join("\n"); textBuf = []; if (accumulated.trim()) onChunk(accumulated); } };
+        for (const line of lines) {
+          if (line.startsWith("__MODEL__:")) { flushText(); onModel(line.replace("__MODEL__:", "").trim()); }
+          else if (line.startsWith("__ERROR__:")) { flushText(); onError(line.replace("__ERROR__:", "").trim()); }
+          else if (line.startsWith("__RESET__")) {
+            // 비정상 응답 → 서버가 다른 모델로 다시 생성: 지금까지 받은 본문을 버린다
+            flushText(); accumulated = ""; setThinking(true); onChunk("🔄 응답이 비정상이라 다른 모델로 다시 생성 중…\n");
+          }
+          else if (line.startsWith("__USAGE__:")) { flushText(); const n = Number(line.replace("__USAGE__:", "")); if (Number.isFinite(n)) setUsageCount(n); }
+          else if (line.startsWith("__FALLBACK__:")) {
+            flushText();
+            const [reason, primary, used] = line.replace("__FALLBACK__:", "").split("|");
+            const short = (m) => (m || "").replace("gemini-", "").replace("-preview", "");
+            setFallbackNotice(reason === "quota" ? `오늘 고급 모델(${short(primary)}) 한도 소진 → 기본 모델(${short(used)})로 분석 중` : `고급 모델(${short(primary)}) 응답 실패(${reason}) → 기본 모델(${short(used)})로 분석 중`);
+          }
+          else textBuf.push(line);
+        }
+        flushText();
+      };
       while (true) {
         const { done, value } = await reader.read();
         if (done) break;
-        const chunk = decoder.decode(value, { stream: true });
-        if (!modelSent && chunk.includes("__MODEL__:")) {
-          const lines = chunk.split("\n");
-          for (const line of lines) {
-            if (line.startsWith("__MODEL__:")) { onModel(line.replace("__MODEL__:", "")); modelSent = true; }
-            else if (line.startsWith("__ERROR__:")) { onError(line.replace("__ERROR__:", "")); }
-            else if (line) { accumulated += line; onChunk(accumulated); }
-          }
-        } else {
-          if (chunk.includes("__ERROR__:")) {
-            const parts = chunk.split("__ERROR__:");
-            accumulated += parts[0]; if (accumulated.trim()) onChunk(accumulated); onError(parts[1].trim());
-          } else { accumulated += chunk; if (accumulated.trim()) onChunk(accumulated); }
-        }
+        processChunk(decoder.decode(value, { stream: true }));
       }
       onDone();
     } catch (e) { if (e.name !== "AbortError") onError("네트워크 오류입니다. 다시 시도해주세요."); }
+    setThinking(false);
     abortRef.current = null;
   };
 
@@ -373,7 +414,7 @@ export default function Home() {
         setLoading(true); setStreaming(true); setError(null); setRaidResult(null); setRaidModel("");
         const raidBoss = poke ? { name: poke.name, nameKr: poke.nameKr, id: poke.id, form: poke.form, types: poke.types, baseAttack: poke.baseAttack, baseDefense: poke.baseDefense, baseStamina: poke.baseStamina } : { name: raidBossName };
         streamFetch(
-          { mode: "raid", raidBoss, collection: collection.map((c) => ({ name: c.name, pokemonId: c.pokemonId, cp: c.cp, ivPercent: c.ivPercent, verdict: c.verdict, isShiny: c.isShiny, isShadow: c.isShadow })) },
+          { mode: "raid", raidBoss, collection: collectionForAI() },
           (text) => setRaidResult(text), (model) => setRaidModel(model),
           () => { setLoading(false); setStreaming(false); },
           (err) => { setError(err); setLoading(false); setStreaming(false); }
@@ -388,7 +429,8 @@ export default function Home() {
 
   const analyze = useCallback(async () => {
     if (!pokemonName.trim()) { setError("포켓몬 이름을 입력해주세요!"); return; }
-    setLoading(true); setStreaming(true); setError(null); setResult(null); setCurrentKept(false); setUsedModel("");
+    if (ivMissing) { setError("개체값 미입력 — 공격/방어/HP 를 입력한 뒤 분석하세요"); return; }
+    setLoading(true); setStreaming(true); setError(null); setResult(null); setCurrentKept(false); setUsedModel(""); setFallbackNotice(null);
 
     const pokemonData = selectedPokemon
       ? { name: selectedPokemon.name, nameKr: selectedPokemon.nameKr, id: selectedPokemon.id, form: selectedPokemon.form, types: selectedPokemon.types, baseAttack: selectedPokemon.baseAttack, baseDefense: selectedPokemon.baseDefense, baseStamina: selectedPokemon.baseStamina, fast: selectedPokemon.fast, charged: selectedPokemon.charged, eliteFast: selectedPokemon.eliteFast, eliteCharged: selectedPokemon.eliteCharged, signatureFast: selectedPokemon.signatureFast, signatureCharged: selectedPokemon.signatureCharged, unverifiedEliteFast: selectedPokemon.unverifiedEliteFast, unverifiedEliteCharged: selectedPokemon.unverifiedEliteCharged, unverifiedFast: selectedPokemon.unverifiedFast, unverifiedCharged: selectedPokemon.unverifiedCharged }
@@ -399,17 +441,22 @@ export default function Home() {
     const pvpTag = getPvpTag();
 
     await streamFetch(
-      { pokemonData, userInput: { name: selectedPokemon ? displayName : pokemonName, cp, atkIv, defIv, staIv, ivPercent, fastMove: fastMoveDisplay || fastMove, chargedMove: chargedMoveDisplay || chargedMove, isShiny, isShadow, pvpIvTag: pvpTag ? pvpTag.text : null }, collection: collection.map((c) => ({ name: c.name, pokemonId: c.pokemonId, cp: c.cp, ivPercent: c.ivPercent, verdict: c.verdict, isShiny: c.isShiny, isShadow: c.isShadow })) },
+      { pokemonData, userInput: { name: selectedPokemon ? displayName : pokemonName, cp, atkIv, defIv, staIv, ivPercent, fastMove: fastMoveDisplay || fastMove, chargedMove: chargedMoveDisplay || chargedMove, isShiny, isShadow, pvpIvTag: pvpTag ? pvpTag.text : null }, collection: collectionForAI() },
       (text) => setResult(text),
       (model) => setUsedModel(model),
       () => { setLoading(false); setStreaming(false); },
       (err) => { setError(err); setLoading(false); setStreaming(false); }
     );
-  }, [pokemonName, cp, atkIv, defIv, staIv, ivPercent, fastMove, chargedMove, isShiny, isShadow, selectedPokemon, moveNamesKr, collection]);
+  }, [pokemonName, cp, atkIv, defIv, staIv, ivPercent, fastMove, chargedMove, isShiny, isShadow, selectedPokemon, moveNamesKr, collection, ivMissing]);
+
+  useEffect(() => {
+    if (pendingReanalyze && selectedPokemon) { setPendingReanalyze(false); analyze(); }
+  }, [pendingReanalyze, selectedPokemon, analyze]);
 
   const reset = () => {
     if (abortRef.current) abortRef.current.abort();
     setPokemonName(""); setCp(""); setAtkIv(15); setDefIv(15); setStaIv(15);
+    setIvMissing(false); setFallbackNotice(null);
     setFastMove(""); setChargedMove(""); setIsShiny(false); setIsShadow(false);
     setResult(null); setSelectedPokemon(null); setError(null); setCurrentKept(false); setUsedModel("");
     setStreaming(false); setLoading(false); setShowCompare(false); setCompareResult(null); setCompareTarget(null);
@@ -420,6 +467,7 @@ export default function Home() {
     setCp(""); setAtkIv(15); setDefIv(15); setStaIv(15);
     setFastMove(""); setChargedMove(""); setIsShiny(false); setIsShadow(false);
     setResult(null); setError(null); setCurrentKept(false); setUsedModel("");
+    setIvMissing(false);
     setStreaming(false); setLoading(false); setShowCompare(false); setCompareResult(null); setCompareTarget(null);
   };
 
@@ -429,7 +477,7 @@ export default function Home() {
     setLoading(true); setStreaming(true); setError(null); setRaidResult(null); setRaidModel("");
     const raidBoss = poke ? { name: poke.name, nameKr: poke.nameKr, id: poke.id, form: poke.form, types: poke.types, baseAttack: poke.baseAttack, baseDefense: poke.baseDefense, baseStamina: poke.baseStamina } : { name: raidBossName };
     await streamFetch(
-      { mode: "raid", raidBoss, collection: collection.map((c) => ({ name: c.name, pokemonId: c.pokemonId, cp: c.cp, ivPercent: c.ivPercent, verdict: c.verdict, isShiny: c.isShiny, isShadow: c.isShadow })) },
+      { mode: "raid", raidBoss, collection: collectionForAI() },
       (text) => setRaidResult(text), (model) => setRaidModel(model),
       () => { setLoading(false); setStreaming(false); },
       (err) => { setError(err); setLoading(false); setStreaming(false); }
@@ -446,7 +494,7 @@ export default function Home() {
     setLoading(true); setStreaming(true); setError(null); setMaxBattleResult(null); setMaxBattleModel("");
     const raidBoss = { name: boss.name, nameKr: boss.nameKr, id: boss.id, isGmax: boss.isGmax, tier: boss.tier, types: boss.types, cpMin: boss.cpMin, cpMax: boss.cpMax };
     await streamFetch(
-      { mode: "maxbattle", raidBoss, collection: collection.map((c) => ({ name: c.name, pokemonId: c.pokemonId, cp: c.cp, ivPercent: c.ivPercent, verdict: c.verdict })) },
+      { mode: "maxbattle", raidBoss, collection: collectionForAI() },
       (text) => setMaxBattleResult(text), (model) => setMaxBattleModel(model),
       () => { setLoading(false); setStreaming(false); },
       (err) => { setError(err); setLoading(false); setStreaming(false); }
@@ -463,7 +511,7 @@ export default function Home() {
     setCompareTarget(targetEntry); setShowCompare(true);
     setLoading(true); setStreaming(true); setError(null); setCompareResult(null); setCompareModel("");
     const compareA = { name: selectedPokemon.nameKr, enName: selectedPokemon.name, id: selectedPokemon.id, cp: parseInt(cp) || 0, atkIv, defIv, staIv, ivPercent: Math.round(((atkIv + defIv + staIv) / 45) * 100), fastMove: fastMove ? krMove(fastMove) : "", chargedMove: chargedMove ? krMove(chargedMove) : "", isShiny, isShadow, baseAttack: selectedPokemon.baseAttack, baseDefense: selectedPokemon.baseDefense, baseStamina: selectedPokemon.baseStamina };
-    const compareB = { name: targetEntry.name, enName: targetEntry.enName, pokemonId: targetEntry.pokemonId, cp: targetEntry.cp, ivPercent: targetEntry.ivPercent, fastMove: targetEntry.fastMove, chargedMove: targetEntry.chargedMove, isShiny: targetEntry.isShiny, isShadow: targetEntry.isShadow, verdict: targetEntry.verdict };
+    const compareB = { name: targetEntry.name, pokemonId: targetEntry.pokemonId, form: targetEntry.form, cp: targetEntry.cp, atkIv: targetEntry.atkIv, defIv: targetEntry.defIv, staIv: targetEntry.staIv, ivPercent: targetEntry.ivPercent, fastMove: targetEntry.fastMove ? `${krMove(targetEntry.fastMove)} (${targetEntry.fastMove})` : "", chargedMove: targetEntry.chargedMove ? `${krMove(targetEntry.chargedMove)} (${targetEntry.chargedMove})` : "", isShiny: targetEntry.isShiny, isShadow: targetEntry.isShadow, status: targetEntry.status, purposes: targetEntry.purposes, memo: targetEntry.memo || undefined };
     await streamFetch(
       { mode: "compare", compareA, compareB },
       (text) => setCompareResult(text), (model) => setCompareModel(model),
@@ -472,69 +520,74 @@ export default function Home() {
     );
   }, [selectedPokemon, cp, atkIv, defIv, staIv, fastMove, chargedMove, isShiny, isShadow, krMove]);
 
-  const handleKeep = () => {
-    if (!selectedPokemon || !result || currentKept) return;
-    const verdict = result.match(/(영구 보존|킵|보류|사탕행|PvP용 킵)/)?.[0] || "킵";
-    const entry = {
-      id: `${selectedPokemon.id}-${selectedPokemon.form}-${Date.now()}`,
-      pokemonId: selectedPokemon.id,
-      form: selectedPokemon.form,
-      name: selectedPokemon.nameKr + (selectedPokemon.form !== "Normal" ? ` (${selectedPokemon.form})` : ""),
-      enName: selectedPokemon.name,
-      cp: parseInt(cp) || 0,
-      ivPercent,
-      fastMove: fastMove ? krMove(fastMove) : "",
-      chargedMove: chargedMove ? krMove(chargedMove) : "",
-      isShiny, isShadow, verdict,
-      analysisResult: result,
-      date: new Date().toISOString(),
-    };
-    setCollection((prev) => {
-      const updated = [...prev, entry];
-      updated.sort((a, b) => a.pokemonId - b.pokemonId);
-      return updated;
+  // ─── 내 목록에 저장 (Supabase my_pokemon). 판정 결과는 저장하지 않는다 ───
+  const saveToMyList = async () => {
+    if (!selectedPokemon || currentKept || saving) return;
+    if (!session) { setCollError("서버 저장이 연결되지 않아 저장할 수 없습니다"); return; }
+    setSaving(true);
+    const { row, error } = await insertMyPokemon({
+      species_id: selectedPokemon.id,
+      form: selectedPokemon.form || "Normal",
+      name_kr: selectedPokemon.nameKr,
+      cp: parseInt(cp) || null,
+      atk_iv: atkIv, def_iv: defIv, sta_iv: staIv,
+      fast_move: fastMove || null,
+      charged_moves: chargedMove ? [chargedMove] : [],
+      is_shadow: isShadow, is_shiny: isShiny,
+      status: saveOpts.status, purposes: saveOpts.purposes, memo: saveOpts.memo.trim() || null,
+      source: "web",
     });
+    setSaving(false);
+    if (error) { setCollError(`저장 실패: ${error}`); return; }
+    setCollection((prev) => [...prev, toEntry(row)].sort((a, b) => a.pokemonId - b.pokemonId));
     setCurrentKept(true);
+    setSaveOpts({ open: false, status: "keep", purposes: [], memo: "" });
   };
 
-  const removeFromCollection = (entryId) => setCollection((prev) => prev.filter((e) => e.id !== entryId));
-
+  // 내 목록 JSON 백업 다운로드 (서버 목록 기준, 가져오기는 범위 밖)
   const exportCollection = () => {
-    const data = JSON.stringify(collection, null, 2);
+    const data = JSON.stringify({ exportedAt: new Date().toISOString(), count: collection.length, items: collection }, null, 2);
     const blob = new Blob([data], { type: "application/json" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
-    a.download = `포고박사_보유목록_${new Date().toISOString().slice(0, 10)}.json`;
+    a.download = `포고박사_내포켓몬목록_${new Date().toISOString().slice(0, 10)}.json`;
     a.click();
     URL.revokeObjectURL(url);
   };
 
-  const importCollection = () => {
-    const input = document.createElement("input");
-    input.type = "file";
-    input.accept = ".json";
-    input.onchange = (e) => {
-      const file = e.target.files[0];
-      if (!file) return;
-      const reader = new FileReader();
-      reader.onload = (ev) => {
-        try {
-          const data = JSON.parse(ev.target.result);
-          if (Array.isArray(data)) {
-            setCollection((prev) => {
-              const existingIds = new Set(prev.map((p) => p.id));
-              const newItems = data.filter((d) => d.id && !existingIds.has(d.id));
-              const merged = [...prev, ...newItems];
-              merged.sort((a, b) => a.pokemonId - b.pokemonId);
-              return merged;
-            });
-          }
-        } catch { setError("잘못된 파일 형식입니다."); }
-      };
-      reader.readAsText(file);
-    };
-    input.click();
+  const togglePurpose = (list, p) => (list.includes(p) ? list.filter((x) => x !== p) : [...list, p]);
+
+  const removeFromCollection = async (entryId) => {
+    const { error } = await deleteMyPokemon(entryId);
+    if (error) { setCollError(`삭제 실패: ${error}`); return; }
+    setCollection((prev) => prev.filter((e) => e.id !== entryId));
+  };
+
+  const saveEdit = async () => {
+    if (!editing) return;
+    const { row, error } = await updateMyPokemon(editing.id, { status: editing.status, purposes: editing.purposes, memo: editing.memo.trim() || null });
+    if (error) { setCollError(`수정 실패: ${error}`); return; }
+    setCollection((prev) => prev.map((e) => (e.id === row.id ? toEntry(row) : e)));
+    setEditing(null);
+  };
+
+  // 목록 항목으로 다시 분석: 저장된 값으로 입력 폼을 채우고 새로 판정 (저장된 판정 없음)
+  const reanalyzeEntry = (item) => {
+    const match = allPokemon.find((p) => p.id === item.pokemonId && p.form === item.form) || allPokemon.find((p) => p.id === item.pokemonId);
+    if (!match) { setCollError("포켓몬 데이터에서 해당 종을 찾지 못했습니다"); return; }
+    if (abortRef.current) abortRef.current.abort();
+    selectPokemon(match);
+    setCp(item.cp ? String(item.cp) : "");
+    const hasIv = [item.atkIv, item.defIv, item.staIv].every((v) => Number.isInteger(v));
+    if (hasIv) { setAtkIv(item.atkIv); setDefIv(item.defIv); setStaIv(item.staIv); setIvMissing(false); }
+    else { setAtkIv(15); setDefIv(15); setStaIv(15); setIvMissing(true); } // 이전된 항목: 개체값 없음 → 입력 후 분석
+    setFastMove(item.fastMove || ""); setChargedMove(item.chargedMove || "");
+    setIsShiny(item.isShiny); setIsShadow(item.isShadow);
+    setResult(null); setError(null); setCurrentKept(false); setUsedModel("");
+    setShowCollection(false); setEditing(null); setActiveTab("analyze");
+    if (hasIv) setPendingReanalyze(true);
+    else setError("개체값 미입력 — 공격/방어/HP 를 입력한 뒤 분석하세요");
   };
 
   const renderBold = (text) => {
@@ -625,6 +678,10 @@ export default function Home() {
             <p style={s.subtitle}>킵? 버려? 냅둬? AI가 판정해드립니다</p>
           </div>
         </div>
+        <div style={s.statusBar}>
+          <span>{usageCount === null ? (session ? "오늘 AI 사용 —회" : "AI 사용 횟수 기록 안 됨") : `오늘 AI 사용 ${usageCount}회`}{fallbackNotice ? <span style={{ color: "#ffd93d", marginLeft: 8 }}>· {fallbackNotice}</span> : null}</span>
+          <span style={{ opacity: 0.7 }}>{sessionNotice || (session ? "이 기기에 저장됨 · 브라우저 데이터를 지우면 목록이 사라질 수 있음" : "")}</span>
+        </div>
 
         {/* ─── Tab Switcher (결과 표시 중에는 숨김) ─── */}
         {!result && !raidResult && (
@@ -673,7 +730,7 @@ export default function Home() {
             <div style={s.group}>
               <label style={s.label}>개체값 (IV) <span style={{ ...s.ivBadge, background: getIvColor() }}>{ivPercent}% — {getIvLabel()}</span></label>
               <div style={s.ivBox}>
-                {[{ label: "공격", value: atkIv, set: setAtkIv }, { label: "방어", value: defIv, set: setDefIv }, { label: "HP", value: staIv, set: setStaIv }].map(({ label, value, set }) => (
+                {[{ label: "공격", value: atkIv, set: setAtkIvU }, { label: "방어", value: defIv, set: setDefIvU }, { label: "HP", value: staIv, set: setStaIvU }].map(({ label, value, set }) => (
                   <div key={label} style={s.ivItem}>
                     <div style={s.ivLabelRow}>
                       <span style={s.ivStatLabel}>{label}</span>
@@ -701,7 +758,8 @@ export default function Home() {
                   </div>
                 ))}
               </div>
-              {getPvpTag() && (
+              {ivMissing && <div style={{ ...s.sourceNotice, marginTop: 10, marginBottom: 0 }}>⚠️ 개체값 미입력 — 이전된 항목에는 개체값이 없습니다. 공격/방어/HP 를 입력한 뒤 분석하세요.</div>}
+              {getPvpTag() && !ivMissing && (
                 <div style={s.pvpTag}>
                   <span style={{ color: getPvpTag().color }}>{getPvpTag().text}</span>
                   <span style={s.pvpHint}>PvP는 공격↓ 방어·HP↑가 유리 (CP 제한 리그)</span>
@@ -799,6 +857,7 @@ export default function Home() {
               <div style={{ ...s.ivSumItem, borderRight: "none" }}><span style={{ fontSize: 11, opacity: 0.6 }}>IV</span><span style={{ fontWeight: 700, color: getIvColor() }}>{ivPercent}%</span></div>
             </div>
             <div style={s.resultContent}>
+              {streaming && thinking && <div style={s.thinking}>🧠 박사가 생각 중…</div>}
               {formatResult(result)}
               {streaming && <span style={s.cursor}>▌</span>}
             </div>
@@ -809,8 +868,8 @@ export default function Home() {
             )}
             {selectedPokemon && !streaming && (
               <div style={{ padding: "12px 20px 0", display: "flex", gap: 8 }}>
-                <button onClick={handleKeep} disabled={currentKept} style={{ ...(currentKept ? s.keepBtnKept : s.keepBtn), flex: 1 }}>
-                  {currentKept ? "✅ 저장됨" : "📦 킵!"}
+                <button onClick={() => (currentKept ? null : setSaveOpts((o) => ({ ...o, open: !o.open })))} disabled={currentKept || !session} style={{ ...(currentKept ? s.keepBtnKept : s.keepBtn), flex: 1, opacity: session ? 1 : 0.5 }}>
+                  {currentKept ? "✅ 내 목록에 저장됨" : "💾 내 목록에 저장"}
                 </button>
                 {(() => {
                   const sameSpecies = collection.filter((c) => c.pokemonId === selectedPokemon.id && (!c.form || c.form === selectedPokemon.form));
@@ -821,6 +880,25 @@ export default function Home() {
                     </button>
                   );
                 })()}
+              </div>
+            )}
+            {selectedPokemon && !streaming && saveOpts.open && !currentKept && (
+              <div style={s.saveBox}>
+                <div style={s.saveRowLabel}>상태</div>
+                <div style={{ display: "flex", gap: 6 }}>
+                  {Object.entries(STATUS_LABELS).map(([k, label]) => (
+                    <button key={k} onClick={() => setSaveOpts((o) => ({ ...o, status: k }))} style={saveOpts.status === k ? s.chipActive : s.chip}>{label}</button>
+                  ))}
+                </div>
+                <div style={s.saveRowLabel}>용도 (복수 선택)</div>
+                <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                  {Object.entries(PURPOSE_LABELS).map(([k, label]) => (
+                    <button key={k} onClick={() => setSaveOpts((o) => ({ ...o, purposes: togglePurpose(o.purposes, k) }))} style={saveOpts.purposes.includes(k) ? s.chipActive : s.chip}>{label}</button>
+                  ))}
+                </div>
+                <input style={{ ...s.input, marginTop: 8, fontSize: 13 }} placeholder="메모 (선택)" value={saveOpts.memo} onChange={(e) => setSaveOpts((o) => ({ ...o, memo: e.target.value }))} />
+                {collError && <div style={{ ...s.error, marginTop: 8, marginBottom: 0 }}>{collError}</div>}
+                <button onClick={saveToMyList} disabled={saving} style={{ ...s.keepBtn, marginTop: 10 }}>{saving ? "저장 중…" : "저장"}</button>
               </div>
             )}
             {!streaming && (
@@ -911,7 +989,7 @@ export default function Home() {
                 ? <img src={`https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/other/official-artwork/${raidSelectedPoke.id}.png`} alt={raidSelectedPoke.nameKr} style={s.pokemonImg} onError={(e) => { e.target.style.display = "none"; }} />
                 : <div style={{ fontSize: 64 }}>⚔️</div>}
             </div>
-            <div style={s.resultContent}>{formatResult(raidResult)}{streaming && <span style={s.cursor}>▌</span>}</div>
+            <div style={s.resultContent}>{streaming && thinking && <div style={s.thinking}>🧠 박사가 생각 중…</div>}{formatResult(raidResult)}{streaming && <span style={s.cursor}>▌</span>}</div>
             {raidModel && !streaming && <div style={{ padding: "4px 20px 0", fontSize: 10, color: "#576574", textAlign: "right" }}>{modelLine(raidModel)}</div>}
             {!streaming && <button onClick={resetRaid} style={s.resetBtn}>🔄 다른 보스 분석하기</button>}
           </div>
@@ -963,7 +1041,7 @@ export default function Home() {
                           {selectedMaxBoss?.tier}
                         </span>
                       </div>
-                      <div style={s.resultContent}>{formatResult(maxBattleResult)}{streaming && <span style={s.cursor}>▌</span>}</div>
+                      <div style={s.resultContent}>{streaming && thinking && <div style={s.thinking}>🧠 박사가 생각 중…</div>}{formatResult(maxBattleResult)}{streaming && <span style={s.cursor}>▌</span>}</div>
                       {maxBattleModel && !streaming && <div style={{ padding: "4px 20px 0", fontSize: 10, color: "#576574", textAlign: "right" }}>{modelLine(maxBattleModel)}</div>}
                     </div>
                     {!streaming && (
@@ -1115,34 +1193,37 @@ export default function Home() {
         {collection.length > 0 && <span style={s.fabBadge}>{collection.length}</span>}
       </button>
 
-      {/* ─── Collection Panel ─── */}
+      {/* ─── 내 포켓몬 목록 Panel ─── */}
       {showCollection && (
         <div style={s.collOverlay}>
           <div style={s.collPanel}>
             <div style={s.collHeader}>
-              <h2 style={{ fontSize: 18, fontWeight: 800, color: "#e0e0e0" }}>📋 보유목록 ({collection.length})</h2>
+              <h2 style={{ fontSize: 18, fontWeight: 800, color: "#e0e0e0" }}>📋 내 포켓몬 목록 ({collection.length})</h2>
               <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
                 {collection.length > 0 && (
                   <button onClick={exportCollection} style={{ background: "none", border: "1px solid #2a3a5c", borderRadius: 8, color: "#8899aa", fontSize: 11, padding: "4px 8px", cursor: "pointer", fontFamily: "'Outfit',sans-serif" }}>📤 내보내기</button>
                 )}
-                <button onClick={importCollection} style={{ background: "none", border: "1px solid #2a3a5c", borderRadius: 8, color: "#8899aa", fontSize: 11, padding: "4px 8px", cursor: "pointer", fontFamily: "'Outfit',sans-serif" }}>📥 가져오기</button>
-                <button style={s.collClose} onClick={() => { setShowCollection(false); setViewingEntry(null); setCollFilter("all"); }}>✕</button>
+                <button style={s.collClose} onClick={() => { setShowCollection(false); setEditing(null); setCollStatusFilter("all"); setCollPurposeFilter("all"); }}>✕</button>
               </div>
             </div>
+            {sessionNotice && <div style={s.sourceNotice}>{sessionNotice}</div>}
+            {collError && <div style={s.error}>{collError}</div>}
 
-            {collection.length > 0 && !viewingEntry && (
+            {collection.length > 0 && (
               <div style={s.collFilterRow}>
-                {COLL_FILTERS.map((f) => {
-                  const count = f.key === "all" ? collection.length : collection.filter((item) => getCollCategory(item) === f.key).length;
-                  if (f.key !== "all" && count === 0) return null;
-                  return (
-                    <button key={f.key} onClick={() => setCollFilter(f.key)} style={collFilter === f.key ? s.collFilterActive : s.collFilterBtn}>
-                      <span style={{ fontSize: 13 }}>{f.emoji}</span>
-                      <span style={{ fontSize: 11 }}>{f.label}</span>
-                      <span style={{ fontSize: 10, opacity: 0.5 }}>{count}</span>
-                    </button>
-                  );
-                })}
+                {[["all", "전체"], ["keep", "보관"], ["transfer", "보낼 예정"]].map(([k, label]) => (
+                  <button key={k} onClick={() => setCollStatusFilter(k)} style={collStatusFilter === k ? s.collFilterActive : s.collFilterBtn}>
+                    <span style={{ fontSize: 11 }}>{label}</span>
+                    <span style={{ fontSize: 10, opacity: 0.5 }}>{k === "all" ? collection.length : collection.filter((i) => i.status === k).length}</span>
+                  </button>
+                ))}
+                <span style={{ width: 1, background: "#2a3a5c", margin: "0 2px" }} />
+                {[["all", "용도 전체"], ...Object.entries(PURPOSE_LABELS)].map(([k, label]) => (
+                  <button key={k} onClick={() => setCollPurposeFilter(k)} style={collPurposeFilter === k ? s.collFilterActive : s.collFilterBtn}>
+                    <span style={{ fontSize: 11 }}>{label}</span>
+                    <span style={{ fontSize: 10, opacity: 0.5 }}>{k === "all" ? collection.length : collection.filter((i) => (i.purposes || []).includes(k)).length}</span>
+                  </button>
+                ))}
               </div>
             )}
 
@@ -1150,39 +1231,15 @@ export default function Home() {
               <div style={s.collEmpty}>
                 <div style={{ fontSize: 40, marginBottom: 12 }}>📦</div>
                 <div>아직 저장된 포켓몬이 없습니다</div>
-                <div style={{ fontSize: 12, marginTop: 4, opacity: 0.5 }}>분석 후 "킵" 버튼을 눌러 추가하세요</div>
-              </div>
-            ) : viewingEntry ? (
-              <div>
-                <button onClick={() => setViewingEntry(null)} style={s.collBackBtn}>← 목록으로</button>
-                <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 16 }}>
-                  <img src={`https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/${viewingEntry.pokemonId}.png`} alt={viewingEntry.name} style={{ width: 48, height: 48, imageRendering: "pixelated" }} />
-                  <div>
-                    <div style={{ fontSize: 16, fontWeight: 700, color: "#e0e0e0" }}>
-                      {viewingEntry.isShiny ? "✨" : ""}{viewingEntry.isShadow ? "👤" : ""}{viewingEntry.name}
-                    </div>
-                    <div style={{ fontSize: 12, color: "#8899aa" }}>
-                      CP{viewingEntry.cp} IV{viewingEntry.ivPercent}% | {viewingEntry.verdict}
-                    </div>
-                  </div>
-                </div>
-                {viewingEntry.analysisResult ? (
-                  <div style={{ ...s.collAnalysis, lineHeight: 1.7, fontSize: 14 }}>
-                    {formatResult(viewingEntry.analysisResult)}
-                  </div>
-                ) : (
-                  <div style={{ color: "#8899aa", textAlign: "center", padding: 20 }}>
-                    저장된 분석 결과가 없습니다 (이전 버전에서 저장됨)
-                  </div>
-                )}
+                <div style={{ fontSize: 12, marginTop: 4, opacity: 0.5 }}>분석 후 "내 목록에 저장" 버튼을 눌러 추가하세요</div>
               </div>
             ) : (
               <div style={s.collList}>
                 {filteredCollection.length === 0 ? (
-                  <div style={{ textAlign: "center", padding: "30px 20px", color: "#8899aa", fontSize: 13 }}>이 카테고리에 해당하는 포켓몬이 없습니다</div>
+                  <div style={{ textAlign: "center", padding: "30px 20px", color: "#8899aa", fontSize: 13 }}>조건에 맞는 포켓몬이 없습니다</div>
                 ) : filteredCollection.map((item) => (
-                  <div key={item.id} style={s.collItem}>
-                    <div style={s.collItemClickable} onClick={() => item.analysisResult ? setViewingEntry(item) : null}>
+                  <div key={item.id} style={{ ...s.collItem, flexDirection: "column", alignItems: "stretch" }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
                       <img src={`https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/${item.pokemonId}.png`} alt={item.name} style={{ width: 40, height: 40, imageRendering: "pixelated" }} />
                       <div style={{ flex: 1, minWidth: 0 }}>
                         <div style={{ fontSize: 14, fontWeight: 700, color: "#e0e0e0" }}>
@@ -1190,19 +1247,38 @@ export default function Home() {
                           <span style={{ fontSize: 11, opacity: 0.4, marginLeft: 4 }}>#{item.pokemonId}</span>
                         </div>
                         <div style={{ fontSize: 11, color: "#8899aa", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                          CP{item.cp} IV{item.ivPercent}% | {item.fastMove}/{item.chargedMove}
-                          {item.analysisResult && <span style={{ marginLeft: 4, opacity: 0.5 }}>📄</span>}
+                          CP{item.cp || "?"} {item.ivPercent !== null ? `IV${item.ivPercent}% (${item.atkIv}/${item.defIv}/${item.staIv})` : "개체값 미입력"} | {item.fastMove ? krMove(item.fastMove) : "-"}/{item.chargedMove ? krMove(item.chargedMove) : "-"}
+                        </div>
+                        <div style={{ display: "flex", gap: 4, flexWrap: "wrap", marginTop: 3 }}>
+                          <span style={{ ...s.tagBadge, color: item.status === "transfer" ? "#ff6b6b" : "#4ecdc4" }}>{STATUS_LABELS[item.status] || item.status}</span>
+                          {(item.purposes || []).map((p) => <span key={p} style={{ ...s.tagBadge, color: "#a890f0" }}>{PURPOSE_LABELS[p] || p}</span>)}
+                          {item.source === "import" && <span style={{ ...s.tagBadge, color: "#8899aa" }}>가져옴</span>}
+                          {item.memo && <span style={{ ...s.tagBadge, color: "#ffd93d" }}>📝 {item.memo}</span>}
                         </div>
                       </div>
-                      <span style={{ fontSize: 12, fontWeight: 700, color: "#ffd93d", whiteSpace: "nowrap" }}>{item.verdict}</span>
-                      {(() => {
-                        const cat = getCollCategory(item);
-                        const catColors = { pvp: "#a890f0", raid: "#ff9f43", collection: "#ffd93d", candy: "#ff6b6b", pending: "#8899aa" };
-                        const catLabels = { pvp: "PvP", raid: "레이드", collection: "관상", candy: "사탕행", pending: "보류" };
-                        return <span style={{ fontSize: 9, padding: "1px 5px", borderRadius: 6, background: `${catColors[cat]}22`, color: catColors[cat], fontWeight: 600, marginLeft: 4 }}>{catLabels[cat]}</span>;
-                      })()}
+                      <button style={s.collIconBtn} title="다시 분석" onClick={() => reanalyzeEntry(item)}>🔄</button>
+                      <button style={s.collIconBtn} title="수정" onClick={() => setEditing(editing?.id === item.id ? null : { id: item.id, status: item.status, purposes: item.purposes || [], memo: item.memo || "" })}>✏️</button>
+                      <button style={s.collRemove} onClick={() => removeFromCollection(item.id)}>🗑</button>
                     </div>
-                    <button style={s.collRemove} onClick={() => removeFromCollection(item.id)}>🗑</button>
+                    {editing?.id === item.id && (
+                      <div style={{ ...s.saveBox, margin: "10px 0 0", padding: 10 }}>
+                        <div style={{ display: "flex", gap: 6, marginBottom: 6 }}>
+                          {Object.entries(STATUS_LABELS).map(([k, label]) => (
+                            <button key={k} onClick={() => setEditing((e) => ({ ...e, status: k }))} style={editing.status === k ? s.chipActive : s.chip}>{label}</button>
+                          ))}
+                        </div>
+                        <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                          {Object.entries(PURPOSE_LABELS).map(([k, label]) => (
+                            <button key={k} onClick={() => setEditing((e) => ({ ...e, purposes: togglePurpose(e.purposes, k) }))} style={editing.purposes.includes(k) ? s.chipActive : s.chip}>{label}</button>
+                          ))}
+                        </div>
+                        <input style={{ ...s.input, marginTop: 8, fontSize: 13 }} placeholder="메모" value={editing.memo} onChange={(e) => setEditing((ed) => ({ ...ed, memo: e.target.value }))} />
+                        <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
+                          <button onClick={saveEdit} style={{ ...s.keepBtn, flex: 1, padding: 8 }}>저장</button>
+                          <button onClick={() => setEditing(null)} style={{ ...s.resetBtn, flex: 1, margin: 0, padding: 8 }}>취소</button>
+                        </div>
+                      </div>
+                    )}
                   </div>
                 ))}
               </div>
@@ -1239,9 +1315,9 @@ export default function Home() {
                       <img src={`https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/${item.pokemonId}.png`} alt="" style={{ width: 48, height: 48, imageRendering: "pixelated" }} />
                       <div style={{ flex: 1 }}>
                         <div style={{ fontWeight: 700, color: "#e0e0e0" }}>{item.isShiny ? "✨" : ""}{item.isShadow ? "👤" : ""}{item.name}</div>
-                        <div style={{ fontSize: 12, color: "#8899aa" }}>CP{item.cp} | IV{item.ivPercent}% | {item.fastMove}/{item.chargedMove}</div>
+                        <div style={{ fontSize: 12, color: "#8899aa" }}>CP{item.cp || "?"} | {item.ivPercent !== null ? `IV${item.ivPercent}%` : "개체값 미입력"} | {item.fastMove ? krMove(item.fastMove) : "-"}/{item.chargedMove ? krMove(item.chargedMove) : "-"}</div>
                       </div>
-                      <span style={{ fontSize: 12, fontWeight: 700, color: "#ffd93d" }}>{item.verdict}</span>
+                      <span style={{ fontSize: 11, fontWeight: 700, color: "#ffd93d" }}>{STATUS_LABELS[item.status] || ""}</span>
                     </div>
                   </div>
                 ))}
@@ -1258,10 +1334,11 @@ export default function Home() {
                   <div style={{ ...s.compareMini, borderColor: "rgba(255,217,61,0.3)" }}>
                     <div style={{ fontSize: 10, color: "#ffd93d", fontWeight: 600 }}>B (보유)</div>
                     <div style={{ fontWeight: 700, fontSize: 13, color: "#e0e0e0" }}>{compareTarget?.name}</div>
-                    <div style={{ fontSize: 11, color: "#8899aa" }}>CP{compareTarget?.cp} IV{compareTarget?.ivPercent}%</div>
+                    <div style={{ fontSize: 11, color: "#8899aa" }}>CP{compareTarget?.cp || "?"} {compareTarget?.ivPercent !== null && compareTarget?.ivPercent !== undefined ? `IV${compareTarget.ivPercent}%` : "개체값 미입력"}</div>
                   </div>
                 </div>
                 <div style={{ ...s.collAnalysis, lineHeight: 1.7, fontSize: 14 }}>
+                  {streaming && thinking && <div style={s.thinking}>🧠 박사가 생각 중…</div>}
                   {formatResult(compareResult)}
                   {streaming && <span style={s.cursor}>▌</span>}
                 </div>
@@ -1334,6 +1411,14 @@ const s = {
   collEmpty: { textAlign: "center", padding: "60px 20px", color: "#8899aa" },
   collList: { display: "flex", flexDirection: "column", gap: 8 },
   collItem: { display: "flex", alignItems: "center", gap: 10, background: "#1a2744", border: "1px solid #2a3a5c", borderRadius: 12, padding: "10px 12px" },
+  statusBar: { display: "flex", justifyContent: "space-between", gap: 8, flexWrap: "wrap", fontSize: 10, color: "#8899aa", margin: "-12px 0 14px", padding: "0 4px" },
+  thinking: { fontSize: 13, color: "#8899aa", padding: "10px 0", animation: "blink 1.6s ease-in-out infinite" },
+  saveBox: { margin: "12px 20px 0", padding: 12, background: "#0d1a2e", border: "1px solid #2a3a5c", borderRadius: 10 },
+  saveRowLabel: { fontSize: 11, color: "#8899aa", margin: "6px 0 4px", fontWeight: 600 },
+  chip: { padding: "6px 10px", background: "#1a2744", border: "1px solid #2a3a5c", borderRadius: 8, color: "#8899aa", fontSize: 12, cursor: "pointer", fontFamily: "'Outfit',sans-serif" },
+  chipActive: { padding: "6px 10px", background: "rgba(0,212,170,0.15)", border: "1px solid rgba(0,212,170,0.4)", borderRadius: 8, color: "#4ecdc4", fontSize: 12, fontWeight: 700, cursor: "pointer", fontFamily: "'Outfit',sans-serif" },
+  tagBadge: { fontSize: 9, padding: "1px 6px", borderRadius: 6, background: "rgba(255,255,255,0.05)", fontWeight: 600 },
+  collIconBtn: { background: "none", border: "1px solid #2a3a5c", borderRadius: 8, fontSize: 14, cursor: "pointer", padding: "4px 6px" },
   collRemove: { background: "none", border: "none", fontSize: 16, cursor: "pointer", padding: 4, opacity: 0.5, filter: "grayscale(0.5)" },
   pvpTag: { marginTop: 10, padding: "8px 12px", background: "rgba(168,144,240,0.06)", border: "1px solid rgba(168,144,240,0.15)", borderRadius: 8, display: "flex", flexDirection: "column", gap: 2 },
   pvpHint: { fontSize: 10, color: "#576574" },

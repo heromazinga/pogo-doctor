@@ -58,6 +58,8 @@
 |---|---|---|
 | `GEMINI_API_KEY` | O | AI Studio 에서 발급한 키 |
 | `GEMINI_MODELS` | X | 모델 폴백 순서(쉼표 구분). 비우면 코드 기본값 |
+| `GEMINI_MIN_CHARS` | X | 응답 본문이 이 글자 수 미만이거나 `finishReason` 이 `STOP` 이 아니면 비정상으로 보고 다음 모델로 재시도(기본 400). 재시도 시 클라이언트는 `__RESET__` 마커로 이전 본문을 버리고, 사용 횟수는 최종 채택된 응답 1회만 기록 |
+| `GEMINI_API_BASE` | X | 테스트용 모의 서버 지정(기본 공식 엔드포인트) |
 | `GEMINI_THINKING_LEVEL` | X | thinking 수준(`generationConfig.thinkingConfig.thinkingLevel`), 기본 `low`. 모델이 거부(400)하면 파라미터 없이 재시도. `off` 면 미전송 |
 | `POGO_DISABLE_SOURCES` | X | 테스트용. 지정한 데이터 소스를 실패한 것으로 처리 (`pokemon-go-api,pvpoke,pogoapi,pokeminers`) |
 | `POKEMON_DATA_TTL_MS` | X | 포켓몬 데이터 메모리 캐시 시간(ms), 기본 6시간 |
@@ -104,6 +106,33 @@ curl -s localhost:3000/api/pokemon-data | jq '.dataSources, .pokemon | length'
 ```
 
 Vercel 에서는 환경변수 `POGO_DISABLE_SOURCES` 를 Preview 환경에 잠시 넣고 재배포해 같은 방식으로 확인한다. 화면 하단 소스 상태에 `✗` 가 표시되고 나머지 기능은 정상 동작해야 한다.
+
+## 1단계: 서버 저장 (Supabase — 익명 계정 · 내 포켓몬 목록 · AI 사용 횟수)
+
+### 사용자가 해야 하는 설정
+1. Vercel Marketplace 로 Supabase 프로젝트를 만들어 `pogo-doctor` 에 연결(환경변수 자동 등록), Supabase 대시보드 → Authentication → Sign In / Providers 에서 **Anonymous Sign-Ins** 활성화.
+2. **마이그레이션 적용**: Supabase 대시보드 → SQL Editor → `supabase/migrations/0001_phase1.sql` 전체를 붙여넣고 Run. (대안: `psql "$POSTGRES_URL_NON_POOLING" -f supabase/migrations/0001_phase1.sql`). 여러 번 실행해도 안전(멱등).
+3. 로컬 개발 시 `.env.local` 에 `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY`, `SUPABASE_SECRET_KEY` 입력.
+
+### 환경변수
+| 변수 | 위치 | 설명 |
+|---|---|---|
+| `NEXT_PUBLIC_SUPABASE_URL` | 클라이언트·서버 | 프로젝트 URL |
+| `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` (구형 `NEXT_PUBLIC_SUPABASE_ANON_KEY`) | 클라이언트·서버 | 브라우저용 키. 신형 우선, 없으면 구형 |
+| `SUPABASE_SECRET_KEY` (구형 `SUPABASE_SERVICE_ROLE_KEY`) | **서버 전용** | `ai_usage` 증가(RLS 우회)에만 사용. `app/lib/supabaseServer.js` 에서만 읽으며 클라이언트 번들에 포함되지 않음 |
+| `AI_USAGE_TZ` / `NEXT_PUBLIC_AI_USAGE_TZ` | 선택 | 사용 횟수 날짜 기준 시간대. 기본 `America/Los_Angeles` |
+
+### 동작
+- 첫 진입 시 세션이 없으면 `signInAnonymously()` 자동 실행(로그인 화면 없음). 세션은 브라우저(localStorage)에 유지. 모든 데이터는 `auth.users.id` 기준이라 나중에 이메일을 연결해도 이어진다.
+- **내 포켓몬 목록** `my_pokemon`: 종·폼, CP, 개체값, 기술(영어 ID), 섀도/정화/이로치/럭키, 상태(`keep`/`transfer`), 용도 태그(`raid`/`great`/`ultra`/`master`), 등록 경로(`web`/`overlay`/`import`), 메모. **판정 결과는 저장하지 않는다.** 목록 항목 "🔄 다시 분석"은 저장된 값으로 새로 판정.
+- 기존 브라우저 목록(`localStorage.pogo-collection`)은 익명 로그인 직후 1회 자동 이전(`source='import'`, `status='keep'`, verdict 는 버림). 성공 시 키를 `pogo-collection-migrated` 로 바꿔 보존.
+- **AI 사용 횟수** `ai_usage(user_id, usage_date, count)`: `/api/analyze` 가 Gemini 호출에 성공하면 서버에서 `increment_ai_usage()`(SECURITY DEFINER, service_role 만 실행 가능)로 +1. 클라이언트는 `Authorization: Bearer <access_token>` 을 보내고, 없으면 분석은 되지만 기록은 생략(서버 로그 경고). 날짜는 Gemini 일일 한도가 초기화되는 **태평양 시간 자정** 기준(`America/Los_Angeles`, [Gemini rate limits 문서](https://ai.google.dev/gemini-api/docs/rate-limits)). Gemini 429 시 "오늘 무료 한도 소진 · 초기화 예정 M/D HH:MM(한국 시간)" 안내.
+- RLS: 두 테이블 모두 `user_id = auth.uid()` 인 행만 접근. `ai_usage` 는 클라이언트 조회만 허용(증가 정책 없음).
+
+### Supabase 무료 플랜 제약 (확인 필요 — [공식 요금 페이지](https://supabase.com/pricing) 기준, 이 환경에서 직접 열람 불가하여 2026-09 기준 제3자 정리로 확인)
+- 활성 프로젝트 2개, DB 500MB, 파일 저장 1GB, 이그레스 5GB, MAU 50,000.
+- **7일간 활동이 없으면 프로젝트가 일시 정지**되며 대시보드에서 수동 복구해야 한다(데이터는 보존). 사용자가 드물면 주기적 접속(또는 유료 전환)이 필요.
+- 백업·SLA 없음.
 
 ## 셋업 (로컬)
 
