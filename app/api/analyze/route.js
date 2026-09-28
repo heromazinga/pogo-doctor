@@ -391,25 +391,47 @@ PvP 메타 포켓몬이면 PvP 기준으로, PvE 메타면 PvE 기준으로 IV�
 
     const errors = []; // 모델별 실패 사유 (전부 실패 시 한 번에 보여준다)
 
+    // thinking 수준을 낮춰 thinking 토큰 소모를 줄인다 (Gemini 3.x: generationConfig.thinkingConfig.thinkingLevel).
+    // 환경변수 GEMINI_THINKING_LEVEL 로 조정, "off" 면 파라미터 자체를 보내지 않는다.
+    const thinkingLevel = (process.env.GEMINI_THINKING_LEVEL || "low").trim().toLowerCase();
+    const callGemini = (model, withThinking) => {
+      const generationConfig = {
+        temperature: 0.8,
+        // Gemini 3.x 는 생각(thinking) 토큰도 이 한도에 포함되므로 2000 이면 본문이 중간에 잘린다 (안전장치로 8192 유지)
+        maxOutputTokens: 8192,
+      };
+      if (withThinking) generationConfig.thinkingConfig = { thinkingLevel };
+      return fetch(
+        `https://generativelanguage.googleapis.com/v1beta/models/${model}:streamGenerateContent?alt=sse&key=${apiKey}`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            system_instruction: { parts: [{ text: systemPrompt }] },
+            contents: [{ parts: [{ text: userMessage }] }],
+            generationConfig,
+          }),
+        }
+      );
+    };
+
     for (const model of getModels()) {
       try {
         // Use Gemini streaming SSE endpoint
-        const res = await fetch(
-          `https://generativelanguage.googleapis.com/v1beta/models/${model}:streamGenerateContent?alt=sse&key=${apiKey}`,
-          {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              system_instruction: { parts: [{ text: systemPrompt }] },
-              contents: [{ parts: [{ text: userMessage }] }],
-              generationConfig: {
-                temperature: 0.8,
-                // Gemini 3.x 는 생각(thinking) 토큰도 이 한도에 포함되므로 2000 이면 본문이 중간에 잘린다
-                maxOutputTokens: 8192,
-              },
-            }),
+        let res = await callGemini(model, thinkingLevel !== "off");
+
+        if (!res.ok && thinkingLevel !== "off" && res.status === 400) {
+          // 모델이 thinkingConfig/thinkingLevel 을 지원하지 않으면 파라미터 없이 한 번 더 시도
+          const errData = await res.json().catch(() => ({}));
+          const msg = errData?.error?.message || "";
+          if (/thinking/i.test(msg)) {
+            console.warn(`[analyze] ${model}: thinkingLevel 미지원 → 파라미터 없이 재시도 (${msg})`);
+            res = await callGemini(model, false);
+          } else {
+            errors.push(`${model}: ${msg || res.statusText} (HTTP ${res.status})`);
+            continue;
           }
-        );
+        }
 
         if (!res.ok) {
           const errData = await res.json().catch(() => ({}));

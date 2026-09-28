@@ -35,6 +35,7 @@ export const SOURCE_DEFS = {
   pokeminers: {
     name: "pokeminers",
     url: "https://raw.githubusercontent.com/PokeMiners/game_masters/master/latest/latest.json",
+    commitsUrl: "https://api.github.com/repos/PokeMiners/game_masters/commits?path=latest/latest.json&per_page=1",
     priority: 4, // 게임 원본이지만 "latest" 가 항상 최신은 아니어서 특별 취급하지 않음 (동률 시 갱신 시각으로 판단)
   },
 };
@@ -89,6 +90,8 @@ function formFromLabel(label) {
 function moveKey(nameOrId) {
   const k = String(nameOrId || "")
     .replace(/_FAST$/i, "")
+    // PvPoke 는 방패폼 개검의 빠른기술을 AEGISLASH_CHARGE_PSYCHO_CUT 처럼 별도 ID 로 둔다 → 원래 기술로 통일
+    .replace(/^AEGISLASH_CHARGE_/i, "")
     .toLowerCase()
     .replace(/[^a-z0-9]/g, "");
   // PvPoke 는 잠재파워를 타입별 16개로 펼쳐 놓는다 → 하나로 합침
@@ -128,7 +131,8 @@ function parsePokemonGoApi(json) {
   const moveNames = new Map();
   if (!Array.isArray(json)) throw new Error("pokedex.json 이 배열이 아님");
 
-  const registerMoves = (moves, out) => {
+  const moveKinds = new Map();
+  const registerMoves = (moves, out, kind) => {
     for (const m of asList(moves)) {
       if (!m) continue;
       const id = m.id || m.moveId || "";
@@ -136,6 +140,7 @@ function parsePokemonGoApi(json) {
       const key = moveKey(id || en);
       if (!key) continue;
       if (!moveNames.has(key)) moveNames.set(key, { name: en, nameKr: m.names?.Korean || null });
+      if (kind && !moveKinds.has(key)) moveKinds.set(key, kind);
       out.push(key);
     }
   };
@@ -147,10 +152,10 @@ function parsePokemonGoApi(json) {
     const key = `${p.dexNr}:${form}`;
     if (records.has(key)) return;
     const fast = [], charged = [], eliteFast = [], eliteCharged = [];
-    registerMoves(p.quickMoves, fast);
-    registerMoves(p.cinematicMoves, charged);
-    registerMoves(p.eliteQuickMoves, eliteFast);
-    registerMoves(p.eliteCinematicMoves, eliteCharged);
+    registerMoves(p.quickMoves, fast, "fast");
+    registerMoves(p.cinematicMoves, charged, "charged");
+    registerMoves(p.eliteQuickMoves, eliteFast, "fast");
+    registerMoves(p.eliteCinematicMoves, eliteCharged, "charged");
     records.set(key, {
       key, id: p.dexNr, form,
       name: p.names?.English || titleCase(p.id),
@@ -166,7 +171,7 @@ function parsePokemonGoApi(json) {
     addEntry(p);
     for (const rf of asList(p.regionForms)) addEntry(rf);
   }
-  return { records, moveNames };
+  return { records, moveNames, moveKinds };
 }
 
 function parsePvpoke(json) {
@@ -174,12 +179,13 @@ function parsePvpoke(json) {
   const moveNames = new Map();
   if (!json || !Array.isArray(json.pokemon)) throw new Error("gamemaster.json 형식 불일치");
 
-  const moveById = new Map();
+  const moveKinds = new Map();
   for (const m of json.moves || []) {
     if (!m?.moveId) continue;
-    moveById.set(m.moveId, m);
     const key = moveKey(m.moveId);
-    if (!moveNames.has(key)) moveNames.set(key, { name: m.name || titleCase(m.moveId) });
+    if (!moveNames.has(key)) moveNames.set(key, { name: (m.name || titleCase(m.moveId)).replace(/^Aegislash Charge\s+/i, "") });
+    // 빠른기술은 에너지를 얻고(energyGain>0), 차징기술은 에너지를 쓴다(energy>0)
+    if (!moveKinds.has(key)) moveKinds.set(key, (m.energyGain || 0) > 0 || (m.energy || 0) === 0 ? "fast" : "charged");
   }
 
   for (const p of json.pokemon) {
@@ -213,7 +219,7 @@ function parsePvpoke(json) {
       hasMoves: fastAll.length + chargedAll.length > 0,
     });
   }
-  return { records, moveNames };
+  return { records, moveNames, moveKinds };
 }
 
 function parsePogoapi(statsJson, movesJson) {
@@ -269,6 +275,25 @@ function parsePokeminers(json) {
     for (const f of fs.forms) if (f?.isCostume && f.form) costume.add(f.form);
   }
 
+  // 기술 템플릿: 숫자 ID → 기술 ID 매핑 (일부 포켓몬은 cinematicMoves 에 497 같은 숫자로 들어 있음), 빠른/차징 종류
+  const moveIdByNumber = new Map();
+  const moveKinds = new Map();
+  for (const t of json) {
+    const mt = String(t?.templateId || "").match(/^V(\d{4})_MOVE_(.+)$/);
+    if (!mt) continue;
+    moveIdByNumber.set(Number(mt[1]), mt[2]);
+    moveKinds.set(moveKey(mt[2]), /_FAST$/.test(mt[2]) ? "fast" : "charged");
+  }
+  let unresolvedNumeric = 0;
+  const resolveMove = (id) => {
+    if (typeof id === "number" || /^\d+$/.test(String(id))) {
+      const name = moveIdByNumber.get(Number(id));
+      if (!name) { unresolvedNumeric++; return null; } // 매핑 실패한 숫자 ID 는 제외
+      return name;
+    }
+    return id;
+  };
+
   for (const t of json) {
     const tid = t?.templateId || t?.data?.templateId || "";
     const ps = t?.data?.pokemonSettings;
@@ -285,13 +310,15 @@ function parsePokeminers(json) {
     // 폼이 명시된 템플릿(예: PIKACHU_NORMAL)을 폼 없는 기본 템플릿보다 우선
     if (records.has(key) && !(formId && !records.get(key)._explicitForm)) continue;
 
-    const reg = (ids) => (ids || []).map((id) => {
+    const reg = (ids) => (ids || []).map(resolveMove).filter(Boolean).map((id) => {
       const key = moveKey(id);
       if (key && !moveNames.has(key)) moveNames.set(key, { name: titleCase(String(id).replace(/_FAST$/, "")) });
       return key;
     }).filter(Boolean);
     const fast = reg(ps.quickMoves), charged = reg(ps.cinematicMoves);
-    const eliteFast = reg(ps.eliteQuickMove), eliteCharged = reg(ps.eliteCinematicMove);
+    // 전용기(nonTmCinematicMoves: 메테오나이트 등 아이템/이벤트로만 배우는 기술)는 한정 차징기술로 포함
+    const eliteFast = reg(ps.eliteQuickMove);
+    const eliteCharged = dedupe([...reg(ps.eliteCinematicMove), ...reg(ps.nonTmCinematicMoves)]);
     records.set(key, {
       key, id: dex, form,
       name: titleCase(pokemonId), nameKr: null,
@@ -302,13 +329,14 @@ function parsePokeminers(json) {
       _explicitForm: Boolean(formId),
     });
   }
-  return { records, moveNames };
+  if (unresolvedNumeric) console.warn(`[pokemonData] pokeminers: 이름을 찾지 못한 숫자 기술 ID ${unresolvedNumeric}건 제외`);
+  return { records, moveNames, moveKinds };
 }
 
 // ─── fetch ───
 
 async function fetchJson(url, { timeoutMs = 10000, revalidate, fetchImpl = fetch } = {}) {
-  const opts = { signal: AbortSignal.timeout(timeoutMs), headers: { "User-Agent": "PoGoDoctor/1.0 (+vercel)" } };
+  const opts = { signal: AbortSignal.timeout(timeoutMs), headers: { "User-Agent": "PoGoDoctor/1.0 (+vercel)", Accept: "application/json" } };
   // 2MB 이하 응답만 Next.js 데이터 캐시 대상. 큰 파일은 no-store 로 두고 모듈 메모리 캐시에 의존.
   if (revalidate) opts.next = { revalidate };
   else opts.cache = "no-store";
@@ -369,8 +397,17 @@ async function loadSource(sourceKey, fetchImpl) {
       setUpdated(toIso(hashes?.json?.["pokemon_stats.json"]?.last_modified), "api_hashes.last_modified");
       setUpdated(stats.lastModified, "Last-Modified");
     } else if (sourceKey === "pokeminers") {
-      const r = await fetchJson(def.url, { fetchImpl, timeoutMs: 20000 });
+      // raw.githubusercontent 는 Last-Modified 를 주지 않으므로 GitHub commits API 로 최신 커밋 시각을 보완 (무인증 60회/시간, 24h 캐시로 충분)
+      const [r, commits] = await Promise.all([
+        fetchJson(def.url, { fetchImpl, timeoutMs: 20000 }),
+        fetchJson(def.commitsUrl, { fetchImpl, timeoutMs: 8000, revalidate: 6 * 3600 }).catch((e) => {
+          console.warn(`[pokemonData] pokeminers commits API 실패: ${e.message}`);
+          return null;
+        }),
+      ]);
       parsed = parsePokeminers(r.json);
+      const c = Array.isArray(commits?.json) ? commits.json[0] : null;
+      setUpdated(toIso(c?.commit?.committer?.date || c?.commit?.author?.date), "GitHub commits API");
       setUpdated(r.lastModified, "Last-Modified");
     }
     meta.ok = true;
@@ -493,6 +530,33 @@ function crossValidate(loaded /* {sourceKey: {meta, parsed}} */) {
   }
   const moveDisplay = (k) => moveRegistry.get(k)?.name || k;
 
+  // 기술 종류(빠른/차징) 전역 판정: 소스별 목록 위치가 아니라 기술 자체의 종류를 다수결로 정한다
+  const kindVotes = new Map();
+  for (const s of active) {
+    for (const [k, kind] of s.moveKinds || []) {
+      if (!kindVotes.has(k)) kindVotes.set(k, { fast: 0, charged: 0 });
+      kindVotes.get(k)[kind]++;
+    }
+  }
+  const kindOf = (k, fallback) => {
+    const v = kindVotes.get(k);
+    if (!v || v.fast === v.charged) return fallback;
+    return v.fast > v.charged ? "fast" : "charged";
+  };
+  // 소스 레코드의 fast/charged/elite 목록을 전역 종류 기준으로 재배치
+  const normalizeLists = (rec) => {
+    const fast = [], charged = [], eliteFast = [], eliteCharged = [];
+    const place = (list, fallback, elite) => {
+      for (const k of list || []) {
+        const kind = kindOf(k, fallback);
+        (elite ? (kind === "fast" ? eliteFast : eliteCharged) : (kind === "fast" ? fast : charged)).push(k);
+      }
+    };
+    place(rec.fast, "fast", false); place(rec.charged, "charged", false);
+    place(rec.eliteFast, "fast", true); place(rec.eliteCharged, "charged", true);
+    return { ...rec, fast: dedupe(fast), charged: dedupe(charged), eliteFast: dedupe(eliteFast), eliteCharged: dedupe(eliteCharged) };
+  };
+
   const allKeys = new Set();
   for (const s of active) for (const k of s.records.keys()) allKeys.add(k);
 
@@ -503,7 +567,7 @@ function crossValidate(loaded /* {sourceKey: {meta, parsed}} */) {
   let statDisputes = 0, moveDisputes = 0, typeDisputes = 0;
 
   for (const key of allKeys) {
-    const recs = active.map((s) => ({ src: s.name, rec: s.records.get(key) })).filter((r) => r.rec);
+    const recs = active.map((s) => ({ src: s.name, rec: s.records.get(key) })).filter((r) => r.rec).map((r) => ({ src: r.src, rec: normalizeLists(r.rec) }));
     const first = recs[0].rec;
 
     const stat = (field) => {
