@@ -351,7 +351,9 @@ async function loadSource(sourceKey, fetchImpl) {
     } else if (sourceKey === "pvpoke") {
       const r = await fetchJson(def.url, { fetchImpl, revalidate: 6 * 3600 });
       parsed = parsePvpoke(r.json);
-      setUpdated(toIso(r.json?.timestamp), "gamemaster.timestamp");
+      // PvPoke timestamp 는 "YYYY-MM-DD HH:mm:ss" 로 시간대 표기가 없다(빌드 서버 로컬 시각). UTC 로 간주해 저장하되 표기해 둔다.
+      setUpdated(toIso(String(r.json?.timestamp || "").replace(" ", "T") + (/(Z|[+-]\d\d:?\d\d)$/.test(String(r.json?.timestamp || "")) ? "" : "Z")), "gamemaster.timestamp (시간대 미표기)");
+      if (meta.updatedAt && !r.lastModified) meta.updatedAtTzUnknown = true;
       setUpdated(r.lastModified, "Last-Modified");
     } else if (sourceKey === "pogoapi") {
       const [stats, moves, hashes] = await Promise.all([
@@ -439,8 +441,26 @@ function mergeMoves(entries /* [{src, list, elite}] */) {
   return { regular, elite, unverified, warnings };
 }
 
+// 갱신 시각이 SOURCE_STALE_DAYS(기본 60일) 이상 지난 소스는 투표에서 제외한다. 갱신 시각을 모르는 소스는 판단 불가 → 제외하지 않음.
+function staleDays() {
+  const n = Number(process.env.SOURCE_STALE_DAYS);
+  return Number.isFinite(n) && n > 0 ? n : 60;
+}
+function markStale(meta) {
+  if (!meta?.ok || !meta.updatedAt) { if (meta) meta.stale = false; return; }
+  const ageDays = (Date.now() - Date.parse(meta.updatedAt)) / 86400000;
+  meta.ageDays = Math.round(ageDays);
+  meta.stale = ageDays >= staleDays();
+}
+
 function crossValidate(loaded /* {sourceKey: {meta, parsed}} */) {
-  const active = SOURCE_ORDER.filter((k) => loaded[k]?.parsed).map((k) => ({ key: k, name: SOURCE_DEFS[k].name, ...loaded[k].parsed }));
+  for (const k of SOURCE_ORDER) markStale(loaded[k]?.meta);
+  let usable = SOURCE_ORDER.filter((k) => loaded[k]?.parsed && !loaded[k].meta.stale);
+  const excluded = SOURCE_ORDER.filter((k) => loaded[k]?.parsed && loaded[k].meta.stale).map((k) => SOURCE_DEFS[k].name);
+  // 투표 가능한 소스가 하나도 없으면 오래된 소스라도 사용(서비스 중단 방지)
+  const fallbackToStale = usable.length === 0 && excluded.length > 0;
+  if (fallbackToStale) usable = SOURCE_ORDER.filter((k) => loaded[k]?.parsed);
+  const active = usable.map((k) => ({ key: k, name: SOURCE_DEFS[k].name, ...loaded[k].parsed }));
   const updatedMs = {};
   for (const k of SOURCE_ORDER) {
     const iso = loaded[k]?.meta?.updatedAt;
@@ -536,7 +556,13 @@ function crossValidate(loaded /* {sourceKey: {meta, parsed}} */) {
   const moveNamesKr = {};
   for (const [, v] of moveRegistry) if (v.nameKr) moveNamesKr[v.name] = v.nameKr;
 
-  return { pokemon, moveNamesKr, warnings, counts, disputes: statDisputes + typeDisputes + moveDisputes };
+  return {
+    pokemon, moveNamesKr, warnings, counts,
+    disputes: statDisputes + typeDisputes + moveDisputes,
+    votableCount: fallbackToStale ? 0 : active.length,
+    excludedStale: excluded,
+    fallbackToStale,
+  };
 }
 
 // ─── 데이터셋 빌드 + 메모리 캐시 ───
@@ -572,7 +598,7 @@ export async function buildDataset({ fetchImpl = fetch } = {}) {
   const primaryOk = PRIMARY_SOURCES.filter((k) => loaded[k].parsed).length;
 
   // 불일치가 있거나 정상 소스가 2개 미만이면 PokeMiners 를 추가 투표 소스로 조회
-  const needReferee = cv.disputes > 0 || primaryOk < 2;
+  const needReferee = cv.disputes > 0 || primaryOk < 2 || cv.votableCount < 2;
   if (needReferee) {
     loaded.pokeminers = await loadPokeminersCached(fetchImpl);
     if (loaded.pokeminers.parsed) cv = crossValidate(loaded);
@@ -580,13 +606,16 @@ export async function buildDataset({ fetchImpl = fetch } = {}) {
     loaded.pokeminers = { meta: { name: SOURCE_DEFS.pokeminers.name, url: SOURCE_DEFS.pokeminers.url, fetchedAt: null, ok: null, skipped: true, count: 0, reason: "1~3순위 소스 불일치 없음 → 조회 생략" }, parsed: null };
   }
 
-  const { pokemon, moveNamesKr, warnings, counts } = cv;
+  const { pokemon, moveNamesKr, warnings, counts, votableCount, excludedStale, fallbackToStale } = cv;
   const dataSources = SOURCE_ORDER.map((k) => loaded[k].meta);
   const okCount = dataSources.filter((s) => s.ok).length;
 
   const extra = [];
   if (!loaded.pokemonGoApi.parsed) extra.push("[source] pokemon-go-api 실패 → 한국어 이름 미제공(영문 표기)");
-  if (okCount < 2) extra.push(`[source] 정상 소스 ${okCount}개 → 교차검증 불가, 단일 소스 값 사용`);
+  if (excludedStale.length) extra.push(`[source] 갱신 ${staleDays()}일 이상 경과로 투표 제외: ${excludedStale.join(", ")}`);
+  if (fallbackToStale) extra.push("[source] 투표 가능 소스 0개 → 오래된 소스 값을 임시 사용");
+  else if (votableCount < 2) extra.push(`[source] 투표 가능 소스 ${votableCount}개 → 교차검증 불가, 단일 소스 값 사용`);
+  else if (okCount < 2) extra.push(`[source] 정상 소스 ${okCount}개 → 교차검증 불가, 단일 소스 값 사용`);
   if (needReferee && !loaded.pokeminers.parsed) extra.push("[source] PokeMiners 조회 실패 → 불일치 항목은 다수결·최신 갱신 소스 기준으로만 판단");
   const allWarnings = [...extra, ...warnings];
 
@@ -604,6 +633,8 @@ export async function buildDataset({ fetchImpl = fetch } = {}) {
     dataWarnings: allWarnings.slice(0, 100),
     dataWarningCount: allWarnings.length,
     dataWarningCounts: counts,
+    votableCount,
+    staleDays: staleDays(),
   };
 }
 

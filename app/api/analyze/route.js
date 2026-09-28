@@ -404,7 +404,8 @@ PvP 메타 포켓몬이면 PvP 기준으로, PvE 메타면 PvE 기준으로 IV�
               contents: [{ parts: [{ text: userMessage }] }],
               generationConfig: {
                 temperature: 0.8,
-                maxOutputTokens: 2000,
+                // Gemini 3.x 는 생각(thinking) 토큰도 이 한도에 포함되므로 2000 이면 본문이 중간에 잘린다
+                maxOutputTokens: 8192,
               },
             }),
           }
@@ -427,31 +428,43 @@ PvP 메타 포켓몬이면 PvP 기준으로, PvE 메타면 PvE 기준으로 IV�
             controller.enqueue(encoder.encode(`__MODEL__:${model}\n`));
 
             let buffer = "";
+            let finishReason = null;
+            let usage = null;
+            const handleLine = (line) => {
+              if (!line.startsWith("data:")) return;
+              const jsonStr = line.slice(5).trim();
+              if (!jsonStr || jsonStr === "[DONE]") return;
+              try {
+                const parsed = JSON.parse(jsonStr);
+                const cand = parsed?.candidates?.[0];
+                // 생각(thought) 파트는 제외하고 텍스트 파트를 전부 이어 붙인다 (parts[0] 만 읽으면 본문이 누락됨)
+                for (const part of cand?.content?.parts || []) {
+                  if (part?.thought) continue;
+                  if (part?.text) controller.enqueue(encoder.encode(part.text));
+                }
+                if (cand?.finishReason) finishReason = cand.finishReason;
+                if (parsed?.usageMetadata) usage = parsed.usageMetadata;
+              } catch {}
+            };
             try {
               while (true) {
                 const { done, value } = await reader.read();
                 if (done) break;
-
                 buffer += decoder.decode(value, { stream: true });
                 const lines = buffer.split("\n");
                 buffer = lines.pop() || "";
-
-                for (const line of lines) {
-                  if (!line.startsWith("data: ")) continue;
-                  const jsonStr = line.slice(6).trim();
-                  if (!jsonStr || jsonStr === "[DONE]") continue;
-
-                  try {
-                    const parsed = JSON.parse(jsonStr);
-                    const text = parsed?.candidates?.[0]?.content?.parts?.[0]?.text;
-                    if (text) {
-                      controller.enqueue(encoder.encode(text));
-                    }
-                  } catch {}
-                }
+                for (const line of lines) handleLine(line);
               }
+              buffer += decoder.decode();
+              if (buffer.trim()) handleLine(buffer);
             } catch (e) {
               controller.enqueue(encoder.encode(`\n__ERROR__:스트리밍 중 오류 발생`));
+            }
+            if (finishReason && finishReason !== "STOP") {
+              console.warn(`[analyze] ${model} finishReason=${finishReason} usage=${JSON.stringify(usage)}`);
+              if (finishReason === "MAX_TOKENS") controller.enqueue(encoder.encode("\n\n⚠️ 응답이 출력 길이 제한으로 잘렸습니다. 다시 시도해 주세요."));
+            } else if (process.env.POGO_DEBUG_PROMPT) {
+              console.log(`[analyze] ${model} finishReason=${finishReason} usage=${JSON.stringify(usage)}`);
             }
             controller.close();
           },

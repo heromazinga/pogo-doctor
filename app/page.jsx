@@ -132,7 +132,7 @@ export default function Home() {
           setAllPokemon(data.pokemon);
           // 서버가 모아준 한국어 기술명 (pokemon-go-api) → PokeAPI 호출 최소화
           if (data.moveNamesKr) setMoveNamesKr((prev) => ({ ...data.moveNamesKr, ...prev }));
-          setDataMeta({ generatedAt: data.generatedAt, stale: data.stale, dataSources: data.dataSources || [], dataWarningCount: data.dataWarningCount || 0, dataWarningCounts: data.dataWarningCounts || {} });
+          setDataMeta({ generatedAt: data.generatedAt, stale: data.stale, dataSources: data.dataSources || [], dataWarningCount: data.dataWarningCount || 0, dataWarningCounts: data.dataWarningCounts || {}, votableCount: data.votableCount });
         } else if (data && data.error) {
           setError(`포켓몬 데이터 로드 실패: ${data.error}`);
           if (data.dataSources) setDataMeta({ generatedAt: null, dataSources: data.dataSources, dataWarningCount: 0 });
@@ -546,6 +546,13 @@ export default function Home() {
   };
 
   const formatResult = (text) => text.split("\n").map((line, i) => {
+    // 마크다운 제목(#, ##, ###...) → 제목 스타일
+    const heading = line.match(/^\s{0,3}(#{1,6})\s+(.*)$/);
+    if (heading) {
+      const level = heading[1].length;
+      return <div key={i} style={{ ...s.resultTitle, fontSize: level <= 2 ? 17 : level === 3 ? 15 : 14, marginTop: 10 }}>{renderBold(heading[2].replace(/\s+#+\s*$/, ""))}</div>;
+    }
+    if (/^\s*(-{3,}|\*{3,}|_{3,})\s*$/.test(line)) return <div key={i} style={{ borderTop: "1px solid rgba(255,255,255,0.08)", margin: "8px 0" }} />;
     if (line.startsWith("**") && line.includes("👉")) return <div key={i} style={s.resultTitle}>{line.replace(/\*\*/g, "")}</div>;
     if (line.includes("**판정:**") || line.includes("**판정:")) {
       const color = line.includes("영구 보존") || line.includes("킵") ? "#4ecdc4" : line.includes("보류") ? "#ffd93d" : line.includes("사탕행") ? "#ff6b6b" : "#a890f0";
@@ -591,7 +598,15 @@ export default function Home() {
     if (!iso) return "확인 불가";
     const d = new Date(iso);
     if (isNaN(d.getTime())) return "확인 불가";
-    return `${d.getMonth() + 1}/${d.getDate()} ${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+    // 연도 포함, 브라우저 로컬 시간대
+    return `${d.getFullYear()}/${String(d.getMonth() + 1).padStart(2, "0")}/${String(d.getDate()).padStart(2, "0")} ${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+  };
+  const sourceStatus = (src) => {
+    if (src.skipped) return `${src.name} 생략`;
+    if (!src.ok) return `${src.name} ✗`;
+    if (src.stale) return `${src.name} 오래됨(투표 제외, 갱신 ${fmtStamp(src.updatedAt)}, ${src.ageDays}일 경과)`;
+    if (!src.updatedAt) return `${src.name} ✓ (갱신 시각 미상)`;
+    return `${src.name} ✓ (갱신 ${fmtStamp(src.updatedAt)}${src.updatedAtTzUnknown ? " · 시간대 미표기" : ""})`;
   };
   const modelLine = (model) => `⚡ ${model.replace("gemini-", "").replace("-preview", "")}${analysisMeta?.generatedAt ? ` · 데이터 ${fmtStamp(analysisMeta.generatedAt)}${analysisMeta.verified ? " ✓검증" : ""}` : ""}`;
 
@@ -1063,7 +1078,10 @@ export default function Home() {
             <p style={{ fontSize: 10, opacity: 0.7, marginTop: 4, lineHeight: 1.6 }}>
               데이터 기준 시각: {fmtStamp(dataMeta.generatedAt)}{dataMeta.stale ? " (이전 캐시)" : ""}
               <br />
-              {dataMeta.dataSources.map((src) => `${src.name} ${src.ok ? "✓" : src.skipped ? "생략" : "✗"}${src.ok && src.updatedAt ? ` (갱신 ${fmtStamp(src.updatedAt)})` : src.ok ? " (갱신 시각 미상)" : ""}`).join(" · ")}
+              {dataMeta.dataSources.map(sourceStatus).join(" · ")}
+              {typeof dataMeta.votableCount === "number" && dataMeta.votableCount < 2 && (
+                <><br /><span style={{ color: "#ff6b6b", fontWeight: 700 }}>⚠️ 투표 가능 소스 {dataMeta.votableCount}개 — 교차검증이 불가하므로 데이터 신뢰도가 낮습니다</span></>
+              )}
               {dataMeta.dataWarningCount > 0 ? ` · 소스 불일치 ${dataMeta.dataWarningCount}건 (종족값 ${dataMeta.dataWarningCounts?.stat ?? 0} · 타입 ${dataMeta.dataWarningCounts?.type ?? 0} · 기술 다수결 ${dataMeta.dataWarningCounts?.moveMajority ?? 0} · 기술 미검증 ${dataMeta.dataWarningCounts?.moveUnverified ?? 0})` : ""}
             </p>
           )}

@@ -61,6 +61,7 @@
 | `POGO_DISABLE_SOURCES` | X | 테스트용. 지정한 데이터 소스를 실패한 것으로 처리 (`pokemon-go-api,pvpoke,pogoapi,pokeminers`) |
 | `POKEMON_DATA_TTL_MS` | X | 포켓몬 데이터 메모리 캐시 시간(ms), 기본 6시간 |
 | `POKEMINERS_TTL_MS` | X | PokeMiners 원본 파싱 결과 캐시 시간(ms), 기본 24시간 |
+| `SOURCE_STALE_DAYS` | X | 갱신 시각이 이 일수 이상 지난 소스는 투표에서 제외(화면에 "오래됨(투표 제외)"), 기본 60 |
 | `POGO_DEBUG_PROMPT` | X | `1` 이면 Gemini 에 보내는 프롬프트를 서버 로그에 출력 |
 
 ## 데이터 소스
@@ -81,6 +82,7 @@
 
 - 종족값(공/방/체)·타입·기술 목록을 소스별로 정규화해 비교한다.
 - **2개 이상 소스가 일치하는 값을 채택**한다(다수결). 최다 득표가 동률이거나 전부 다르면 **가장 최근 갱신된 소스**의 값을 따른다. PokeMiners 를 "최종 기준"으로 특별 취급하지 않는다(`latest.json` 이 항상 최신이 아님이 확인됨).
+- 갱신 시각이 `SOURCE_STALE_DAYS`(기본 60일) 이상 지난 소스는 투표에서 제외하고 화면에 "오래됨(투표 제외)"으로 표시한다. 투표 가능 소스가 2개 미만이면 화면에 경고를 띄우고, 0개면 오래된 소스 값을 임시로 사용한다. 갱신 시각을 모르는 소스는 제외하지 않는다.
 - 소스 갱신 시각(`dataSources[].updatedAt`)은 PvPoke `gamemaster.timestamp`, pogoapi `api_hashes.json` 의 `last_modified`, 그 외 HTTP `Last-Modified` 로 기록하며(`updatedAtFrom` 에 근거 표기), 화면 하단에 소스별로 표시된다. 알 수 없으면 동률 판단에서 가장 후순위.
 - 기술은 2개 이상 소스에 있으면 "검증됨"으로 채택한다. 한 소스에만 있는 기술은 제외하지 않고 `unverifiedFast/unverifiedCharged` 로 분리해 화면에 **미검증(❔)** 으로 노출한다. "미검증"은 교차검증 소스가 1개라는 뜻일 뿐 **미출시로 판단하지 않는다.** AI 프롬프트 규칙: 미검증 기술은 배제하지 않되 "(미검증)"으로 명시하고, 주력 추천은 검증 기술 우선.
 - PokeMiners 원본(약 20MB)은 1~3순위 소스 간 불일치가 있을 때(또는 정상 소스가 2개 미만일 때)만 추가 투표용으로 조회하고, 파싱 결과는 24시간(`POKEMINERS_TTL_MS`) 메모리 캐시한다.
