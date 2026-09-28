@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { getPokemonDataset, findPokemon } from "../../lib/pokemonData";
 import { analyzeDefender } from "../../lib/typeChart";
+import { renderGlossary, findForbidden } from "../../lib/glossary";
 
 export const maxDuration = 60;
 
@@ -137,24 +138,23 @@ function todayKST() {
   return `${iso} (${human})`;
 }
 
-// 기술명을 "한국어(영어)" 로 표기 (서버가 모은 moveNamesKr 사용, 없으면 영어만)
+// 기술명을 "한국어(영어)" 로 표기 (서버가 모은 moveNamesKr 사용). 한국어명이 없으면 영어만 쓰고 요청 단위로 경고를 모은다.
+const missingKrThisRequest = new Set();
 function mvName(dataset, en) {
   const kr = dataset?.moveNamesKr?.[en];
+  if (!kr) missingKrThisRequest.add(en);
   return kr ? `${kr}(${en})` : en;
 }
 const mvList = (dataset, arr) => (arr || []).map((m) => mvName(dataset, m)).join(", ");
+function flushMissingKrWarning(mode) {
+  if (missingKrThisRequest.size) {
+    console.warn(`[analyze] 한국어명 없는 기술이 프롬프트에 포함됨 (${mode}): ${[...missingKrThisRequest].join(", ")}`);
+    missingKrThisRequest.clear();
+  }
+}
 
-// 포켓몬GO 용어집: 프롬프트에 고정 포함. 여기 없는 용어를 새로 만들지 않도록 한다.
-const GLOSSARY_BLOCK = `
-
-## 📖 용어집 (반드시 이 표기만 사용, 여기 없는 용어를 새로 만들지 말 것)
-- 기술 종류: **빠른 기술** / **차징 기술** 두 가지뿐. ("노멀기술", "일반기술", "메인기술", "필살기" 같은 표현 금지)
-- 기술 습득 수단: **기술머신(노말)**, **기술머신(스페셜)**, **대단한 기술머신(노말)**, **대단한 기술머신(스페셜)**. 레거시 기술은 대단한 기술머신으로만 습득.
-- 전용기 아이템: **메테오나이트**(레쿠쟈 화룡점정). "운석", "운석 아이템" 등 다른 표현 금지. 그 외 전용기는 폼 체인지(융합·왕관)로 습득.
-- 자원: **별의모래**, **사탕**, **XL사탕**
-- 시스템: **메가진화**, **섀도**(섀도 포켓몬), **정화**, **개체값(공격/방어/HP)**, **레이드**, **맥스배틀**(다이맥스/거다이맥스)
-- 타입 배율(포켓몬GO 기준): **약점 1.6배**, **이중 약점 2.56배**, **반감 0.625배**, **이중 반감 0.39배**. 본가 표현("4배 약점", "2배", "무효", "1/4") 금지.
-- 이름 표기: 포켓몬명·기술명은 제공된 데이터의 **한국어(영어)** 표기를 그대로 사용. 제공되지 않은 한국어 이름을 임의로 번역·창작하지 말고 영어 그대로 쓸 것.`;
+// 포켓몬GO 용어집 (app/lib/glossary.js): 프롬프트에 고정 포함, 답변의 금지 표현 검사에도 사용
+const GLOSSARY_BLOCK = renderGlossary();
 
 function freshnessBlock(dataset) {
   const stamp = dataset?.generatedAt ? new Date(dataset.generatedAt).toLocaleString("ko-KR", { timeZone: "Asia/Seoul" }) : "확인 불가";
@@ -420,6 +420,7 @@ PvP 메타 포켓몬이면 PvP 기준으로, PvE 메타면 PvE 기준으로 IV�
     }
 
     systemPrompt += freshnessBlock(dataset);
+    flushMissingKrWarning(mode || "analyze");
     const metaValue = metaHeader(dataset, { verified: verifiedCount });
     if (process.env.POGO_DEBUG_PROMPT) {
       console.log("[analyze] system prompt tail:\n" + systemPrompt.slice(-3000));
@@ -489,6 +490,7 @@ PvP 메타 포켓몬이면 PvP 기준으로, PvE 메타면 PvE 기준으로 IV�
             let buffer = "";
             let finishReason = null;
             let usage = null;
+            let fullText = ""; // 금지 표현 검사용
             const handleLine = (line) => {
               if (!line.startsWith("data:")) return;
               const jsonStr = line.slice(5).trim();
@@ -499,7 +501,7 @@ PvP 메타 포켓몬이면 PvP 기준으로, PvE 메타면 PvE 기준으로 IV�
                 // 생각(thought) 파트는 제외하고 텍스트 파트를 전부 이어 붙인다 (parts[0] 만 읽으면 본문이 누락됨)
                 for (const part of cand?.content?.parts || []) {
                   if (part?.thought) continue;
-                  if (part?.text) controller.enqueue(encoder.encode(part.text));
+                  if (part?.text) { fullText += part.text; controller.enqueue(encoder.encode(part.text)); }
                 }
                 if (cand?.finishReason) finishReason = cand.finishReason;
                 if (parsed?.usageMetadata) usage = parsed.usageMetadata;
@@ -518,6 +520,11 @@ PvP 메타 포켓몬이면 PvP 기준으로, PvE 메타면 PvE 기준으로 IV�
               if (buffer.trim()) handleLine(buffer);
             } catch (e) {
               controller.enqueue(encoder.encode(`\n__ERROR__:스트리밍 중 오류 발생`));
+            }
+            // 용어집 금지 표현 검사 → 서버 로그 경고 (답변은 그대로 전달)
+            const forbidden = findForbidden(fullText);
+            if (forbidden.length) {
+              console.warn(`[analyze] ${model} 금지 표현 ${forbidden.length}건 (${mode || "analyze"}): ${forbidden.map((f) => `"${f.matched}"→${f.term}`).join(" | ")}`);
             }
             if (finishReason && finishReason !== "STOP") {
               console.warn(`[analyze] ${model} finishReason=${finishReason} usage=${JSON.stringify(usage)}`);
