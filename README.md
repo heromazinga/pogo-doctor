@@ -175,6 +175,32 @@ Vercel 에서는 환경변수 `POGO_DISABLE_SOURCES` 를 Preview 환경에 잠�
 ### 테스트
 `npm test` (`node --test tests/*.test.mjs`): 레벨 추정(뮤츠·레쿠쟈·망나뇽 L40 100% CP, 반 레벨 왕복), 섀도 보정, 레이드 순서(마기라스 → 격투 상위, 박사행 제외, 6마리 채움), 로켓 슬롯 커버.
 
+## 3-0단계: 계정 연결 (익명 → 이메일 인증)
+
+기기마다 따로 생기는 익명 계정을 이메일(OTP 6자리 코드)로 정식 계정에 연결해, 안드로이드 수집기(3-1)·다른 브라우저와 같은 목록을 쓰게 한다. 비밀번호 없음. 연결하지 않아도 익명으로 계속 사용 가능.
+
+### 사용자가 해야 하는 Supabase 설정
+1. Authentication → Sign In / Providers → **Email**: Enable 상태 확인(기본 켜짐). "Confirm email" 켜짐 유지. **Anonymous Sign-Ins** 도 그대로 켜 둔다.
+2. Authentication → **Email Templates** 에서 아래 3개 템플릿 본문에 `{{ .Token }}`(6자리 코드)이 포함되도록 수정. 기본 템플릿은 링크(`{{ .ConfirmationURL }}`)만 있어 코드가 오지 않는다. 예: `<p>인증 코드: <b>{{ .Token }}</b></p>`
+   - **Magic Link** — 기존 사용자가 "다른 기기 계정으로 로그인" 할 때
+   - **Confirm sign up** — 새 이메일로 처음 로그인할 때
+   - **Change Email Address** — 익명 계정에 "이 계정에 이메일 연결" 할 때
+3. (선택) Authentication → Sign In / Providers → Email → **Secure email change** 를 끄면 새 주소 한 곳만 확인한다. 익명 계정은 기존 이메일이 없어 켜 둬도 새 주소만 확인하므로 필수는 아님.
+4. 리다이렉트 URL 설정은 불필요(링크가 아닌 코드 입력 방식, `detectSessionInUrl: false`).
+5. 마이그레이션 없음. RLS 는 `user_id = auth.uid()` 그대로이며, 정식 계정도 같은 `auth.users` 행이다.
+
+### 동작 (`app/lib/account.js`)
+- **이 계정에 이메일 연결** (같은 기기): `auth.updateUser({ email })` → 코드 메일 → `auth.verifyOtp({ type: "email_change" })`. **user id 가 유지**되어 목록·사용 횟수가 그대로다. 이미 가입된 이메일이면 안내 후 "다른 기기 계정으로 로그인" 으로 유도.
+- **다른 기기 계정으로 로그인**: `auth.signInWithOtp({ email })` → `auth.verifyOtp({ type: "email" })`. user id 가 바뀌므로 로그인 전에 이 기기의 익명 목록을 스냅샷해 두고, 로그인 후 "합칠까요?" 를 묻는다. 합치면 로그인 계정에 삽입하되 **종·폼·CP·개체값(공/방/HP)·섀도가 같은 항목은 건너뛴다**. 합치지 않으면 익명 목록은 그 익명 계정에 남고 이 기기에서는 더 이상 보이지 않는다. 익명 계정의 AI 사용 횟수는 합치지 않는다(당일 한도는 계정별).
+- **로그아웃**: 세션 삭제 후 새 익명 계정으로 시작(확인 창).
+- 상태 표시줄: 익명이면 "🔗 계정 연결", 연결 후 "계정 연결됨 · 이메일" 과 "👤 계정".
+
+### 완료 기준 확인 절차
+1. 브라우저 A(익명, 목록 있음) → 🔗 계정 연결 → 이메일 연결 → 코드 입력 → "계정 연결됨" 표시, 목록·사용 횟수 유지.
+2. 브라우저 B(또는 시크릿 창) → 🔗 계정 연결 → "다른 기기 계정으로 로그인" 같은 이메일 → A 의 목록이 보임.
+3. B 에 익명 목록이 있었으면 로그인 후 병합 질문 → 합치기 → 중복 제외 추가 확인.
+4. Supabase 대시보드 Table Editor 에서 `my_pokemon.user_id` 가 이메일 계정 id 인지, 다른 계정으로는 조회되지 않는지(RLS) 확인.
+
 ## 셋업 (로컬)
 
 ```bash

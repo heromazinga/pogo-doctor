@@ -3,6 +3,7 @@ import { useState, useEffect, useCallback, useRef } from "react";
 import { ensureAnonymousSession, authHeader, supabaseConfigured } from "./lib/supabaseClient";
 import { listMyPokemon, insertMyPokemon, updateMyPokemon, deleteMyPokemon, migrateLocalCollection, getTodayUsage, STATUS_LABELS, PURPOSE_LABELS } from "./lib/myPokemon";
 import { usageDate } from "./lib/aiUsage";
+import { getAccountState, requestLinkEmail, verifyLinkEmail, snapshotAnonymousRows, requestSignInEmail, verifySignInEmail, mergeRowsIntoCurrent, signOutAccount } from "./lib/account";
 
 // my_pokemon 행 → 화면/AI 용 항목 (판정은 저장하지 않으므로 없음)
 function toEntry(r) {
@@ -49,6 +50,11 @@ export default function Home() {
   const [usedModel, setUsedModel] = useState("");
   const [session, setSession] = useState(null);
   const [sessionNotice, setSessionNotice] = useState(null);
+  // ─── 3-0 계정 연결 ───
+  const [account, setAccount] = useState(null); // { email, anonymous }
+  const [showAccount, setShowAccount] = useState(false);
+  const [acct, setAcct] = useState({ mode: null, email: "", code: "", step: "email", busy: false, error: null, info: null }); // mode: "link" | "signin"
+  const [pendingMerge, setPendingMerge] = useState(null); // { rows } 로그인 전 익명 목록 스냅샷
   const [usageCount, setUsageCount] = useState(null);
   const [saveOpts, setSaveOpts] = useState({ open: false, status: "keep", purposes: [], memo: "" });
   const [saving, setSaving] = useState(false);
@@ -191,6 +197,7 @@ export default function Home() {
       const s = await ensureAnonymousSession();
       if (!s) { setSessionNotice("서버 저장 연결 실패 · 목록 기능 비활성화"); return; }
       setSession(s);
+      setAccount(await getAccountState());
       const mig = await migrateLocalCollection();
       if (mig.migrated > 0) setSessionNotice(`기존 브라우저 목록 ${mig.migrated}건을 내 목록으로 옮겼습니다`);
       else if (mig.error) setSessionNotice(`기존 목록 이전 실패: ${mig.error} (원본 유지)`);
@@ -694,6 +701,63 @@ export default function Home() {
   // 로켓단 라인업 포켓몬(영어명) → 한국어명 (데이터셋 영어명 매칭, 없으면 영어)
   const rocketNameKr = (en) => { const q = String(en || "").toLowerCase(); const m = allPokemon.find((p) => p.name.toLowerCase() === q) || allPokemon.find((p) => q.includes(p.name.toLowerCase())); return m ? m.nameKr : en; };
 
+  // ─── 3-0 계정 연결 핸들러 ───
+  const acctSet = (patch) => setAcct((a) => ({ ...a, ...patch }));
+  const validEmail = (e) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(e || "").trim());
+  const afterAuthChange = async () => {
+    setAccount(await getAccountState());
+    const s = await ensureAnonymousSession();
+    setSession(s);
+    await reloadCollection();
+    setUsageCount(null); await refreshUsage();
+  };
+  const acctRequestCode = async () => {
+    const email = acct.email.trim();
+    if (!validEmail(email)) { acctSet({ error: "이메일 주소를 확인하세요" }); return; }
+    acctSet({ busy: true, error: null, info: null });
+    if (acct.mode === "signin") setPendingMerge(await snapshotAnonymousRows()); // 로그인 전 익명 목록 보관 (병합 질문용)
+    const { error } = acct.mode === "link" ? await requestLinkEmail(email) : await requestSignInEmail(email);
+    if (error) { acctSet({ busy: false, error }); return; }
+    acctSet({ busy: false, step: "code", info: `${email} 로 6자리 코드를 보냈습니다. 메일이 안 오면 스팸함을 확인하세요` });
+  };
+  const acctVerifyCode = async () => {
+    const email = acct.email.trim(), code = acct.code.trim();
+    if (!/^\d{6,8}$/.test(code)) { acctSet({ error: "메일의 숫자 코드를 입력하세요" }); return; }
+    acctSet({ busy: true, error: null });
+    if (acct.mode === "link") {
+      const { error } = await verifyLinkEmail(email, code);
+      if (error) { acctSet({ busy: false, error }); return; }
+      await afterAuthChange();
+      acctSet({ busy: false, step: "done", info: "이메일이 연결되었습니다. 목록·사용 횟수는 그대로 유지됩니다 (같은 계정)" });
+      setSessionNotice(null);
+    } else {
+      const { error, user } = await verifySignInEmail(email, code);
+      if (error) { acctSet({ busy: false, error }); return; }
+      await afterAuthChange();
+      const snap = pendingMerge;
+      const sameUser = snap?.userId && user?.id === snap.userId;
+      if (snap?.rows?.length > 0 && !sameUser) acctSet({ busy: false, step: "merge", info: `로그인했습니다. 이 기기의 익명 목록 ${snap.rows.length}건을 이 계정으로 합칠까요? (종·CP·개체값이 같은 항목은 건너뜀)` });
+      else { setPendingMerge(null); acctSet({ busy: false, step: "done", info: "로그인했습니다. 같은 이메일로 연결된 목록이 표시됩니다" }); }
+      setSessionNotice(null);
+    }
+  };
+  const acctMerge = async (yes) => {
+    if (!yes) { setPendingMerge(null); acctSet({ step: "done", info: "익명 목록은 합치지 않았습니다 (이 기기에서는 더 이상 보이지 않습니다)" }); return; }
+    acctSet({ busy: true, error: null });
+    const r = await mergeRowsIntoCurrent(pendingMerge?.rows || []);
+    setPendingMerge(null);
+    if (r.error) { acctSet({ busy: false, step: "done", error: `병합 실패: ${r.error}` }); return; }
+    await reloadCollection();
+    acctSet({ busy: false, step: "done", info: `병합 완료: ${r.inserted}건 추가, 중복 ${r.skipped}건 건너뜀` });
+  };
+  const acctSignOut = async () => {
+    if (!confirm("로그아웃하면 이 기기는 새 익명 계정으로 시작합니다. 이메일로 다시 로그인하면 목록을 볼 수 있습니다. 계속할까요?")) return;
+    acctSet({ busy: true, error: null });
+    await signOutAccount();
+    await afterAuthChange();
+    setAcct({ mode: null, email: "", code: "", step: "email", busy: false, error: null, info: "로그아웃했습니다 · 새 익명 계정" });
+  };
+
   const renderBold = (text) => {
     return text.split(/(\*\*[^*]+\*\*)/g).map((p, i) =>
       p.startsWith("**") && p.endsWith("**")
@@ -857,7 +921,10 @@ export default function Home() {
         </div>
         <div style={s.statusBar}>
           <span>{usageCount === null ? (session ? "오늘 AI 사용 —회" : "AI 사용 횟수 기록 안 됨") : `오늘 AI 사용 ${usageCount}회`}{fallbackNotice ? <span style={{ color: "#ffd93d", marginLeft: 8 }}>· {fallbackNotice}</span> : null}</span>
-          <span style={{ opacity: 0.7 }}>{sessionNotice || (session ? "이 기기에 저장됨 · 브라우저 데이터를 지우면 목록이 사라질 수 있음" : "")}</span>
+          <span style={{ opacity: 0.7, display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
+            {sessionNotice || (session ? (account && !account.anonymous ? `계정 연결됨 · ${account.email}` : "이 기기에 저장됨 · 브라우저 데이터를 지우면 목록이 사라질 수 있음") : "")}
+            {session && <button onClick={() => { setShowAccount(true); setAcct({ mode: null, email: "", code: "", step: "email", busy: false, error: null, info: null }); }} style={s.linkBtn}>{account && !account.anonymous ? "👤 계정" : "🔗 계정 연결"}</button>}
+          </span>
         </div>
 
         {/* ─── Tab Switcher (결과 표시 중에는 숨김) ─── */}
@@ -1542,6 +1609,68 @@ export default function Home() {
         </div>
       )}
 
+      {/* ─── 3-0 계정 연결 Panel ─── */}
+      {showAccount && (
+        <div style={s.collOverlay}>
+          <div style={s.collPanel}>
+            <div style={s.collHeader}>
+              <h2 style={{ fontSize: 18, fontWeight: 800, color: "#e0e0e0" }}>{account && !account.anonymous ? "👤 계정" : "🔗 계정 연결"}</h2>
+              <button style={s.collClose} onClick={() => { if (acct.step === "merge") return; setShowAccount(false); }}>✕</button>
+            </div>
+            <div style={s.collAnalysis}>
+              <div style={{ fontSize: 12, color: "#8899aa", lineHeight: 1.7 }}>
+                {account && !account.anonymous
+                  ? <>현재 계정: <b style={{ color: "#4ecdc4" }}>{account.email}</b><br />다른 기기(안드로이드 앱·다른 브라우저)에서 같은 이메일로 로그인하면 같은 목록을 봅니다.</>
+                  : <>현재 <b style={{ color: "#ffd93d" }}>익명 계정</b>입니다 (이 기기에만 저장). 이메일을 연결하면 다른 기기에서도 같은 목록을 쓸 수 있고, 브라우저 데이터를 지워도 복구됩니다. 연결하지 않아도 계속 쓸 수 있습니다.</>}
+              </div>
+            </div>
+            {acct.info && <div style={{ ...s.collNote, marginTop: 12 }}>{acct.info}</div>}
+            {acct.error && <div style={{ ...s.error, marginTop: 12 }}>{acct.error}</div>}
+
+            {acct.step === "merge" ? (
+              <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
+                <button onClick={() => acctMerge(true)} disabled={acct.busy} style={{ ...s.keepBtn, flex: 1 }}>{acct.busy ? "병합 중…" : "합치기"}</button>
+                <button onClick={() => acctMerge(false)} disabled={acct.busy} style={{ ...s.resetBtn, flex: 1, margin: 0 }}>합치지 않음</button>
+              </div>
+            ) : acct.step === "done" ? (
+              <button onClick={() => setShowAccount(false)} style={{ ...s.keepBtn, marginTop: 12 }}>닫기</button>
+            ) : !acct.mode ? (
+              <div style={{ display: "flex", flexDirection: "column", gap: 8, marginTop: 12 }}>
+                {account?.anonymous && <button onClick={() => acctSet({ mode: "link", error: null, info: null })} style={s.keepBtn}>📧 이 계정에 이메일 연결 (목록·사용 횟수 유지)</button>}
+                <button onClick={() => acctSet({ mode: "signin", error: null, info: null })} style={{ ...s.keepBtn, borderColor: "#a890f0", color: "#a890f0", background: "rgba(168,144,240,0.08)" }}>🔑 다른 기기 계정으로 로그인 (같은 이메일)</button>
+                {account && !account.anonymous && <button onClick={acctSignOut} disabled={acct.busy} style={{ ...s.resetBtn, margin: 0 }}>로그아웃</button>}
+              </div>
+            ) : (
+              <div style={{ ...s.saveBox, margin: "12px 0 0" }}>
+                <div style={s.saveRowLabel}>{acct.mode === "link" ? "연결할 이메일" : "로그인할 이메일"}</div>
+                <input style={s.input} type="email" inputMode="email" autoComplete="email" placeholder="you@example.com" value={acct.email} disabled={acct.step === "code" || acct.busy} onChange={(e) => acctSet({ email: e.target.value })} />
+                {acct.step === "email" ? (
+                  <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
+                    <button onClick={acctRequestCode} disabled={acct.busy} style={{ ...s.keepBtn, flex: 1 }}>{acct.busy ? "전송 중…" : "인증 코드 보내기"}</button>
+                    <button onClick={() => acctSet({ mode: null, error: null, info: null })} disabled={acct.busy} style={{ ...s.resetBtn, flex: 1, margin: 0 }}>뒤로</button>
+                  </div>
+                ) : (
+                  <>
+                    <div style={s.saveRowLabel}>메일로 받은 6자리 코드</div>
+                    <input style={{ ...s.input, letterSpacing: 4, fontSize: 18 }} inputMode="numeric" autoComplete="one-time-code" placeholder="123456" value={acct.code} disabled={acct.busy} onChange={(e) => acctSet({ code: e.target.value })} />
+                    <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
+                      <button onClick={acctVerifyCode} disabled={acct.busy} style={{ ...s.keepBtn, flex: 1 }}>{acct.busy ? "확인 중…" : acct.mode === "link" ? "연결하기" : "로그인"}</button>
+                      <button onClick={() => acctSet({ step: "email", code: "", error: null, info: null })} disabled={acct.busy} style={{ ...s.resetBtn, flex: 1, margin: 0 }}>다시 보내기</button>
+                    </div>
+                  </>
+                )}
+                {acct.mode === "signin" && account?.anonymous && collection.length > 0 && acct.step === "email" && (
+                  <div style={{ fontSize: 10, color: "#ffd93d", marginTop: 8 }}>이 기기의 익명 목록 {collection.length}건은 로그인 후 합칠지 물어봅니다</div>
+                )}
+              </div>
+            )}
+            <div style={{ fontSize: 10, color: "#576574", marginTop: 16, lineHeight: 1.6 }}>
+              비밀번호 없이 이메일 코드로만 인증합니다. 이메일은 로그인 용도로만 쓰이며 목록 데이터와 함께 Supabase 에 저장됩니다.
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* ─── Compare Panel ─── */}
       {showCompare && selectedPokemon && (
         <div style={s.collOverlay}>
@@ -1693,6 +1822,7 @@ const s = {
   collFilterBtn: { display: "flex", flexDirection: "column", alignItems: "center", gap: 1, padding: "6px 10px", background: "#0d1a2e", border: "1px solid #2a3a5c", borderRadius: 8, color: "#8899aa", cursor: "pointer", fontFamily: "'Outfit',sans-serif", whiteSpace: "nowrap", minWidth: 48 },
   collFilterActive: { display: "flex", flexDirection: "column", alignItems: "center", gap: 1, padding: "6px 10px", background: "rgba(0,212,170,0.1)", border: "1px solid rgba(0,212,170,0.3)", borderRadius: 8, color: "#4ecdc4", cursor: "pointer", fontFamily: "'Outfit',sans-serif", whiteSpace: "nowrap", minWidth: 48, fontWeight: 600 },
   raidBossChip: { display: "flex", alignItems: "center", gap: 4, padding: "6px 10px", background: "#0d1a2e", border: "1px solid rgba(255,159,67,0.25)", borderRadius: 10, cursor: "pointer", fontFamily: "'Outfit',sans-serif", transition: "border-color 0.2s" },
+  linkBtn: { background: "none", border: "1px solid #2a3a5c", borderRadius: 6, color: "#4ecdc4", fontSize: 10, padding: "2px 6px", cursor: "pointer", fontFamily: "'Outfit',sans-serif" },
   teamPanel: { marginTop: 14, padding: 12, background: "#0d1a2e", border: "1px solid rgba(0,212,170,0.2)", borderRadius: 12 },
   teamRow: { display: "flex", alignItems: "center", gap: 8, padding: "6px 0", borderTop: "1px solid rgba(255,255,255,0.05)" },
 
