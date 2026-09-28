@@ -253,6 +253,10 @@ Node.js 20.9 이상 필요(Next.js 16).
 3. Environment Variables 에 `GEMINI_API_KEY` 추가 (필요 시 `GEMINI_MODELS`)
 4. Deploy
 
+## 3-1단계: 안드로이드 수집기 (`android/`)
+
+포켓몬GO 위 ⚡ 버튼 → 화면 1장 캡처 → 기기 내 OCR(ML Kit 한국어) → 종·CP·HP·기술·개체값 후보 카드 → "보관/박사행" 으로 `my_pokemon` 저장(`source='overlay'`, 3-0 보완의 기기 토큰 인증). 화면을 읽고 보여주기만 하며 게임을 조작하지 않는다. 빌드는 GitHub Actions(`.github/workflows/android.yml`), Vercel 은 `.vercelignore` 로 `android/` 제외. 상세: [android/README.md](android/README.md).
+
 ## 기능
 
 - ✅ 포켓몬 이름 한글 자동완성 (도감번호/영어/한글 검색)

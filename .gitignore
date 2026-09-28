@@ -14,3 +14,11 @@ out/
 .DS_Store
 *.log
 .vercel
+
+# 로컬 SDK 경로 (커밋 금지)
+android/local.properties
+android/.gradle/
+android/build/
+android/*/build/
+android/app/release.jks
+*.jks
