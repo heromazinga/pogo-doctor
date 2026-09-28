@@ -61,6 +61,17 @@ export default function Home() {
   const [ivMissing, setIvMissing] = useState(false); // 이전된 항목 등 개체값이 없는 경우: 입력 전 분석 금지
   const [fallbackNotice, setFallbackNotice] = useState(null); // 폴백 모델로 답한 경우 안내
 
+  // ─── 2단계: 내 목록 기반 팀 추천 (서버 결정적 계산, AI 는 코멘트만) ───
+  const [teamResult, setTeamResult] = useState(null); // /api/team 응답 (mode raid|rocket)
+  const [teamLoading, setTeamLoading] = useState(false);
+  const [teamError, setTeamError] = useState(null);
+  const [doctorComment, setDoctorComment] = useState(null); // 🧠 박사 코멘트 (AI, 버튼 시 1회)
+  const [doctorModel, setDoctorModel] = useState("");
+  const [rocketLineups, setRocketLineups] = useState(null); // /api/rocket-lineups
+  const [rocketError, setRocketError] = useState(null);
+  const [rocketLoading, setRocketLoading] = useState(false);
+  const [selectedLineup, setSelectedLineup] = useState(null);
+
   // ─── 데이터 기준 시각 / 소스 상태 (서버 교차검증 메타) ───
   const [dataMeta, setDataMeta] = useState(null);
   const [analysisMeta, setAnalysisMeta] = useState(null);
@@ -588,6 +599,9 @@ export default function Home() {
     const { row, error } = await updateMyPokemon(editing.id, {
       status: editing.status, purposes: editing.purposes, memo: editing.memo.trim() || null,
       cp: cpVal, atk_iv: anyIv ? ivs[0] : null, def_iv: anyIv ? ivs[1] : null, sta_iv: anyIv ? ivs[2] : null,
+      // 기술: 빠른기술 1 + 차징기술 최대 2 (빈 값은 미입력)
+      fast_move: editing.fast || null,
+      charged_moves: (editing.charged || []).filter(Boolean).slice(0, 2),
     });
     if (error) { setCollError(`수정 실패: ${error}`); return; }
     setCollection((prev) => prev.map((e) => (e.id === row.id ? toEntry(row) : e)));
@@ -611,6 +625,72 @@ export default function Home() {
     if (hasIv) setPendingReanalyze(true);
     else setError("개체값 미입력 — 공격/방어/HP 를 입력한 뒤 분석하세요");
   };
+
+  // 목록 항목의 종 데이터 (기술 편집용)
+  const speciesOf = (item) => allPokemon.find((p) => p.id === item.pokemonId && p.form === item.form) || allPokemon.find((p) => p.id === item.pokemonId);
+
+  // 기술 선택 옵션 (일반 / 한정기 / 전용기 / 한정기·확인 필요 / 미검증) — 분석 폼과 목록 편집에서 공용
+  const moveOptions = (poke, kind) => {
+    if (!poke) return null;
+    const g = kind === "fast"
+      ? [["", poke.fast, ""], ["── 한정기술 ──", poke.eliteFast, "⭐ "], ["── 전용기 (아이템/폼체인지) ──", poke.signatureFast, "🔑 "], ["── 한정기 · 확인 필요 ──", poke.unverifiedEliteFast, "⭐❔ "], ["── 미검증 (교차검증 소스 1개) ──", poke.unverifiedFast, "❔ "]]
+      : [["", poke.charged, ""], ["── 한정기술 ──", poke.eliteCharged, "⭐ "], ["── 전용기 (아이템/폼체인지) ──", poke.signatureCharged, "🔑 "], ["── 한정기 · 확인 필요 ──", poke.unverifiedEliteCharged, "⭐❔ "], ["── 미검증 (교차검증 소스 1개) ──", poke.unverifiedCharged, "❔ "]];
+    return g.map(([label, list, mark]) => {
+      if (!list?.length) return null;
+      const opts = list.map((m) => <option key={m} value={m}>{mark}{krMove(m)} ({m})</option>);
+      return label ? <optgroup key={label} label={label}>{opts}</optgroup> : opts;
+    });
+  };
+
+  // ─── 2단계: 팀 추천 (서버 계산) ───
+  const requestTeam = async (payload) => {
+    if (collection.length === 0) { setTeamError("내 목록이 비어 있습니다 — 먼저 포켓몬을 저장하세요"); return; }
+    setTeamLoading(true); setTeamError(null); setTeamResult(null); setDoctorComment(null); setDoctorModel("");
+    try {
+      const res = await fetch("/api/team", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ...payload, myPokemon: collection.map((c) => c.raw) }) });
+      const data = await res.json();
+      if (!res.ok || data.error) setTeamError(data.error || `팀 계산 실패 (HTTP ${res.status})`);
+      else setTeamResult(data);
+    } catch (e) { setTeamError("네트워크 오류 — 팀 계산 실패"); }
+    setTeamLoading(false);
+  };
+  const recommendRaidTeam = () => {
+    const poke = raidSelectedPoke;
+    if (!poke) { setTeamError("레이드 보스를 목록에서 선택하거나 검색해서 지정하세요"); return; }
+    requestTeam({ mode: "raid", boss: { id: poke.id, form: poke.form, name: poke.name, types: poke.types } });
+  };
+  const recommendRocketTeam = (lineup) => {
+    setSelectedLineup(lineup);
+    requestTeam({ mode: "rocket", lineup });
+  };
+  const loadRocketLineups = async () => {
+    if (rocketLineups || rocketLoading) return;
+    setRocketLoading(true); setRocketError(null);
+    try {
+      const res = await fetch("/api/rocket-lineups");
+      const data = await res.json();
+      if (!res.ok || data.error) setRocketError(data.error || `HTTP ${res.status}`);
+      else setRocketLineups(data.lineups || []);
+    } catch { setRocketError("네트워크 오류"); }
+    setRocketLoading(false);
+  };
+  // 🧠 박사 코멘트: 서버가 확정한 팀을 그대로 AI 에 넘겨 3~5줄 코멘트만 받는다 (AI 는 팀을 바꾸지 않음, 사용 횟수 1회 차감)
+  const askDoctorComment = async () => {
+    if (!teamResult || loading) return;
+    setLoading(true); setStreaming(true); setDoctorComment(""); setDoctorModel(""); setTeamError(null);
+    await streamFetch(
+      { mode: "team", team: teamResult },
+      (text) => setDoctorComment(text), (model) => setDoctorModel(model),
+      () => { setLoading(false); setStreaming(false); },
+      (err) => { setTeamError(err); setLoading(false); setStreaming(false); }
+    );
+  };
+  const clearTeam = () => { setTeamResult(null); setTeamError(null); setDoctorComment(null); setDoctorModel(""); setSelectedLineup(null); };
+  const lineupGroup = (l) => (l.name === "Giovanni" ? "boss" : ["Cliff", "Arlo", "Sierra"].includes(l.name) ? "leader" : "grunt");
+  const TYPE_KR = { normal: "노말", fire: "불꽃", water: "물", electric: "전기", grass: "풀", ice: "얼음", fighting: "격투", poison: "독", ground: "땅", flying: "비행", psychic: "에스퍼", bug: "벌레", rock: "바위", ghost: "고스트", dragon: "드래곤", dark: "악", steel: "강철", fairy: "페어리" };
+  const typeKr = (t) => TYPE_KR[String(t || "").toLowerCase()] || t;
+  // 로켓단 라인업 포켓몬(영어명) → 한국어명 (데이터셋 영어명 매칭, 없으면 영어)
+  const rocketNameKr = (en) => { const q = String(en || "").toLowerCase(); const m = allPokemon.find((p) => p.name.toLowerCase() === q) || allPokemon.find((p) => q.includes(p.name.toLowerCase())); return m ? m.nameKr : en; };
 
   const renderBold = (text) => {
     return text.split(/(\*\*[^*]+\*\*)/g).map((p, i) =>
@@ -685,6 +765,79 @@ export default function Home() {
   };
   const modelLine = (model) => `⚡ ${model.replace("gemini-", "").replace("-preview", "")}${analysisMeta?.generatedAt ? ` · 데이터 ${fmtStamp(analysisMeta.generatedAt)}${analysisMeta.verified ? " ✓검증" : ""}` : ""}`;
 
+  // ─── 팀 추천 패널 (레이드 6마리 / 로켓단 3마리) ───
+  const memberFlags = (m) => [m.levelAssumed ? "레벨 추정" : m.levelExact ? null : "레벨 근사", m.ivAssumed ? "개체값 추정" : null, m.movesAssumed ? "기술 가정" : null, m.cpOverMax ? "CP 최대치 초과(입력 확인)" : null].filter(Boolean);
+  const renderTeamPanel = () => {
+    if (!teamResult) return null;
+    const isRaid = teamResult.mode === "raid";
+    return (
+      <div style={s.teamPanel}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+          <div style={{ fontSize: 13, fontWeight: 700, color: "#4ecdc4" }}>
+            {isRaid ? `📋 내 목록 팀 — vs ${teamResult.boss?.nameKr || teamResult.boss?.name} (${(teamResult.boss?.types || []).map(typeKr).join("/")})` : `📋 내 목록 팀 — vs ${teamResult.lineup?.title || teamResult.lineup?.name}`}
+          </div>
+          <button onClick={clearTeam} style={{ background: "none", border: "none", color: "#8899aa", fontSize: 12, cursor: "pointer", fontFamily: "'Outfit',sans-serif" }}>✕ 닫기</button>
+        </div>
+        <div style={{ fontSize: 10, color: "#8899aa", marginBottom: 8 }}>
+          서버 계산(AI 미사용) · 후보 {teamResult.candidates}마리{teamResult.excludedTransfer ? ` · 보낼 예정 ${teamResult.excludedTransfer}마리 제외` : ""}{teamResult.skipped ? ` · 데이터 없음 ${teamResult.skipped}마리 제외` : ""}
+          {isRaid ? " · 점수 = DPS^0.775 × TDO^0.225 (L40 보스 15/15/15 가정)" : ` · ${teamResult.note}`}
+        </div>
+        {teamResult.team.length === 0 && <div style={s.sourceNotice}>내 목록에서 계산 가능한 포켓몬이 없습니다 (종 데이터 또는 기술 수치 없음)</div>}
+        {teamResult.team.map((m, i) => {
+          const chosen = isRaid ? m : m.chosen;
+          return (
+            <div key={m.id + "-" + i} style={s.teamRow}>
+              <img src={`https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/${m.speciesId}.png`} alt="" style={{ width: 36, height: 36, imageRendering: "pixelated" }} onError={(e) => { e.target.style.display = "none"; }} />
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ fontSize: 13, fontWeight: 700, color: "#e0e0e0" }}>
+                  <span style={{ color: "#ffd93d", marginRight: 6 }}>{isRaid ? `${i + 1}` : `슬롯${m.slot}`}</span>
+                  {m.shadow ? "👤" : ""}{m.nameKr || m.name}{m.form && m.form !== "Normal" ? ` (${m.form})` : ""}
+                  <span style={{ fontSize: 10, color: "#8899aa", marginLeft: 6 }}>CP{m.cp || "?"} · L{m.level}</span>
+                </div>
+                <div style={{ fontSize: 11, color: "#8899aa", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                  {krMove(chosen.fast)} + {krMove(chosen.charged)}
+                  {isRaid
+                    ? ` · 차징 ×${chosen.multCharged} · DPS ${chosen.dps} · TDO ${chosen.tdo} · 점수 ${chosen.score}`
+                    : ` · 공격 ×${chosen.offMult} · 피격 ×${chosen.defMult} · 점수 ${chosen.score} · 커버 ${(m.covers || []).map((c) => `${c}번`).join(",")}`}
+                </div>
+                <div style={{ display: "flex", gap: 4, flexWrap: "wrap", marginTop: 2 }}>
+                  {isRaid && m.vulnerable && <span style={{ ...s.tagBadge, color: "#ff6b6b" }}>⚠️ 보스 자속에 약점 ×{m.vulnMult}</span>}
+                  {memberFlags(m).map((f) => <span key={f} style={{ ...s.tagBadge, color: "#ffd93d" }}>{f}</span>)}
+                </div>
+              </div>
+            </div>
+          );
+        })}
+        {isRaid && teamResult.fill?.length > 0 && (
+          <div style={{ marginTop: 8 }}>
+            <div style={{ fontSize: 11, fontWeight: 700, color: "#a890f0", marginBottom: 4 }}>구하면 좋은 포켓몬 (목록 부족분 {teamResult.fill.length}마리 · 서버 천적 후보)</div>
+            {teamResult.fill.map((c, i) => (
+              <div key={`${c.id}-${c.form}-${i}`} style={{ fontSize: 11, color: "#c8d6e5", padding: "2px 0" }}>
+                · {c.nameKr || c.name}{c.form && c.form !== "Normal" ? ` (${c.form})` : ""} — {krMove(c.fastMove)} + {krMove(c.chargedMove)} · ×{c.mult}{c.releasedUnknown ? " (출시 미확인)" : ""}
+              </div>
+            ))}
+          </div>
+        )}
+        {teamResult.warnings?.length > 0 && (
+          <div style={{ ...s.sourceNotice, marginTop: 8, marginBottom: 0 }}>{teamResult.warnings.map((w, i) => <div key={i}>⚠️ {w}</div>)}</div>
+        )}
+        {teamResult.team.length > 0 && doctorComment === null && (
+          <button onClick={askDoctorComment} disabled={loading} style={{ ...s.keepBtn, marginTop: 10, padding: 10, fontSize: 13 }}>🧠 박사 코멘트 (AI 1회 사용)</button>
+        )}
+        {teamError && teamResult && <div style={{ ...s.error, marginTop: 8, marginBottom: 0 }}>{teamError}</div>}
+        {doctorComment !== null && (
+          <div style={{ ...s.collAnalysis, marginTop: 10, padding: 12 }}>
+            <div style={{ fontSize: 11, fontWeight: 700, color: "#4ecdc4", marginBottom: 4 }}>🧠 박사 코멘트 <span style={{ fontWeight: 400, color: "#8899aa" }}>(팀 구성은 서버 계산 그대로)</span></div>
+            {streaming && thinking && <div style={s.thinking}>🧠 박사가 생각 중…</div>}
+            {formatResult(doctorComment)}
+            {streaming && <span style={s.cursor}>▌</span>}
+            {doctorModel && !streaming && <div style={{ fontSize: 10, color: "#576574", textAlign: "right", marginTop: 4 }}>{modelLine(doctorModel)}</div>}
+          </div>
+        )}
+      </div>
+    );
+  };
+
   const hasFast = selectedPokemon && selectedPokemon.fast && selectedPokemon.fast.length > 0;
   const hasCharged = selectedPokemon && selectedPokemon.charged && selectedPokemon.charged.length > 0;
   const displayName = selectedPokemon ? selectedPokemon.nameKr + (selectedPokemon.form !== "Normal" ? ` (${selectedPokemon.form})` : "") : pokemonName;
@@ -710,6 +863,7 @@ export default function Home() {
           <div style={s.tabRow}>
             <button onClick={() => { setActiveTab("analyze"); setError(null); }} style={activeTab === "analyze" ? s.tabActive : s.tab}>🔍 분석</button>
             <button onClick={() => { setActiveTab("raid"); setError(null); }} style={activeTab === "raid" ? s.tabActive : s.tab}>⚔️ 레이드</button>
+            <button onClick={() => { setActiveTab("rocket"); setError(null); loadRocketLineups(); }} style={activeTab === "rocket" ? s.tabActive : s.tab}>🚀 로켓단</button>
             <button onClick={() => { setActiveTab("events"); setError(null); }} style={activeTab === "events" ? s.tabActive : s.tab}>📅 이벤트</button>
           </div>
         )}
@@ -1002,6 +1156,11 @@ export default function Home() {
             <button onClick={analyzeRaid} style={{ ...s.analyzeBtn, background: "linear-gradient(135deg,#ff9f43,#ee5a24)" }} disabled={loading}>
               {loading ? "⚔️ 분석 중..." : "⚔️ 카운터 추천받기"}
             </button>
+            <button onClick={recommendRaidTeam} style={{ ...s.analyzeBtn, marginTop: 10, background: "transparent", border: "2px solid #4ecdc4", color: "#4ecdc4", boxShadow: "none" }} disabled={teamLoading || loading}>
+              {teamLoading ? "📋 계산 중..." : "📋 내 목록으로 팀 추천 (AI 미사용)"}
+            </button>
+            {teamError && !teamResult && <div style={{ ...s.error, marginTop: 10, marginBottom: 0 }}>{teamError}</div>}
+            {teamResult?.mode === "raid" && renderTeamPanel()}
           </div>
         )}
         {activeTab === "raid" && raidResult && (
@@ -1014,6 +1173,49 @@ export default function Home() {
             <div style={s.resultContent}>{streaming && thinking && <div style={s.thinking}>🧠 박사가 생각 중…</div>}{formatResult(raidResult)}{streaming && <span style={s.cursor}>▌</span>}</div>
             {raidModel && !streaming && <div style={{ padding: "4px 20px 0", fontSize: 10, color: "#576574", textAlign: "right" }}>{modelLine(raidModel)}</div>}
             {!streaming && <button onClick={resetRaid} style={s.resetBtn}>🔄 다른 보스 분석하기</button>}
+          </div>
+        )}
+
+        {/* ═══ ROCKET TAB (2단계: 내 목록 기반 간이 추천) ═══ */}
+        {activeTab === "rocket" && (
+          <div style={s.card}>
+            <div style={{ ...s.sectionHeader, background: "rgba(168,144,240,0.08)", borderColor: "rgba(168,144,240,0.2)" }}>
+              <span style={{ fontSize: 28 }}>🚀</span>
+              <div>
+                <div style={{ fontSize: 15, fontWeight: 700, color: "#e0e0e0" }}>로켓단 대전 팀 추천</div>
+                <div style={{ fontSize: 11, color: "#8899aa" }}>내 목록에서 슬롯별 3마리 선정 · 간이 추천 (실드·에너지 단순화)</div>
+              </div>
+            </div>
+            {rocketLoading && <div style={{ fontSize: 11, color: "#8899aa", marginBottom: 8 }}>라인업 로딩 중...</div>}
+            {rocketError && <div style={s.sourceNotice}>⚠️ 로켓단 라인업을 불러오지 못했습니다 (ScrapedDuck: {rocketError}). 소스가 복구될 때까지 이 기능은 비활성화됩니다.</div>}
+            {collection.length === 0 && !rocketError && <div style={s.sourceNotice}>내 목록이 비어 있습니다 — 분석 후 "내 목록에 저장"으로 포켓몬을 추가하면 팀을 추천합니다</div>}
+            {rocketLineups && [["boss", "👑 보스"], ["leader", "🎖️ 간부"], ["grunt", "🧢 조무래기"]].map(([g, label]) => {
+              const list = rocketLineups.filter((l) => lineupGroup(l) === g);
+              if (!list.length) return null;
+              return (
+                <div key={g} style={{ marginBottom: 14 }}>
+                  <div style={{ fontSize: 12, fontWeight: 700, color: "#a890f0", marginBottom: 6 }}>{label} ({list.length})</div>
+                  <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+                    {list.map((l, i) => (
+                      <button key={`${l.name}-${l.type}-${i}`} onClick={() => !teamLoading && recommendRocketTeam(l)}
+                        style={{ ...s.raidBossChip, borderColor: selectedLineup === l ? "rgba(168,144,240,0.8)" : "rgba(168,144,240,0.25)", opacity: teamLoading ? 0.6 : 1 }}>
+                        <span style={{ fontSize: 12, fontWeight: 600, color: "#e0e0e0" }}>{g === "grunt" ? (l.type ? `${typeKr(l.type)} 타입` : l.name) : l.name}</span>
+                        {g === "grunt" && l.type && <span style={{ fontSize: 9, color: "#8899aa" }}>{l.title?.replace(/-type/i, "").trim() || ""}</span>}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              );
+            })}
+            {selectedLineup && (
+              <div style={{ fontSize: 11, color: "#8899aa", marginBottom: 8 }}>
+                상대 라인업 — {[selectedLineup.firstPokemon, selectedLineup.secondPokemon, selectedLineup.thirdPokemon].map((slot, i) => `${i + 1}번: ${(slot || []).map((p) => rocketNameKr(p.name)).join("/") || "?"}`).join(" · ")}
+              </div>
+            )}
+            {teamLoading && <div style={{ fontSize: 12, color: "#8899aa", marginBottom: 8 }}>📋 팀 계산 중...</div>}
+            {teamError && !teamResult && <div style={s.error}>{teamError}</div>}
+            {teamResult?.mode === "rocket" && renderTeamPanel()}
+            <div style={{ fontSize: 10, color: "#576574", textAlign: "right", marginTop: 12 }}>라인업: LeekDuck via ScrapedDuck</div>
           </div>
         )}
 
@@ -1270,7 +1472,7 @@ export default function Home() {
                           <span style={{ fontSize: 11, opacity: 0.4, marginLeft: 4 }}>#{item.pokemonId}</span>
                         </div>
                         <div style={{ fontSize: 11, color: "#8899aa", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                          CP{item.cp || "?"} {item.ivPercent !== null ? `IV${item.ivPercent}% (${item.atkIv}/${item.defIv}/${item.staIv})` : "개체값 미입력"} | {item.fastMove ? krMove(item.fastMove) : "-"}/{item.chargedMove ? krMove(item.chargedMove) : "-"}
+                          CP{item.cp || "?"} {item.ivPercent !== null ? `IV${item.ivPercent}% (${item.atkIv}/${item.defIv}/${item.staIv})` : "개체값 미입력"} | {item.fastMove || item.raw.charged_moves?.length ? `${item.fastMove ? krMove(item.fastMove) : "-"}/${(item.raw.charged_moves || []).map(krMove).join("·") || "-"}` : "기술 미입력"}
                         </div>
                         <div style={{ display: "flex", gap: 4, flexWrap: "wrap", marginTop: 3 }}>
                           <span style={{ ...s.tagBadge, color: item.status === "transfer" ? "#ff6b6b" : "#4ecdc4" }}>{STATUS_LABELS[item.status] || item.status}</span>
@@ -1280,7 +1482,7 @@ export default function Home() {
                         </div>
                       </div>
                       <button style={s.collIconBtn} title="다시 분석" onClick={() => reanalyzeEntry(item)}>🔄</button>
-                      <button style={s.collIconBtn} title="수정" onClick={() => setEditing(editing?.id === item.id ? null : { id: item.id, status: item.status, purposes: item.purposes || [], memo: item.memo || "", cp: item.cp || "", atk: Number.isInteger(item.atkIv) ? item.atkIv : "", def: Number.isInteger(item.defIv) ? item.defIv : "", sta: Number.isInteger(item.staIv) ? item.staIv : "" })}>✏️</button>
+                      <button style={s.collIconBtn} title="수정" onClick={() => setEditing(editing?.id === item.id ? null : { id: item.id, status: item.status, purposes: item.purposes || [], memo: item.memo || "", cp: item.cp || "", atk: Number.isInteger(item.atkIv) ? item.atkIv : "", def: Number.isInteger(item.defIv) ? item.defIv : "", sta: Number.isInteger(item.staIv) ? item.staIv : "", fast: item.raw.fast_move || "", charged: [item.raw.charged_moves?.[0] || "", item.raw.charged_moves?.[1] || ""] })}>✏️</button>
                       <button style={s.collRemove} onClick={() => removeFromCollection(item.id)}>🗑</button>
                     </div>
                     {editing?.id === item.id && (
@@ -1302,6 +1504,27 @@ export default function Home() {
                           ))}
                         </div>
                         {(editing.atk === "" && editing.def === "" && editing.sta === "") && <div style={{ fontSize: 10, color: "#ffd93d", marginTop: 4 }}>개체값 미입력 — 공격/방어/HP 를 입력하면 저장 시 반영됩니다</div>}
+                        {(() => {
+                          const sp = speciesOf(item);
+                          const anyMove = editing.fast || editing.charged.some(Boolean);
+                          return (
+                            <div style={{ marginTop: 8 }}>
+                              <div style={{ ...s.saveRowLabel, margin: "0 0 4px" }}>기술 {!anyMove && <span style={{ color: "#ffd93d" }}>· 기술 미입력</span>}</div>
+                              {sp ? (
+                                <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                                  <select style={{ ...s.select, fontSize: 13, padding: "8px 32px 8px 10px" }} value={editing.fast} onChange={(e) => setEditing((ed) => ({ ...ed, fast: e.target.value }))}>
+                                    <option value="">빠른기술 (미입력)</option>{moveOptions(sp, "fast")}
+                                  </select>
+                                  {[0, 1].map((i) => (
+                                    <select key={i} style={{ ...s.select, fontSize: 13, padding: "8px 32px 8px 10px" }} value={editing.charged[i]} onChange={(e) => setEditing((ed) => { const c = [...ed.charged]; c[i] = e.target.value; return { ...ed, charged: c }; })}>
+                                      <option value="">{i === 0 ? "차징기술 1 (미입력)" : "차징기술 2 (선택, 없으면 비움)"}</option>{moveOptions(sp, "charged")}
+                                    </select>
+                                  ))}
+                                </div>
+                              ) : <div style={{ fontSize: 10, color: "#8899aa" }}>포켓몬 데이터에서 종을 찾지 못해 기술 목록을 표시할 수 없습니다</div>}
+                            </div>
+                          );
+                        })()}
                         <input style={{ ...s.input, marginTop: 8, fontSize: 13 }} placeholder="메모" value={editing.memo} onChange={(e) => setEditing((ed) => ({ ...ed, memo: e.target.value }))} />
                         <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
                           <button onClick={saveEdit} style={{ ...s.keepBtn, flex: 1, padding: 8 }}>저장</button>
@@ -1468,6 +1691,8 @@ const s = {
   collFilterBtn: { display: "flex", flexDirection: "column", alignItems: "center", gap: 1, padding: "6px 10px", background: "#0d1a2e", border: "1px solid #2a3a5c", borderRadius: 8, color: "#8899aa", cursor: "pointer", fontFamily: "'Outfit',sans-serif", whiteSpace: "nowrap", minWidth: 48 },
   collFilterActive: { display: "flex", flexDirection: "column", alignItems: "center", gap: 1, padding: "6px 10px", background: "rgba(0,212,170,0.1)", border: "1px solid rgba(0,212,170,0.3)", borderRadius: 8, color: "#4ecdc4", cursor: "pointer", fontFamily: "'Outfit',sans-serif", whiteSpace: "nowrap", minWidth: 48, fontWeight: 600 },
   raidBossChip: { display: "flex", alignItems: "center", gap: 4, padding: "6px 10px", background: "#0d1a2e", border: "1px solid rgba(255,159,67,0.25)", borderRadius: 10, cursor: "pointer", fontFamily: "'Outfit',sans-serif", transition: "border-color 0.2s" },
+  teamPanel: { marginTop: 14, padding: 12, background: "#0d1a2e", border: "1px solid rgba(0,212,170,0.2)", borderRadius: 12 },
+  teamRow: { display: "flex", alignItems: "center", gap: 8, padding: "6px 0", borderTop: "1px solid rgba(255,255,255,0.05)" },
 
   // ─── 이벤트 스타일 ───
   eventCardActive: { padding: "14px 16px", background: "rgba(0,212,170,0.06)", border: "1px solid rgba(0,212,170,0.2)", borderRadius: 12, display: "flex", flexDirection: "column", gap: 8 },
