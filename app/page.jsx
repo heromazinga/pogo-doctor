@@ -4,6 +4,10 @@ import { ensureAnonymousSession, authHeader, supabaseConfigured } from "./lib/su
 import { listMyPokemon, insertMyPokemon, updateMyPokemon, deleteMyPokemon, migrateLocalCollection, getTodayUsage, STATUS_LABELS, PURPOSE_LABELS } from "./lib/myPokemon";
 import { usageDate } from "./lib/aiUsage";
 import { getAccountState, requestLinkEmail, verifyLinkEmail, snapshotAnonymousRows, requestSignInEmail, verifySignInEmail, mergeRowsIntoCurrent, signOutAccount } from "./lib/account";
+import { listDevices, revokeDevice } from "./lib/devices";
+
+// 이메일 계정 연결 UI 는 기본 숨김 (Supabase 기본 발송은 템플릿 수정 불가·발송 제약 → 사용 안 함). 코드는 유지.
+const EMAIL_LINK_ENABLED = process.env.NEXT_PUBLIC_ENABLE_EMAIL_LINK === "true";
 
 // my_pokemon 행 → 화면/AI 용 항목 (판정은 저장하지 않으므로 없음)
 function toEntry(r) {
@@ -55,6 +59,12 @@ export default function Home() {
   const [showAccount, setShowAccount] = useState(false);
   const [acct, setAcct] = useState({ mode: null, email: "", code: "", step: "email", busy: false, error: null, info: null }); // mode: "link" | "signin"
   const [pendingMerge, setPendingMerge] = useState(null); // { rows } 로그인 전 익명 목록 스냅샷
+  // ─── 3-0 보완: 기기 연결 (코드 → 앱 토큰) ───
+  const [showDevices, setShowDevices] = useState(false);
+  const [devices, setDevices] = useState([]);
+  const [pairCode, setPairCode] = useState(null); // { code, expiresAt }
+  const [devError, setDevError] = useState(null);
+  const [devBusy, setDevBusy] = useState(false);
   const [usageCount, setUsageCount] = useState(null);
   const [saveOpts, setSaveOpts] = useState({ open: false, status: "keep", purposes: [], memo: "" });
   const [saving, setSaving] = useState(false);
@@ -758,6 +768,32 @@ export default function Home() {
     setAcct({ mode: null, email: "", code: "", step: "email", busy: false, error: null, info: "로그아웃했습니다 · 새 익명 계정" });
   };
 
+  // ─── 3-0 보완: 기기 연결 핸들러 ───
+  const reloadDevices = async () => {
+    const { rows, error } = await listDevices();
+    if (error) setDevError(`기기 목록 불러오기 실패: ${error}${/relation|does not exist|permission/i.test(error) ? " — 마이그레이션 0002 적용 여부 확인" : ""}`);
+    else { setDevError(null); setDevices(rows); }
+  };
+  const openDevices = async () => { setShowDevices(true); setPairCode(null); setDevError(null); await reloadDevices(); };
+  const issuePairCode = async () => {
+    setDevBusy(true); setDevError(null); setPairCode(null);
+    try {
+      const res = await fetch("/api/device/pair-code", { method: "POST", headers: { ...(await authHeader()) } });
+      const data = await res.json();
+      if (!res.ok || data.error) setDevError(data.error || `코드 발급 실패 (HTTP ${res.status})`);
+      else setPairCode({ code: data.code, expiresAt: data.expiresAt });
+    } catch { setDevError("네트워크 오류 — 코드 발급 실패"); }
+    setDevBusy(false);
+  };
+  const doRevokeDevice = async (d) => {
+    if (!confirm(`"${d.name}" 연결을 해제할까요? 해제 후 그 기기의 저장 요청은 거부됩니다.`)) return;
+    setDevBusy(true);
+    const { error } = await revokeDevice(d.id);
+    if (error) setDevError(`해제 실패: ${error}`);
+    await reloadDevices();
+    setDevBusy(false);
+  };
+
   const renderBold = (text) => {
     return text.split(/(\*\*[^*]+\*\*)/g).map((p, i) =>
       p.startsWith("**") && p.endsWith("**")
@@ -923,7 +959,8 @@ export default function Home() {
           <span>{usageCount === null ? (session ? "오늘 AI 사용 —회" : "AI 사용 횟수 기록 안 됨") : `오늘 AI 사용 ${usageCount}회`}{fallbackNotice ? <span style={{ color: "#ffd93d", marginLeft: 8 }}>· {fallbackNotice}</span> : null}</span>
           <span style={{ opacity: 0.7, display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
             {sessionNotice || (session ? (account && !account.anonymous ? `계정 연결됨 · ${account.email}` : "이 기기에 저장됨 · 브라우저 데이터를 지우면 목록이 사라질 수 있음") : "")}
-            {session && <button onClick={() => { setShowAccount(true); setAcct({ mode: null, email: "", code: "", step: "email", busy: false, error: null, info: null }); }} style={s.linkBtn}>{account && !account.anonymous ? "👤 계정" : "🔗 계정 연결"}</button>}
+            {session && EMAIL_LINK_ENABLED && <button onClick={() => { setShowAccount(true); setAcct({ mode: null, email: "", code: "", step: "email", busy: false, error: null, info: null }); }} style={s.linkBtn}>{account && !account.anonymous ? "👤 계정" : "🔗 계정 연결"}</button>}
+            {session && <button onClick={openDevices} style={s.linkBtn}>📱 기기 연결</button>}
           </span>
         </div>
 
@@ -1609,8 +1646,48 @@ export default function Home() {
         </div>
       )}
 
-      {/* ─── 3-0 계정 연결 Panel ─── */}
-      {showAccount && (
+      {/* ─── 3-0 보완: 기기 연결 Panel ─── */}
+      {showDevices && (
+        <div style={s.collOverlay}>
+          <div style={s.collPanel}>
+            <div style={s.collHeader}>
+              <h2 style={{ fontSize: 18, fontWeight: 800, color: "#e0e0e0" }}>📱 기기 연결</h2>
+              <button style={s.collClose} onClick={() => setShowDevices(false)}>✕</button>
+            </div>
+            <div style={s.collAnalysis}>
+              <div style={{ fontSize: 12, color: "#8899aa", lineHeight: 1.7 }}>
+                안드로이드 수집기 앱을 이 계정에 연결합니다. 아래에서 코드를 발급하고 앱의 "연결 코드" 화면에 입력하세요. 코드는 <b style={{ color: "#ffd93d" }}>10분간 1회</b>만 쓸 수 있고, 앱이 저장한 포켓몬은 이 내 목록에 바로 표시됩니다.
+              </div>
+            </div>
+            {devError && <div style={{ ...s.error, marginTop: 12 }}>{devError}</div>}
+            {pairCode ? (
+              <div style={{ ...s.collAnalysis, marginTop: 12, textAlign: "center" }}>
+                <div style={{ fontSize: 11, color: "#8899aa" }}>연결 코드 (앱에 입력)</div>
+                <div style={{ fontSize: 30, fontWeight: 800, letterSpacing: 6, color: "#4ecdc4", margin: "6px 0", fontVariantNumeric: "tabular-nums" }}>{pairCode.code.slice(0, 4)} {pairCode.code.slice(4)}</div>
+                <div style={{ fontSize: 10, color: "#ffd93d" }}>만료 {fmtStamp(pairCode.expiresAt)} · O/0/1/I/L 은 사용하지 않습니다</div>
+              </div>
+            ) : (
+              <button onClick={issuePairCode} disabled={devBusy} style={{ ...s.keepBtn, marginTop: 12 }}>{devBusy ? "발급 중…" : "🔑 연결 코드 발급"}</button>
+            )}
+            <div style={{ ...s.saveRowLabel, marginTop: 16 }}>연결된 기기 ({devices.filter((d) => !d.revoked_at).length})</div>
+            {devices.filter((d) => !d.revoked_at).length === 0 ? (
+              <div style={{ fontSize: 12, color: "#576574", padding: "8px 0" }}>연결된 기기가 없습니다</div>
+            ) : devices.filter((d) => !d.revoked_at).map((d) => (
+              <div key={d.id} style={{ ...s.collItem, marginBottom: 6 }}>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontSize: 13, fontWeight: 700, color: "#e0e0e0" }}>{d.name}</div>
+                  <div style={{ fontSize: 10, color: "#8899aa" }}>연결 {fmtStamp(d.created_at)} · 마지막 사용 {d.last_used_at ? fmtStamp(d.last_used_at) : "없음"}</div>
+                </div>
+                <button onClick={() => doRevokeDevice(d)} disabled={devBusy} style={{ ...s.collIconBtn, color: "#ff6b6b", fontSize: 11 }}>해제</button>
+              </div>
+            ))}
+            {devices.some((d) => d.revoked_at) && <div style={{ fontSize: 10, color: "#576574", marginTop: 6 }}>해제된 기기 {devices.filter((d) => d.revoked_at).length}대 (숨김)</div>}
+          </div>
+        </div>
+      )}
+
+      {/* ─── 3-0 계정 연결 Panel (NEXT_PUBLIC_ENABLE_EMAIL_LINK=true 일 때만) ─── */}
+      {showAccount && EMAIL_LINK_ENABLED && (
         <div style={s.collOverlay}>
           <div style={s.collPanel}>
             <div style={s.collHeader}>

@@ -59,6 +59,8 @@
 | `GEMINI_API_KEY` | O | AI Studio 에서 발급한 키 |
 | `GEMINI_MODELS` | X | 모델 폴백 순서(쉼표 구분). 비우면 코드 기본값 |
 | `GEMINI_MODELS_TEAM` | X | 박사 코멘트(`mode: "team"`) 전용 모델 순서. 비우면 `gemini-3.1-flash-lite,gemini-3-flash-preview` (고급 모델 한도를 개체값 분석용으로 남김) |
+| `CRON_SECRET` | X (권장) | Vercel Cron → `/api/keep-alive` 인증. 없으면 keep-alive 가 503 으로 거부 |
+| `NEXT_PUBLIC_ENABLE_EMAIL_LINK` | X | `true` 면 이메일 계정 연결 UI 표시(기본 숨김) |
 | `GEMINI_MIN_CHARS` | X | 응답 본문이 이 글자 수 미만이거나 `finishReason` 이 `STOP` 이 아니면 비정상으로 보고 다음 모델로 재시도(기본 400). 재시도 시 클라이언트는 `__RESET__` 마커로 이전 본문을 버리고, 사용 횟수는 최종 채택된 응답 1회만 기록 |
 | `GEMINI_MIN_CHARS_TEAM` | X | 박사 코멘트(`mode: "team"`, 3~5줄)의 짧은 응답 기준(기본 60) |
 | `GEMINI_API_BASE` | X | 테스트용 모의 서버 지정(기본 공식 엔드포인트) |
@@ -175,9 +177,36 @@ Vercel 에서는 환경변수 `POGO_DISABLE_SOURCES` 를 Preview 환경에 잠�
 ### 테스트
 `npm test` (`node --test tests/*.test.mjs`): 레벨 추정(뮤츠·레쿠쟈·망나뇽 L40 100% CP, 반 레벨 왕복), 섀도 보정, 레이드 순서(마기라스 → 격투 상위, 박사행 제외, 6마리 채움), 로켓 슬롯 커버.
 
-## 3-0단계: 계정 연결 (익명 → 이메일 인증)
+## 3-0단계 보완: 기기 연결 코드 (안드로이드 수집기 인증)
 
-기기마다 따로 생기는 익명 계정을 이메일(OTP 6자리 코드)로 정식 계정에 연결해, 안드로이드 수집기(3-1)·다른 브라우저와 같은 목록을 쓰게 한다. 비밀번호 없음. 연결하지 않아도 익명으로 계속 사용 가능.
+이메일 계정 연결(아래 절)은 **사용하지 않는다**(Supabase 기본 발송은 템플릿 수정 불가·발송 제약). 대신 웹에서 발급한 8자리 코드를 앱에 입력해 장기 토큰을 받는 방식으로 앱이 이 계정의 `my_pokemon` 에 저장한다.
+
+### 사용자가 해야 하는 설정
+1. Supabase SQL Editor 에서 `supabase/migrations/0002_device_pairing.sql` 전체 실행(멱등).
+2. Vercel → 프로젝트 → Settings → Environment Variables 에 `CRON_SECRET` 추가(임의의 긴 문자열, Production). Vercel Cron 이 `/api/keep-alive` 호출 시 `Authorization: Bearer <CRON_SECRET>` 를 자동으로 붙인다. 재배포 후 Vercel → Cron Jobs 에서 `0 3 * * *`(UTC, 한국 12:00) 등록 확인.
+3. (이메일 UI 를 다시 켜려면) `NEXT_PUBLIC_ENABLE_EMAIL_LINK=true`.
+
+### 테이블 (`supabase/migrations/0002_device_pairing.sql`)
+- `device_pair_codes(code_hash pk, user_id, expires_at, attempts, used_at)` — 코드는 SHA-256 해시만 저장. 클라이언트는 본인 행의 해시 외 컬럼만 select, 쓰기 불가.
+- `device_tokens(id, user_id, name, token_hash, created_at, last_used_at, revoked_at)` — 토큰은 해시만 저장. 클라이언트는 본인 행 select(해시 제외) + `revoked_at` 컬럼만 update(해제). insert·검증은 서버(secret key)만.
+- `cleanup_device_pair_codes()` — 사용·만료 코드 삭제(서비스 역할, keep-alive 에서 호출).
+
+### API (`app/api/device/*`, `app/lib/deviceAuth.js`)
+| 단계 | 요청 | 규칙 |
+|---|---|---|
+| 1. 코드 발급 | `POST /api/device/pair-code` (웹, `Authorization: Bearer <Supabase 세션>`) | 8자리, 알파벳 `ABCDEFGHJKMNPQRSTUVWXYZ23456789`(O/0/1/I/L 제외), 10분 유효, 사용자당 활성 코드 1개, 10분 5회 |
+| 2. 교환 | `POST /api/device/pair` `{code, deviceName}` (앱) | 1회용(`used_at` 조건부 갱신으로 동시 요청 차단), 만료·재사용 거부, 실패 시 활성 코드 `attempts+1` → 5회면 무효, IP 당 10분 10회 → 429. 응답 `{token, deviceId, name}` 의 토큰은 이때 1회만 반환 |
+| 3. 저장 | `POST /api/device/pokemon` (`Authorization: Bearer <토큰>`) | 토큰 해시로 `user_id` 결정, 본문의 `user_id/id/source` 무시, `source='overlay'`. 필드 검증(종 1~2000, CP 10~9999, 개체값 0~15 전부 또는 전부 null, 기술 ≤2, status/purposes 열거값). 해제된 토큰은 401. `GET` 은 연결 상태 확인 |
+| 4. 관리 | 웹 "📱 기기 연결" 패널 | 코드 발급·표시, 연결 기기 목록, 해제(`revoked_at`) |
+- 코드·토큰 원문은 서버 로그에 남기지 않는다(`[device]` 로그는 기기 id·이름·실패 사유만).
+- `GET /api/keep-alive` — `CRON_SECRET` 검사 후 `ai_usage` 1건 조회 + 코드 정리. `vercel.json` cron `0 3 * * *`.
+
+### 검증 (이 환경, 모의 PostgREST)
+코드 발급 → 소문자·공백 섞인 입력으로 교환 성공 → 같은 코드 재사용 400 → `user_id` 위조 본문 저장 시 서버 결정 계정으로 `source='overlay'` 저장 → 검증 실패 400 → 토큰 없음/해제 후 401 → 만료 코드 400 → 실패 5회 누적 코드 400 → IP 제한 429 → keep-alive 비밀 없음 401/정상 200. 로그에 코드·토큰 원문 0건. RLS 는 실제 Supabase 에서 확인 필요.
+
+## 3-0단계: 계정 연결 (익명 → 이메일 인증) — 기본 숨김, 코드만 보존
+
+기기마다 따로 생기는 익명 계정을 이메일(OTP 6자리 코드)로 정식 계정에 연결해, 안드로이드 수집기(3-1)·다른 브라우저와 같은 목록을 쓰게 한다. 비밀번호 없음. 연결하지 않아도 익명으로 계속 사용 가능. **현재는 `NEXT_PUBLIC_ENABLE_EMAIL_LINK=true` 일 때만 UI 가 표시된다.**
 
 ### 사용자가 해야 하는 Supabase 설정
 1. Authentication → Sign In / Providers → **Email**: Enable 상태 확인(기본 켜짐). "Confirm email" 켜짐 유지. **Anonymous Sign-Ins** 도 그대로 켜 둔다.

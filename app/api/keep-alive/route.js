@@ -1,0 +1,23 @@
+import { NextResponse } from "next/server";
+import { getServiceClient } from "../../lib/supabaseServer";
+
+// Supabase 무료 플랜 휴면(7일 비활성) 방지: Vercel Cron 이 하루 1회 호출 → DB 가벼운 조회 1건.
+// Vercel 은 CRON_SECRET 환경변수가 있으면 Authorization: Bearer <CRON_SECRET> 를 붙여 호출한다.
+export async function GET(req) {
+  const secret = process.env.CRON_SECRET || "";
+  if (!secret) return NextResponse.json({ error: "CRON_SECRET 미설정" }, { status: 503 });
+  const auth = req.headers.get("authorization") || "";
+  if (auth !== `Bearer ${secret}`) return NextResponse.json({ error: "unauthorized" }, { status: 401 });
+  const sb = getServiceClient();
+  if (!sb) return NextResponse.json({ error: "서버 Supabase 미설정" }, { status: 503 });
+  const t0 = Date.now();
+  const { error } = await sb.from("ai_usage").select("usage_date").limit(1);
+  let cleaned = null;
+  try { const r = await sb.rpc("cleanup_device_pair_codes"); cleaned = r.error ? null : r.data; } catch {}
+  if (error) {
+    console.warn(`[keep-alive] 조회 실패: ${error.message}`);
+    return NextResponse.json({ ok: false, error: error.message }, { status: 500 });
+  }
+  console.log(`[keep-alive] ok ${Date.now() - t0}ms cleanedCodes=${cleaned}`);
+  return NextResponse.json({ ok: true, at: new Date().toISOString(), ms: Date.now() - t0, cleanedCodes: cleaned });
+}
