@@ -7,11 +7,12 @@ plugins {
 }
 
 // 서명: GitHub Actions 가 Secrets 로 넘긴 keystore (환경변수). 없으면 debug 키로 서명 (경고 출력, 업데이트 설치 불가)
-val ksPath = System.getenv("ANDROID_KEYSTORE_PATH")
-val ksPass = System.getenv("ANDROID_KEYSTORE_PASSWORD")
-val keyAlias = System.getenv("ANDROID_KEY_ALIAS")
-val keyPass = System.getenv("ANDROID_KEY_PASSWORD")
-val hasReleaseKey = !ksPath.isNullOrBlank() && File(ksPath).exists() && !ksPass.isNullOrBlank() && !keyAlias.isNullOrBlank()
+// (이름을 env* 로 두는 이유: signingConfig 블록 안에서 keyAlias 는 수신자 프로퍼티를 가리켜 값이 null 로 들어갔던 문제)
+val envKsPath = System.getenv("ANDROID_KEYSTORE_PATH")
+val envKsPass = System.getenv("ANDROID_KEYSTORE_PASSWORD")
+val envKeyAlias = System.getenv("ANDROID_KEY_ALIAS")
+val envKeyPass = System.getenv("ANDROID_KEY_PASSWORD")
+val hasReleaseKey = !envKsPath.isNullOrBlank() && File(envKsPath).exists() && !envKsPass.isNullOrBlank() && !envKeyAlias.isNullOrBlank()
 if (!hasReleaseKey) logger.warn("[pogo-doctor] 릴리스 keystore 없음 → debug 키로 서명합니다 (기기에서 기존 설치 위에 업데이트 불가)")
 
 // 서버 URL: gradle 속성 -PpogoServerUrl 또는 환경변수 POGO_SERVER_URL, 기본은 운영 도메인 (앱 설정 화면에서 변경 가능)
@@ -33,10 +34,10 @@ android {
     signingConfigs {
         if (hasReleaseKey) {
             create("release") {
-                storeFile = file(ksPath!!)
-                storePassword = ksPass
-                this.keyAlias = keyAlias
-                keyPassword = keyPass ?: ksPass
+                storeFile = file(envKsPath!!)
+                storePassword = envKsPass
+                keyAlias = envKeyAlias
+                keyPassword = envKeyPass ?: envKsPass
             }
         }
     }

@@ -52,6 +52,6 @@ class DataRepo(private val ctx: Context, private val prefs: Prefs) {
         // 같은 한국어명(폼 차이)은 Normal 폼 우선 1개만 이름 매칭 대상으로
         val byName = LinkedHashMap<String, SpeciesRef>()
         for (s in list.sortedBy { if (it.form == "Normal") 0 else 1 }) byName.putIfAbsent(s.nameKr, s)
-        return Data(byName.values.toList(), krToEn, krToEn.keys.toList(), root.optString("generatedAt", null))
+        return Data(byName.values.toList(), krToEn, krToEn.keys.toList(), root.optString("generatedAt", "").takeIf { it.isNotBlank() })
     }
 }
