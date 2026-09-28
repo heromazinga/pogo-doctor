@@ -36,11 +36,11 @@ export async function GET() {
   try {
     const res = await fetch(
       "https://raw.githubusercontent.com/bigfoott/ScrapedDuck/data/events.min.json",
-      { next: { revalidate: 0 } }
+      { cache: "no-store", signal: AbortSignal.timeout(8000) }
     );
     if (!res.ok) {
       if (cache) return NextResponse.json(cache);
-      return NextResponse.json({ error: "Failed to fetch events" }, { status: 502 });
+      return NextResponse.json({ error: `ScrapedDuck 응답 오류 (HTTP ${res.status})` }, { status: 502 });
     }
 
     const data = await res.json();

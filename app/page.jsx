@@ -59,6 +59,12 @@ export default function Home() {
   // ─── Raid bosses enriched with Korean names ───
   const [enrichedRaidBosses, setEnrichedRaidBosses] = useState([]);
 
+  // ─── 외부 소스 장애 안내 (해당 기능만 비활성화, 나머지는 정상 동작) ───
+  const [raidBossesError, setRaidBossesError] = useState(null);
+  const [eventsError, setEventsError] = useState(null);
+  const [maxBattlesError, setMaxBattlesError] = useState(null);
+  const pokeapiDownRef = useRef(false); // PokeAPI 한국어 기술명 폴백이 죽었으면 더 이상 호출하지 않음
+
   // ─── Events ───
   const [events, setEvents] = useState([]);
   const [eventsLoading, setEventsLoading] = useState(false);
@@ -151,9 +157,10 @@ export default function Home() {
       .then((r) => r.json())
       .then((data) => {
         if (Array.isArray(data)) setCurrentRaidBosses(data);
+        else setRaidBossesError(data?.error || "응답 형식 오류");
         setRaidBossesLoading(false);
       })
-      .catch(() => setRaidBossesLoading(false));
+      .catch(() => { setRaidBossesError("네트워크 오류"); setRaidBossesLoading(false); });
   }, []);
 
   // ─── 이벤트 로드 ───
@@ -163,32 +170,38 @@ export default function Home() {
       .then((r) => r.json())
       .then((data) => {
         if (Array.isArray(data)) setEvents(data);
+        else setEventsError(data?.error || "응답 형식 오류");
         setEventsLoading(false);
       })
-      .catch(() => setEventsLoading(false));
+      .catch(() => { setEventsError("네트워크 오류"); setEventsLoading(false); });
   }, []);
 
-  // ─── 맥스배틀 로드 ───
+  // ─── 맥스배틀 로드 (1회) ───
+  const [rawMaxBattles, setRawMaxBattles] = useState([]);
   useEffect(() => {
     setMaxBattlesLoading(true);
     fetch("/api/max-battles")
       .then((r) => r.json())
       .then((data) => {
-        if (Array.isArray(data)) {
-          // allPokemon으로 한국어 이름 매칭
-          const enriched = data.map((b) => {
-            if (b.id && allPokemon.length > 0) {
-              const match = allPokemon.find((p) => p.id === b.id);
-              if (match) return { ...b, nameKr: match.nameKr };
-            }
-            return b;
-          });
-          setMaxBattles(enriched);
-        }
+        if (Array.isArray(data)) setRawMaxBattles(data);
+        else setMaxBattlesError(data?.error || "응답 형식 오류");
         setMaxBattlesLoading(false);
       })
-      .catch(() => setMaxBattlesLoading(false));
-  }, [allPokemon]);
+      .catch(() => { setMaxBattlesError("네트워크 오류"); setMaxBattlesLoading(false); });
+  }, []);
+
+  // ─── 맥스배틀 보스에 한국어 이름 매칭 (allPokemon 로드 후, 재요청 없이) ───
+  useEffect(() => {
+    if (rawMaxBattles.length === 0) return;
+    const enriched = rawMaxBattles.map((b) => {
+      if (b.id && allPokemon.length > 0) {
+        const match = allPokemon.find((p) => p.id === b.id);
+        if (match) return { ...b, nameKr: match.nameKr };
+      }
+      return b;
+    });
+    setMaxBattles(enriched);
+  }, [allPokemon, rawMaxBattles]);
 
   // ─── 레이드 보스에 한국어 이름 매칭 (allPokemon 로드 후) ───
   // ScrapedDuck은 영어 이름만 제공하므로 dex ID로 매칭
@@ -248,8 +261,9 @@ export default function Home() {
     setShowSugg(false);
 
     const allMoves = [...(poke.fast || []), ...(poke.charged || []), ...(poke.eliteFast || []), ...(poke.eliteCharged || [])];
+    // 서버(pokemon-go-api)가 준 한국어 기술명이 없을 때만 PokeAPI 로 보충
     const toFetch = allMoves.filter((m) => !moveNamesKr[m]);
-    if (toFetch.length > 0) {
+    if (toFetch.length > 0 && !pokeapiDownRef.current) {
       Promise.allSettled(
         toFetch.map(async (engName) => {
           const slug = engName.toLowerCase().replace(/[()'']/g, "").replace(/\s+/g, "-").replace(/--+/g, "-");
@@ -259,7 +273,7 @@ export default function Home() {
             const d = await r.json();
             const kr = d.names?.find((n) => n.language.name === "ko");
             if (kr) return { eng: engName, kr: kr.name };
-          } catch {}
+          } catch { pokeapiDownRef.current = true; }
         })
       ).then((results) => {
         const newNames = {};
@@ -814,6 +828,9 @@ export default function Home() {
                 </div>
               )}
               {raidBossesLoading && <div style={{ fontSize: 11, color: "#8899aa", marginBottom: 8 }}>레이드 보스 로딩 중...</div>}
+              {raidBossesError && (
+                <div style={s.sourceNotice}>⚠️ 현재 레이드 보스 목록을 불러오지 못했습니다 (ScrapedDuck: {raidBossesError}). 아래 검색으로 보스를 직접 선택하세요.</div>
+              )}
 
               <div style={{ position: "relative" }}>
                 <input style={s.input} value={raidBossName} onChange={(e) => handleRaidBossSearch(e.target.value)} onFocus={() => raidSuggestions.length > 0 && setShowRaidSugg(true)} onBlur={() => setTimeout(() => setShowRaidSugg(false), 200)} placeholder="예: 가이오가, Mewtwo..." />
@@ -865,6 +882,14 @@ export default function Home() {
                 <div style={{ fontSize: 11, color: "#8899aa" }}>LeekDuck · snacknap 자동 반영</div>
               </div>
             </div>
+
+            {/* ─── 외부 소스 장애 안내 ─── */}
+            {maxBattlesError && (
+              <div style={s.sourceNotice}>⚠️ 맥스배틀 정보를 불러오지 못했습니다 (snacknap.com: {maxBattlesError}). 이 기능은 소스가 복구될 때까지 비활성화됩니다.</div>
+            )}
+            {eventsError && (
+              <div style={s.sourceNotice}>⚠️ 이벤트 정보를 불러오지 못했습니다 (ScrapedDuck: {eventsError}).</div>
+            )}
 
             {/* ─── 현재 파워스팟 (맥스배틀) ─── */}
             {(maxBattlesLoading || maxBattles.length > 0) && (
@@ -924,7 +949,7 @@ export default function Home() {
               <div style={{ textAlign: "center", padding: "20px 0", color: "#8899aa", fontSize: 13 }}>이벤트 로딩 중...</div>
             )}
 
-            {!eventsLoading && events.length === 0 && maxBattles.length === 0 && (
+            {!eventsLoading && !eventsError && !maxBattlesError && events.length === 0 && maxBattles.length === 0 && (
               <div style={{ textAlign: "center", padding: "20px 0", color: "#8899aa", fontSize: 13 }}>
                 <div style={{ fontSize: 32, marginBottom: 8 }}>📭</div>
                 현재 진행 중인 이벤트가 없습니다
@@ -1273,6 +1298,7 @@ const s = {
   tabActive: { flex: 1, padding: "10px 0", background: "linear-gradient(135deg,#1a2744,#162038)", border: "1px solid rgba(0,212,170,0.2)", borderRadius: 10, color: "#4ecdc4", fontSize: 13, fontWeight: 700, fontFamily: "'Outfit',sans-serif", cursor: "pointer", boxShadow: "0 2px 8px rgba(0,0,0,0.2)" },
   sectionHeader: { display: "flex", alignItems: "center", gap: 12, marginBottom: 20, padding: "12px 16px", background: "rgba(255,159,67,0.08)", border: "1px solid rgba(255,159,67,0.2)", borderRadius: 12 },
   collNote: { padding: "8px 12px", background: "rgba(0,212,170,0.06)", border: "1px solid rgba(0,212,170,0.1)", borderRadius: 8, fontSize: 12, color: "#4ecdc4", marginBottom: 16 },
+  sourceNotice: { padding: "8px 12px", background: "rgba(255,217,61,0.08)", border: "1px solid rgba(255,217,61,0.25)", borderRadius: 8, fontSize: 11, color: "#ffd93d", marginBottom: 12, lineHeight: 1.5 },
   compareCard: { padding: "12px 16px", background: "#1a2744", border: "1px solid #2a3a5c", borderRadius: 12, marginBottom: 8, cursor: "pointer" },
   compareMini: { flex: 1, padding: "10px 12px", background: "#0d1a2e", border: "1px solid #2a3a5c", borderRadius: 10, textAlign: "center" },
   collFilterRow: { display: "flex", gap: 4, marginBottom: 12, overflowX: "auto", paddingBottom: 4 },
