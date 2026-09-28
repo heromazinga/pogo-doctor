@@ -221,15 +221,17 @@ class CaptureService : Service() {
         val ap = lastAppraisal
         if (ap != null) cands = IvCalc.filterByAppraisal(cands, ap.atk, ap.def, ap.sta)
         val s = IvCalc.summarize(cands)
+        // Appraisal 은 다른 모듈(core)의 public 프로퍼티라 스마트 캐스트가 안 되므로 지역 변수로 복사
+        val apA = ap?.atk; val apD = ap?.def; val apS = ap?.sta
         val ivs: Triple<Int, Int, Int>? = when {
-            ap != null && ap.atk != null && ap.def != null && ap.sta != null -> Triple(ap.atk, ap.def, ap.sta)
+            apA != null && apD != null && apS != null -> Triple(apA, apD, apS)
             s.exact -> Triple(s.candidates[0].atk, s.candidates[0].def, s.candidates[0].sta)
             else -> null
         }
         val ivText = when {
             s.empty -> "개체값: 후보 없음 (CP/HP 인식 확인)"
             ivs != null -> "개체값: ${ivs.first}/${ivs.second}/${ivs.third} (${Math.round((ivs.first + ivs.second + ivs.third) * 100.0 / 45)}%)${if (ap != null) " · 평가 화면 판독" else " · CP·HP 로 확정"}"
-            else -> "개체값 후보 ${s.candidates.size}개: 공${r(s.atkRange!!)} 방${r(s.defRange!!)} HP${r(s.staRange!!)} → ${r(s.percentRange!!)}% · L${s.levelRange!!.start}~${s.levelRange.endInclusive} (평가 화면을 캡처하면 확정)"
+            else -> { val lr = s.levelRange!!; "개체값 후보 ${s.candidates.size}개: 공${r(s.atkRange!!)} 방${r(s.defRange!!)} HP${r(s.staRange!!)} → ${r(s.percentRange!!)}% · L${lr.start}~${lr.endInclusive} (평가 화면을 캡처하면 확정)" }
         }
         return Computed(s, ivText, if (!s.empty) Verdict.oneLiner(base, s) else null, ivs)
     }
