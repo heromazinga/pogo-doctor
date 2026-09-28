@@ -132,7 +132,7 @@ export default function Home() {
           setAllPokemon(data.pokemon);
           // 서버가 모아준 한국어 기술명 (pokemon-go-api) → PokeAPI 호출 최소화
           if (data.moveNamesKr) setMoveNamesKr((prev) => ({ ...data.moveNamesKr, ...prev }));
-          setDataMeta({ generatedAt: data.generatedAt, stale: data.stale, dataSources: data.dataSources || [], dataWarningCount: data.dataWarningCount || 0 });
+          setDataMeta({ generatedAt: data.generatedAt, stale: data.stale, dataSources: data.dataSources || [], dataWarningCount: data.dataWarningCount || 0, dataWarningCounts: data.dataWarningCounts || {} });
         } else if (data && data.error) {
           setError(`포켓몬 데이터 로드 실패: ${data.error}`);
           if (data.dataSources) setDataMeta({ generatedAt: null, dataSources: data.dataSources, dataWarningCount: 0 });
@@ -260,7 +260,7 @@ export default function Home() {
     setSuggestions([]);
     setShowSugg(false);
 
-    const allMoves = [...(poke.fast || []), ...(poke.charged || []), ...(poke.eliteFast || []), ...(poke.eliteCharged || [])];
+    const allMoves = [...(poke.fast || []), ...(poke.charged || []), ...(poke.eliteFast || []), ...(poke.eliteCharged || []), ...(poke.unverifiedFast || []), ...(poke.unverifiedCharged || [])];
     // 서버(pokemon-go-api)가 준 한국어 기술명이 없을 때만 PokeAPI 로 보충
     const toFetch = allMoves.filter((m) => !moveNamesKr[m]);
     if (toFetch.length > 0 && !pokeapiDownRef.current) {
@@ -391,7 +391,7 @@ export default function Home() {
     setLoading(true); setStreaming(true); setError(null); setResult(null); setCurrentKept(false); setUsedModel("");
 
     const pokemonData = selectedPokemon
-      ? { name: selectedPokemon.name, nameKr: selectedPokemon.nameKr, id: selectedPokemon.id, form: selectedPokemon.form, types: selectedPokemon.types, baseAttack: selectedPokemon.baseAttack, baseDefense: selectedPokemon.baseDefense, baseStamina: selectedPokemon.baseStamina, fast: selectedPokemon.fast, charged: selectedPokemon.charged, eliteFast: selectedPokemon.eliteFast, eliteCharged: selectedPokemon.eliteCharged }
+      ? { name: selectedPokemon.name, nameKr: selectedPokemon.nameKr, id: selectedPokemon.id, form: selectedPokemon.form, types: selectedPokemon.types, baseAttack: selectedPokemon.baseAttack, baseDefense: selectedPokemon.baseDefense, baseStamina: selectedPokemon.baseStamina, fast: selectedPokemon.fast, charged: selectedPokemon.charged, eliteFast: selectedPokemon.eliteFast, eliteCharged: selectedPokemon.eliteCharged, unverifiedFast: selectedPokemon.unverifiedFast, unverifiedCharged: selectedPokemon.unverifiedCharged }
       : { name: pokemonName, note: "API에서 매칭 안됨" };
 
     const fastMoveDisplay = fastMove ? `${krMove(fastMove)} (${fastMove})` : "";
@@ -708,6 +708,11 @@ export default function Home() {
                           {selectedPokemon.eliteFast.map((m) => <option key={m} value={m}>⭐ {krMove(m)} ({m})</option>)}
                         </optgroup>
                       )}
+                      {selectedPokemon.unverifiedFast?.length > 0 && (
+                        <optgroup label="── 미검증 (1개 소스만 보고) ──">
+                          {selectedPokemon.unverifiedFast.map((m) => <option key={m} value={m}>❔ {krMove(m)} ({m})</option>)}
+                        </optgroup>
+                      )}
                     </select>
                   ) : <input style={s.input} value={fastMove} onChange={(e) => setFastMove(e.target.value)} />}
                 </div>
@@ -720,6 +725,11 @@ export default function Home() {
                       {selectedPokemon.eliteCharged?.length > 0 && (
                         <optgroup label="── 한정기술 ──">
                           {selectedPokemon.eliteCharged.map((m) => <option key={m} value={m}>⭐ {krMove(m)} ({m})</option>)}
+                        </optgroup>
+                      )}
+                      {selectedPokemon.unverifiedCharged?.length > 0 && (
+                        <optgroup label="── 미검증 (1개 소스만 보고) ──">
+                          {selectedPokemon.unverifiedCharged.map((m) => <option key={m} value={m}>❔ {krMove(m)} ({m})</option>)}
                         </optgroup>
                       )}
                     </select>
@@ -1053,8 +1063,8 @@ export default function Home() {
             <p style={{ fontSize: 10, opacity: 0.7, marginTop: 4, lineHeight: 1.6 }}>
               데이터 기준 시각: {fmtStamp(dataMeta.generatedAt)}{dataMeta.stale ? " (이전 캐시)" : ""}
               <br />
-              {dataMeta.dataSources.map((src) => `${src.name} ${src.ok ? "✓" : "✗"}`).join(" · ")}
-              {dataMeta.dataWarningCount > 0 ? ` · 소스 불일치 ${dataMeta.dataWarningCount}건(다수결 적용)` : ""}
+              {dataMeta.dataSources.map((src) => `${src.name} ${src.ok ? "✓" : src.skipped ? "생략" : "✗"}`).join(" · ")}
+              {dataMeta.dataWarningCount > 0 ? ` · 소스 불일치 ${dataMeta.dataWarningCount}건 (종족값 ${dataMeta.dataWarningCounts?.stat ?? 0} · 타입 ${dataMeta.dataWarningCounts?.type ?? 0} · 기술 다수결 ${dataMeta.dataWarningCounts?.moveMajority ?? 0} · 기술 미검증 ${dataMeta.dataWarningCounts?.moveUnverified ?? 0})` : ""}
             </p>
           )}
           <p style={{ fontSize: 10, opacity: 0.4, marginTop: 4 }}>Pokémon GO는 Niantic, Inc.의 상표입니다</p>

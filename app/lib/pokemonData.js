@@ -93,6 +93,12 @@ function moveKey(nameOrId) {
     .replace(/[^a-z0-9]/g, "");
   // PvPoke 는 잠재파워를 타입별 16개로 펼쳐 놓는다 → 하나로 합침
   if (k.startsWith("hiddenpower")) return "hiddenpower";
+  // "Weather Ball (Normal)" / WEATHER_BALL_NORMAL ↔ "Weather Ball" 표기 차이 통일
+  if (k === "weatherballnormal") return "weatherball";
+  if (k === "technoblastnormal") return "technoblast";
+  // PvPoke 는 테크노버스터를 드라이브 이름(Douse/Shock/Burn/Chill)으로, 게임 원본은 타입명으로 부른다
+  const techno = { technoblastdouse: "technoblastwater", technoblastshock: "technoblastelectric", technoblastburn: "technoblastfire", technoblastchill: "technoblastice" };
+  if (techno[k]) return techno[k];
   return k;
 }
 
@@ -310,6 +316,7 @@ async function fetchJson(url, { timeoutMs = 10000, revalidate, fetchImpl = fetch
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
   return res.json();
 }
+// 주의: pokemon-go-api pokedex.json 은 약 15MB, PokeMiners latest.json 은 약 20MB 로 Next fetch 캐시(2MB) 대상이 아니다.
 
 function disabledSources() {
   return new Set((process.env.POGO_DISABLE_SOURCES || "").split(",").map((s) => s.trim()).filter(Boolean));
@@ -317,7 +324,7 @@ function disabledSources() {
 
 async function loadSource(sourceKey, fetchImpl) {
   const def = SOURCE_DEFS[sourceKey];
-  const meta = { name: def.name, url: def.url, fetchedAt: new Date().toISOString(), ok: false, count: 0 };
+  const meta = { name: def.name, url: def.url, fetchedAt: new Date().toISOString(), ok: false, count: 0, sizeBytes: 0 };
   if (disabledSources().has(def.name) || disabledSources().has(sourceKey)) {
     meta.error = "POGO_DISABLE_SOURCES 로 비활성화됨";
     return { meta, parsed: null };
@@ -375,7 +382,7 @@ function pickValue(values /* [{src, value}] */, refereeName) {
 function mergeMoves(entries /* [{src, list, elite}] */, refereeName) {
   // entries 는 기술 목록을 제공하는 소스만
   const providers = entries.filter((e) => e.hasMoves);
-  if (providers.length === 0) return { regular: [], elite: [], warnings: [] };
+  if (providers.length === 0) return { regular: [], elite: [], unverified: [], warnings: [] };
   const votes = new Map(); // moveKey → { srcs:Set, eliteVotes:number }
   for (const e of providers) {
     for (const k of e.list) {
@@ -388,19 +395,22 @@ function mergeMoves(entries /* [{src, list, elite}] */, refereeName) {
       votes.get(k).eliteVotes += 1;
     }
   }
-  const regular = [], elite = [], warnings = [];
+  const regular = [], elite = [], unverified = [], warnings = [];
   for (const [k, v] of votes) {
     const n = v.srcs.size;
-    const adopt = n >= 2 || providers.length === 1 || v.srcs.has(refereeName);
-    if (!adopt) {
-      warnings.push({ move: k, srcs: [...v.srcs], action: "dropped" });
+    // 검증됨: 2개 이상 소스 일치, 소스가 하나뿐, 또는 PokeMiners(게임 원본)에 존재
+    const verified = n >= 2 || providers.length === 1 || v.srcs.has(refereeName);
+    if (!verified) {
+      // 1개 소스에만 있는 기술은 버리지 않고 "미검증"으로 노출
+      unverified.push(k);
+      warnings.push({ move: k, srcs: [...v.srcs], action: "unverified" });
       continue;
     }
-    if (n < providers.length && providers.length > 1) warnings.push({ move: k, srcs: [...v.srcs], action: "adopted" });
+    if (n < providers.length && providers.length > 1) warnings.push({ move: k, srcs: [...v.srcs], action: "majority" });
     if (v.eliteVotes * 2 >= n) elite.push(k);
     else regular.push(k);
   }
-  return { regular, elite, warnings };
+  return { regular, elite, unverified, warnings };
 }
 
 function crossValidate(loaded /* {sourceKey: {meta, parsed}} */) {
@@ -412,9 +422,23 @@ function crossValidate(loaded /* {sourceKey: {meta, parsed}} */) {
   for (const s of active) {
     for (const [k, v] of s.moveNames) {
       const cur = moveRegistry.get(k);
-      if (!cur) moveRegistry.set(k, { name: v.name, nameKr: v.nameKr || null });
-      else if (!cur.nameKr && v.nameKr) cur.nameKr = v.nameKr;
+      if (!cur) moveRegistry.set(k, { name: v.name, nameKr: v.nameKr || null, candidates: [v.name] });
+      else {
+        if (!cur.nameKr && v.nameKr) cur.nameKr = v.nameKr;
+        cur.candidates.push(v.name);
+      }
     }
+  }
+  // 표시명 충돌 해소: pokemon-go-api 는 "Weather Ball (Rock)" 류 변형을 전부 "Weather Ball" 로 부르므로
+  // 같은 이름을 쓰는 키가 2개 이상이면 후순위 소스의 구분 가능한 이름(예: PvPoke "Weather Ball (Rock)")을 쓴다
+  const nameUse = new Map();
+  for (const [k, v] of moveRegistry) nameUse.set(v.name, (nameUse.get(v.name) || 0) + 1);
+  for (const [, v] of moveRegistry) {
+    if (nameUse.get(v.name) > 1) {
+      const alt = v.candidates.find((n) => n !== v.name && !nameUse.has(n));
+      if (alt) v.name = alt;
+    }
+    delete v.candidates;
   }
   const moveDisplay = (k) => moveRegistry.get(k)?.name || k;
 
@@ -423,6 +447,8 @@ function crossValidate(loaded /* {sourceKey: {meta, parsed}} */) {
 
   const pokemon = [];
   const warnings = [];
+  // 유형별 집계: stat(종족값 실제 차이) / type(타입 차이) / moveMajority(다수결 채택, 일부 소스 누락) / moveUnverified(1개 소스만 보유)
+  const counts = { stat: 0, type: 0, moveMajority: 0, moveUnverified: 0 };
   let statDisputes = 0, moveDisputes = 0, typeDisputes = 0;
 
   for (const key of allKeys) {
@@ -452,7 +478,9 @@ function crossValidate(loaded /* {sourceKey: {meta, parsed}} */) {
     const chM = mergeMoves(recs.map((x) => ({ src: x.src, list: x.rec.charged, elite: x.rec.eliteCharged, hasMoves: x.rec.hasMoves })), refereeName);
     for (const w of [...fastM.warnings, ...chM.warnings]) {
       moveDisputes++;
-      warnings.push(`[move] ${key} ${first.name} "${moveDisplay(w.move)}" ${w.action} (있음: ${w.srcs.join(",")})`);
+      if (w.action === "unverified") counts.moveUnverified++;
+      else counts.moveMajority++;
+      warnings.push(`[move:${w.action}] ${key} ${first.name} "${moveDisplay(w.move)}" (있음: ${w.srcs.join(",")})`);
     }
 
     const nameRec = recs.find((x) => x.rec.name)?.rec;
@@ -464,37 +492,75 @@ function crossValidate(loaded /* {sourceKey: {meta, parsed}} */) {
       types: typeWinner || [],
       fast: fastM.regular.map(moveDisplay), charged: chM.regular.map(moveDisplay),
       eliteFast: fastM.elite.map(moveDisplay), eliteCharged: chM.elite.map(moveDisplay),
+      // 1개 소스(PokeMiners 제외)에만 있는 기술 — 게임 반영 미확인
+      unverifiedFast: fastM.unverified.map(moveDisplay), unverifiedCharged: chM.unverified.map(moveDisplay),
       sources: recs.map((x) => x.src),
     });
   }
+  counts.stat = statDisputes;
+  counts.type = typeDisputes;
 
   pokemon.sort((a, b) => a.id - b.id || (a.form === "Normal" ? -1 : b.form === "Normal" ? 1 : a.form.localeCompare(b.form)));
 
   const moveNamesKr = {};
   for (const [, v] of moveRegistry) if (v.nameKr) moveNamesKr[v.name] = v.nameKr;
 
-  return { pokemon, moveNamesKr, warnings, counts: { stats: statDisputes, moves: moveDisputes, types: typeDisputes } };
+  return { pokemon, moveNamesKr, warnings, counts, disputes: statDisputes + typeDisputes + moveDisputes };
 }
 
 // ─── 데이터셋 빌드 + 메모리 캐시 ───
 
+// PokeMiners(약 20MB)는 1~3순위 소스 간 불일치가 있을 때만 조회하고, 파싱 결과를 별도로 오래 캐시한다
+const PRIMARY_SOURCES = ["pokemonGoApi", "pvpoke", "pogoapi"];
+const pokeminersMemo = { result: null, at: 0 };
+
+async function loadPokeminersCached(fetchImpl) {
+  const ttl = Number(process.env.POKEMINERS_TTL_MS) || 24 * 60 * 60 * 1000;
+  const disabled = disabledSources().has("pokeminers");
+  if (!disabled && pokeminersMemo.result?.parsed && Date.now() - pokeminersMemo.at < ttl) {
+    return { ...pokeminersMemo.result, meta: { ...pokeminersMemo.result.meta, cached: true } };
+  }
+  const result = await loadSource("pokeminers", fetchImpl);
+  if (result.parsed) {
+    pokeminersMemo.result = result;
+    pokeminersMemo.at = Date.now();
+  } else if (!disabled && pokeminersMemo.result?.parsed) {
+    // 재조회 실패 시 이전 파싱 결과 유지
+    return { ...pokeminersMemo.result, meta: { ...pokeminersMemo.result.meta, cached: true, error: result.meta.error } };
+  }
+  return result;
+}
+
 export async function buildDataset({ fetchImpl = fetch } = {}) {
   const startedAt = Date.now();
-  const results = await Promise.all(SOURCE_ORDER.map((k) => loadSource(k, fetchImpl)));
+  const results = await Promise.all(PRIMARY_SOURCES.map((k) => loadSource(k, fetchImpl)));
   const loaded = {};
-  SOURCE_ORDER.forEach((k, i) => { loaded[k] = results[i]; });
+  PRIMARY_SOURCES.forEach((k, i) => { loaded[k] = results[i]; });
 
-  const { pokemon, moveNamesKr, warnings, counts } = crossValidate(loaded);
+  let cv = crossValidate(loaded);
+  const primaryOk = PRIMARY_SOURCES.filter((k) => loaded[k].parsed).length;
+
+  // 불일치가 있거나 정상 소스가 2개 미만이면 PokeMiners 원본으로 재검증
+  const needReferee = cv.disputes > 0 || primaryOk < 2;
+  if (needReferee) {
+    loaded.pokeminers = await loadPokeminersCached(fetchImpl);
+    if (loaded.pokeminers.parsed) cv = crossValidate(loaded);
+  } else {
+    loaded.pokeminers = { meta: { name: SOURCE_DEFS.pokeminers.name, url: SOURCE_DEFS.pokeminers.url, fetchedAt: null, ok: null, skipped: true, count: 0, reason: "1~3순위 소스 불일치 없음 → 조회 생략" }, parsed: null };
+  }
+
+  const { pokemon, moveNamesKr, warnings, counts } = cv;
   const dataSources = SOURCE_ORDER.map((k) => loaded[k].meta);
   const okCount = dataSources.filter((s) => s.ok).length;
 
   const extra = [];
   if (!loaded.pokemonGoApi.parsed) extra.push("[source] pokemon-go-api 실패 → 한국어 이름 미제공(영문 표기)");
   if (okCount < 2) extra.push(`[source] 정상 소스 ${okCount}개 → 교차검증 불가, 단일 소스 값 사용`);
+  if (needReferee && !loaded.pokeminers.parsed) extra.push("[source] PokeMiners 조회 실패 → 불일치 항목은 우선순위 소스 값 사용");
   const allWarnings = [...extra, ...warnings];
 
   if (allWarnings.length) {
-    console.warn(`[pokemonData] 경고 ${allWarnings.length}건 (stat ${counts.stats}, move ${counts.moves}, type ${counts.types})`);
+    console.warn(`[pokemonData] 경고 ${allWarnings.length}건 (stat ${counts.stat}, type ${counts.type}, move 다수결 ${counts.moveMajority}, move 미검증 ${counts.moveUnverified})`);
     for (const w of allWarnings.slice(0, 200)) console.warn("[pokemonData] " + w);
   }
 

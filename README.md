@@ -60,6 +60,7 @@
 | `GEMINI_MODELS` | X | 모델 폴백 순서(쉼표 구분). 비우면 코드 기본값 |
 | `POGO_DISABLE_SOURCES` | X | 테스트용. 지정한 데이터 소스를 실패한 것으로 처리 (`pokemon-go-api,pvpoke,pogoapi,pokeminers`) |
 | `POKEMON_DATA_TTL_MS` | X | 포켓몬 데이터 메모리 캐시 시간(ms), 기본 6시간 |
+| `POKEMINERS_TTL_MS` | X | PokeMiners 원본 파싱 결과 캐시 시간(ms), 기본 24시간 |
 | `POGO_DEBUG_PROMPT` | X | `1` 이면 Gemini 에 보내는 프롬프트를 서버 로그에 출력 |
 
 ## 데이터 소스
@@ -69,7 +70,7 @@
 | 1 | [pokemon-go-api](https://pokemon-go-api.github.io/pokemon-go-api/api/pokedex.json) | 종족값·타입·기술·한국어명(포켓몬/기술) | 메모리 6h |
 | 2 | [PvPoke gamemaster](https://raw.githubusercontent.com/pvpoke/pvpoke/master/src/data/gamemaster.min.json) | 종족값·타입·기술 | 메모리 6h + fetch revalidate 6h |
 | 3 | [pogoapi.net](https://pogoapi.net/api/v1/pokemon_stats.json) (`pokemon_stats.json`, `current_pokemon_moves.json`) | 기존 소스, 보조 | 메모리 6h + fetch revalidate 6h |
-| 참고 | [PokeMiners game_masters](https://raw.githubusercontent.com/PokeMiners/game_masters/master/latest/latest.json) | 게임 원본(약 20MB). 분쟁 시 최종 기준. 서버에서만 사용 | 메모리 6h |
+| 참고 | [PokeMiners game_masters](https://raw.githubusercontent.com/PokeMiners/game_masters/master/latest/latest.json) | 게임 원본(약 20MB). 불일치가 있을 때만 조회, 분쟁 시 최종 기준. 서버에서만 사용 | 메모리 24h |
 | 유지 | [ScrapedDuck](https://github.com/bigfoott/ScrapedDuck) raids/events | 레이드 보스·이벤트 | 메모리 6h / 3h |
 | 유지 | [snacknap.com/max-battles](https://www.snacknap.com/max-battles) | 맥스배틀 | 메모리 30m |
 | 보조 | [PokeAPI](https://pokeapi.co) | 한국어 기술명 누락분 보충(클라이언트) | sessionStorage |
@@ -80,7 +81,9 @@
 
 - 종족값(공/방/체)·타입·기술 목록을 소스별로 정규화해 비교한다.
 - **2개 이상 소스가 일치하는 값을 채택**한다. 전부 다르면 PokeMiners 원본을 따르고, PokeMiners 도 없으면 우선순위가 높은 소스를 따른다.
-- 기술은 2개 이상 소스에 있거나 PokeMiners 에 있으면 채택, 한 소스에만 있으면 제외한다.
+- 기술은 2개 이상 소스에 있거나 PokeMiners(게임 원본)에 있으면 "검증됨"으로 채택한다. 한 소스에만 있는 기술은 제외하지 않고 `unverifiedFast/unverifiedCharged` 로 분리해 화면에 **미검증(❔)** 으로 노출하며, AI 프롬프트에도 "미검증"으로 전달한다.
+- PokeMiners 원본(약 20MB)은 1~3순위 소스 간 불일치가 있을 때(또는 정상 소스가 2개 미만일 때)만 조회하고, 파싱 결과는 24시간(`POKEMINERS_TTL_MS`) 메모리 캐시한다. 실제로는 소스 간 기술 목록 차이가 거의 항상 존재하므로 데이터셋 재생성(6시간)마다 캐시된 결과를 재사용하고, 하루 1회 정도만 새로 받는다.
+- 불일치 유형은 `dataWarningCounts` 로 집계된다: `stat`(종족값 실제 차이), `type`(타입 차이), `moveMajority`(일부 소스에 없지만 2개 이상 일치로 채택), `moveUnverified`(1개 소스만 보유).
 - 불일치는 서버 로그(`[pokemonData] ...`)와 응답의 `dataWarnings`(최대 100건) / `dataWarningCount` 에 남긴다.
 - 응답의 `dataSources: [{ name, url, fetchedAt, ok, count, error? }]` 로 소스별 상태를 확인할 수 있고, 화면 하단에 "데이터 기준 시각"으로 표시된다.
 - 소스가 전부 실패하면 이전에 성공한 데이터를 계속 사용한다(`stale: true`).

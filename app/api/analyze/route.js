@@ -170,6 +170,8 @@ function verifiedBlock(label, p) {
     `- 빠른기술: ${(p.fast || []).join(", ") || "데이터 없음"}${p.eliteFast?.length ? ` / 한정: ${p.eliteFast.join(", ")}` : ""}`,
     `- 차징기술: ${(p.charged || []).join(", ") || "데이터 없음"}${p.eliteCharged?.length ? ` / 한정: ${p.eliteCharged.join(", ")}` : ""}`,
   ];
+  const unv = [...(p.unverifiedFast || []), ...(p.unverifiedCharged || [])];
+  if (unv.length) lines.push(`- 미검증 기술(1개 소스만 보고, 게임 반영 미확인 — 추천 시 "미검증"이라고 명시): ${unv.join(", ")}`);
   if (t) {
     lines.push(`- 약점(받는 피해 증가, 서버 계산): ${t.weaknesses.join(", ") || "없음"}`);
     lines.push(`- 저항(받는 피해 감소, 서버 계산): ${t.resistances.join(", ") || "없음"}`);
@@ -329,6 +331,7 @@ ${verifiedBlock("B 교차검증 데이터", vB)}
           baseAttack: verified.baseAttack, baseDefense: verified.baseDefense, baseStamina: verified.baseStamina,
           types: verified.types, fast: verified.fast, charged: verified.charged,
           eliteFast: verified.eliteFast, eliteCharged: verified.eliteCharged,
+          unverifiedFast: verified.unverifiedFast, unverifiedCharged: verified.unverifiedCharged,
           dataSources: verified.sources,
         };
       }
