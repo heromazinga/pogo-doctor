@@ -123,6 +123,21 @@ const MAX_BATTLE_SYSTEM_PROMPT = `당신은 포켓몬GO 맥스배틀 전문 지�
 
 한국어로 답변하세요.`;
 
+// 2단계: 서버가 결정적으로 계산한 팀에 대한 "박사 코멘트". AI 는 팀 구성을 바꾸지 않는다.
+const TEAM_SYSTEM_PROMPT = `당신은 포켓몬GO 전투 코치 "포고박사"입니다.
+사용자의 보유 목록으로 서버가 이미 계산한 팀(순서·기술·점수 포함)이 주어집니다.
+
+## 절대 규칙
+- **팀 구성·순서·기술을 바꾸거나 다른 포켓몬으로 교체하라고 제안하지 마세요.** 서버 계산 결과가 최종입니다.
+- 주어진 점수·배율·경고를 근거로만 말하세요. 새로운 수치를 만들어내지 마세요.
+- "구하면 좋은 포켓몬"이 있으면 그 이유(타입 상성)를 한 줄로 짚어줄 수 있습니다.
+- 기술명은 반드시 주어진 한국어(영어) 표기를 그대로 쓰세요.
+
+## 응답 형식
+- **3~5줄**, 각 줄은 한 문장. 표·제목 없이 평문 줄바꿈만.
+- 1줄: 이 팀의 강점(선봉 2마리 중심). 2줄: 주의점(경고·약점·추정값이 있으면 언급). 3줄: 실전 팁(기술 타이밍/교체). 필요 시 4~5줄.
+- 한국어로만 답변하세요.`;
+
 // 기본 폴백 순서 (전부 무료 티어). 환경변수 GEMINI_MODELS(쉼표 구분)로 교체 가능.
 // - gemini-2.0-flash: 2026-06-01 종료 → 삭제
 // - gemini-2.5-pro: 무료 티어 미제공 + 2026-10-16 종료 → 삭제
@@ -308,7 +323,7 @@ export async function POST(req) {
 
   try {
     const body = await req.json();
-    const { userInput, collection, mode, raidBoss, compareA, compareB } = body;
+    const { userInput, collection, mode, raidBoss, compareA, compareB, team } = body;
     let { pokemonData } = body;
 
     // 사용자 식별 (Authorization: Bearer <Supabase access token>). 없으면 분석은 허용, 횟수 기록만 생략
@@ -318,7 +333,31 @@ export async function POST(req) {
 
     let systemPrompt, userMessage;
 
-    if (mode === "maxbattle") {
+    if (mode === "team") {
+      // 박사 코멘트: 클라이언트가 /api/team 에서 받은 서버 계산 결과를 그대로 전달. AI 는 코멘트만.
+      if (!team || !Array.isArray(team.team)) return NextResponse.json({ error: "team 결과가 필요합니다" }, { status: 400 });
+      systemPrompt = TEAM_SYSTEM_PROMPT;
+      const mv = (en) => mvName(dataset, en);
+      const memberLine = (m, i) => `${i + 1}. ${m.nameKr || m.name}${m.shadow ? "(섀도)" : ""} CP${m.cp || "?"} L${m.level}${m.levelAssumed ? "(추정)" : ""} ${m.ivAssumed ? "개체값 추정 10/10/10" : `개체값 ${m.ivs.atk}/${m.ivs.def}/${m.ivs.sta}`} · ${mv(m.fast)} + ${mv(m.charged)}${m.movesAssumed ? " (기술 가정)" : ""}`;
+      let detail = "";
+      if (team.mode === "raid") {
+        const b = team.boss || {};
+        detail = `## 레이드 보스: ${b.nameKr || b.name} (${(b.types || []).join("/")})
+## 서버 계산 팀 (점수 순, 점수 = DPS^0.775 × TDO^0.225)
+${team.team.map((m, i) => `${memberLine(m, i)} · 차징 배율 ×${m.multCharged} · DPS ${m.dps} · TDO ${m.tdo} · 점수 ${m.score}${m.vulnerable ? ` · ⚠️ 보스 자속에 약점 ×${m.vulnMult}` : ""}`).join("\n")}
+${team.fill?.length ? `\n## 구하면 좋은 포켓몬 (목록 부족분, 서버 천적 후보)\n${team.fill.map((c) => `- ${c.nameKr || c.name} (${mv(c.fastMove)} + ${mv(c.chargedMove)}, 배율 ×${c.mult}${c.releasedUnknown ? ", 출시 미확인" : ""})`).join("\n")}` : ""}`;
+      } else {
+        const l = team.lineup || {};
+        detail = `## 로켓단 상대: ${l.title || l.name}
+슬롯별 상대 후보: ${(l.slots || []).map((sl, i) => `${i + 1}번 [${sl.map((p) => `${p.name}(${(p.types || []).join("/")})`).join(", ")}]`).join(" · ")}
+## 서버 계산 팀 (간이 점수 · 실드/에너지 단순화)
+${team.team.map((m, i) => `${memberLine({ ...m, fast: m.chosen?.fast, charged: m.chosen?.charged }, i)} · 담당 슬롯 ${m.slot} · 커버 [${(m.covers || []).join(",")}] · 공격 배율 ×${m.chosen?.offMult} · 피격 배율 ×${m.chosen?.defMult}`).join("\n")}`;
+      }
+      userMessage = `${detail}
+${team.warnings?.length ? `\n## 서버 경고\n${team.warnings.map((w) => `- ${w}`).join("\n")}` : ""}
+
+위 팀은 서버가 확정한 구성입니다. 구성을 바꾸지 말고 3~5줄로 코멘트만 해주세요.`;
+    } else if (mode === "maxbattle") {
       systemPrompt = MAX_BATTLE_SYSTEM_PROMPT;
 
       const boss = dataset ? findPokemon(dataset, { id: raidBoss?.id, form: raidBoss?.form, name: raidBoss?.name }) : null;
@@ -509,7 +548,8 @@ PvP 메타 포켓몬이면 PvP 기준으로, PvE 메타면 PvE 기준으로 IV�
 
         // 비정상 응답(finishReason ≠ STOP, 또는 본문이 너무 짧음)이면 다음 모델로 재시도한다.
         // 이미 전달한 텍스트는 __RESET__ 마커로 클라이언트가 지우고 새 모델의 출력으로 대체한다.
-        const MIN_CHARS = Number(process.env.GEMINI_MIN_CHARS) || 400;
+        // 박사 코멘트(team)는 3~5줄이 정상이므로 짧은 응답 기준을 낮춘다
+        const MIN_CHARS = mode === "team" ? (Number(process.env.GEMINI_MIN_CHARS_TEAM) || 60) : (Number(process.env.GEMINI_MIN_CHARS) || 400);
         const models = getModels();
         let accepted = null; // { model, fullText, finishReason, usage, abnormal }
         let lastAttempt = null;
