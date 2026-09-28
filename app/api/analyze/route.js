@@ -207,7 +207,7 @@ function counterBlock(dataset, target) {
   const list = counterCandidates(dataset?.pokemon, target, 8, dataset?.moveStats || {});
   if (!list.length) return "- 천적 후보: 데이터 없음";
   return `- 천적 후보(서버 계산: 출시된 포켓몬 중 약점 타입의 빠른+차징 기술 보유, 점수 = 공격 종족값 × 사이클 DPS × 자속 1.2 × 배율): ${list
-    .map((c) => `${c.nameKr}(${c.name})${c.form !== "Normal" ? `[${c.form}]` : ""} ${mvName(dataset, c.fastMove)}+${mvName(dataset, c.chargedMove)} ×${c.mult}${c.stab > 1 ? " 자속" : ""} 점수${c.score}${c.incoming > 1 ? ` (단, 대상에게 ×${c.incoming} 약점)` : ""}`)
+    .map((c) => `${c.nameKr}(${c.name})${c.form !== "Normal" ? `[${c.form}]` : ""} ${mvName(dataset, c.fastMove)}+${mvName(dataset, c.chargedMove)} ×${c.mult}${c.stab > 1 ? " 자속" : ""} 점수${c.score}${c.releasedUnknown ? " (출시 미확인)" : ""}${c.incoming > 1 ? ` (단, 대상에게 ×${c.incoming} 약점)` : ""}`)
     .join(", ")}
 - "천적/추천 카운터" 항목은 항상 **이 포켓몬을 상대할 때 유리한 포켓몬**을 뜻한다. 위 후보 중에서 고르고, 후보 밖 포켓몬을 추천할 때는 이유를 명시한다.`;
 }
@@ -477,44 +477,53 @@ PvP 메타 포켓몬이면 PvP 기준으로, PvE 메타면 PvE 기준으로 IV�
       );
     };
 
-    for (const model of getModels()) {
-      try {
-        // Use Gemini streaming SSE endpoint
-        let res = await callGemini(model, thinkingLevel !== "off");
+    // ─── 스트리밍 ───
+    // 응답(헤더)을 Gemini 호출 "전에" 즉시 돌려주고, 모델 호출·폴백·전달을 모두 스트림 안에서 처리한다.
+    // 이전 구조는 Gemini 가 헤더를 줄 때(= thinking 이 끝난 뒤)까지 Response 자체를 반환하지 않아
+    // 첫 바이트 시각이 완료 시각과 거의 같았다. Gemini 의 각 SSE 파트는 받는 즉시 enqueue 하며
+    // 서버에서 모아 두지 않는다. 금지 표현 검사는 전체 텍스트를 별도로 누적해 스트림 종료 후 로그로만 남긴다.
+    const encoder = new TextEncoder();
+    const t0 = Date.now();
 
-        if (!res.ok && thinkingLevel !== "off" && res.status === 400) {
-          // 모델이 thinkingConfig/thinkingLevel 을 지원하지 않으면 파라미터 없이 한 번 더 시도
-          const errData = await res.json().catch(() => ({}));
-          const msg = errData?.error?.message || "";
-          if (/thinking/i.test(msg)) {
-            console.warn(`[analyze] ${model}: thinkingLevel 미지원 → 파라미터 없이 재시도 (${msg})`);
-            res = await callGemini(model, false);
-          } else {
-            errors.push(`${model}: ${msg || res.statusText} (HTTP ${res.status})`);
-            continue;
-          }
-        }
+    const stream = new ReadableStream({
+      async start(controller) {
+        // 즉시 첫 바이트: 클라이언트는 빈 줄을 무시한다
+        controller.enqueue(encoder.encode("\n"));
 
-        if (!res.ok) {
-          const errData = await res.json().catch(() => ({}));
-          errors.push(`${model}: ${errData?.error?.message || res.statusText} (HTTP ${res.status})`);
-          continue;
-        }
+        for (const model of getModels()) {
+          try {
+            let res = await callGemini(model, thinkingLevel !== "off");
 
-        // Transform Gemini SSE into plain text stream for the client
-        const encoder = new TextEncoder();
-        const reader = res.body.getReader();
-        const decoder = new TextDecoder();
+            if (!res.ok && thinkingLevel !== "off" && res.status === 400) {
+              // 모델이 thinkingConfig/thinkingLevel 을 지원하지 않으면 파라미터 없이 한 번 더 시도
+              const errData = await res.json().catch(() => ({}));
+              const msg = errData?.error?.message || "";
+              if (/thinking/i.test(msg)) {
+                console.warn(`[analyze] ${model}: thinkingLevel 미지원 → 파라미터 없이 재시도 (${msg})`);
+                res = await callGemini(model, false);
+              } else {
+                errors.push(`${model}: ${msg || res.statusText} (HTTP ${res.status})`);
+                continue;
+              }
+            }
 
-        const stream = new ReadableStream({
-          async start(controller) {
-            // Send model name as metadata in first chunk
+            if (!res.ok) {
+              const errData = await res.json().catch(() => ({}));
+              errors.push(`${model}: ${errData?.error?.message || res.statusText} (HTTP ${res.status})`);
+              continue;
+            }
+
+            const tHeaders = Date.now();
+            let tFirstText = 0;
+            // Send model name as metadata
             controller.enqueue(encoder.encode(`__MODEL__:${model}\n`));
 
+            const reader = res.body.getReader();
+            const decoder = new TextDecoder();
             let buffer = "";
             let finishReason = null;
             let usage = null;
-            let fullText = ""; // 금지 표현 검사용
+            let fullText = ""; // 금지 표현 검사용 (전달과 별개로 누적)
             const handleLine = (line) => {
               if (!line.startsWith("data:")) return;
               const jsonStr = line.slice(5).trim();
@@ -522,10 +531,14 @@ PvP 메타 포켓몬이면 PvP 기준으로, PvE 메타면 PvE 기준으로 IV�
               try {
                 const parsed = JSON.parse(jsonStr);
                 const cand = parsed?.candidates?.[0];
-                // 생각(thought) 파트는 제외하고 텍스트 파트를 전부 이어 붙인다 (parts[0] 만 읽으면 본문이 누락됨)
+                // 생각(thought) 파트는 제외하고 텍스트 파트를 받는 즉시 전달 (parts[0] 만 읽으면 본문이 누락됨)
                 for (const part of cand?.content?.parts || []) {
                   if (part?.thought) continue;
-                  if (part?.text) { fullText += part.text; controller.enqueue(encoder.encode(part.text)); }
+                  if (part?.text) {
+                    if (!tFirstText) tFirstText = Date.now();
+                    fullText += part.text;
+                    controller.enqueue(encoder.encode(part.text));
+                  }
                 }
                 if (cand?.finishReason) finishReason = cand.finishReason;
                 if (parsed?.usageMetadata) usage = parsed.usageMetadata;
@@ -545,6 +558,9 @@ PvP 메타 포켓몬이면 PvP 기준으로, PvE 메타면 PvE 기준으로 IV�
             } catch (e) {
               controller.enqueue(encoder.encode(`\n__ERROR__:스트리밍 중 오류 발생`));
             }
+            const tEnd = Date.now();
+            // 타이밍 로그: 요청→Gemini 헤더 / →첫 텍스트 / →완료 (스트리밍 확인용)
+            console.log(`[analyze] timing model=${model} mode=${mode || "analyze"} headersMs=${tHeaders - t0} firstTextMs=${tFirstText ? tFirstText - t0 : -1} totalMs=${tEnd - t0} chars=${fullText.length}`);
             // 용어집 금지 표현 검사 → 서버 로그 경고 (답변은 그대로 전달)
             const forbidden = findForbidden(fullText);
             if (forbidden.length) {
@@ -557,25 +573,28 @@ PvP 메타 포켓몬이면 PvP 기준으로, PvE 메타면 PvE 기준으로 IV�
               console.log(`[analyze] ${model} finishReason=${finishReason} usage=${JSON.stringify(usage)}`);
             }
             controller.close();
-          },
-        });
+            return;
+          } catch (e) {
+            errors.push(`${model}: ${e.message}`);
+          }
+        }
 
-        return new Response(stream, {
-          headers: {
-            "Content-Type": "text/plain; charset=utf-8",
-            "Transfer-Encoding": "chunked",
-            "Cache-Control": "no-cache",
-            // 데이터 기준 시각·소스 상태 (URL 인코딩된 JSON)
-            "X-Pogo-Meta": metaValue,
-          },
-        });
-      } catch (e) {
-        errors.push(`${model}: ${e.message}`);
-      }
-    }
+        console.error("[analyze] 모든 Gemini 모델 실패: " + errors.join(" | "));
+        controller.enqueue(encoder.encode(`\n__ERROR__:Gemini 오류: ${errors.join(" / ")}`));
+        controller.close();
+      },
+    });
 
-    console.error("[analyze] 모든 Gemini 모델 실패: " + errors.join(" | "));
-    return NextResponse.json({ error: `Gemini 오류: ${errors.join(" / ")}` }, { status: 500 });
+    return new Response(stream, {
+      headers: {
+        "Content-Type": "text/plain; charset=utf-8",
+        "Cache-Control": "no-cache, no-transform",
+        // 프록시/CDN 버퍼링 방지
+        "X-Accel-Buffering": "no",
+        // 데이터 기준 시각·소스 상태 (URL 인코딩된 JSON)
+        "X-Pogo-Meta": metaValue,
+      },
+    });
   } catch (e) {
     return NextResponse.json({ error: `서버 오류: ${e.message}` }, { status: 500 });
   }

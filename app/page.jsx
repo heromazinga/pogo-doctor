@@ -323,8 +323,8 @@ export default function Home() {
         } else {
           if (chunk.includes("__ERROR__:")) {
             const parts = chunk.split("__ERROR__:");
-            accumulated += parts[0]; onChunk(accumulated); onError(parts[1]);
-          } else { accumulated += chunk; onChunk(accumulated); }
+            accumulated += parts[0]; if (accumulated.trim()) onChunk(accumulated); onError(parts[1].trim());
+          } else { accumulated += chunk; if (accumulated.trim()) onChunk(accumulated); }
         }
       }
       onDone();
