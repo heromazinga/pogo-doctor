@@ -260,7 +260,7 @@ export default function Home() {
     setSuggestions([]);
     setShowSugg(false);
 
-    const allMoves = [...(poke.fast || []), ...(poke.charged || []), ...(poke.eliteFast || []), ...(poke.eliteCharged || []), ...(poke.unverifiedFast || []), ...(poke.unverifiedCharged || [])];
+    const allMoves = [...(poke.fast || []), ...(poke.charged || []), ...(poke.eliteFast || []), ...(poke.eliteCharged || []), ...(poke.signatureFast || []), ...(poke.signatureCharged || []), ...(poke.unverifiedFast || []), ...(poke.unverifiedCharged || [])];
     // 서버(pokemon-go-api)가 준 한국어 기술명이 없을 때만 PokeAPI 로 보충
     const toFetch = allMoves.filter((m) => !moveNamesKr[m]);
     if (toFetch.length > 0 && !pokeapiDownRef.current) {
@@ -391,7 +391,7 @@ export default function Home() {
     setLoading(true); setStreaming(true); setError(null); setResult(null); setCurrentKept(false); setUsedModel("");
 
     const pokemonData = selectedPokemon
-      ? { name: selectedPokemon.name, nameKr: selectedPokemon.nameKr, id: selectedPokemon.id, form: selectedPokemon.form, types: selectedPokemon.types, baseAttack: selectedPokemon.baseAttack, baseDefense: selectedPokemon.baseDefense, baseStamina: selectedPokemon.baseStamina, fast: selectedPokemon.fast, charged: selectedPokemon.charged, eliteFast: selectedPokemon.eliteFast, eliteCharged: selectedPokemon.eliteCharged, unverifiedFast: selectedPokemon.unverifiedFast, unverifiedCharged: selectedPokemon.unverifiedCharged }
+      ? { name: selectedPokemon.name, nameKr: selectedPokemon.nameKr, id: selectedPokemon.id, form: selectedPokemon.form, types: selectedPokemon.types, baseAttack: selectedPokemon.baseAttack, baseDefense: selectedPokemon.baseDefense, baseStamina: selectedPokemon.baseStamina, fast: selectedPokemon.fast, charged: selectedPokemon.charged, eliteFast: selectedPokemon.eliteFast, eliteCharged: selectedPokemon.eliteCharged, signatureFast: selectedPokemon.signatureFast, signatureCharged: selectedPokemon.signatureCharged, unverifiedFast: selectedPokemon.unverifiedFast, unverifiedCharged: selectedPokemon.unverifiedCharged }
       : { name: pokemonName, note: "API에서 매칭 안됨" };
 
     const fastMoveDisplay = fastMove ? `${krMove(fastMove)} (${fastMove})` : "";
@@ -723,6 +723,11 @@ export default function Home() {
                           {selectedPokemon.eliteFast.map((m) => <option key={m} value={m}>⭐ {krMove(m)} ({m})</option>)}
                         </optgroup>
                       )}
+                      {selectedPokemon.signatureFast?.length > 0 && (
+                        <optgroup label="── 전용기 (아이템/폼체인지) ──">
+                          {selectedPokemon.signatureFast.map((m) => <option key={m} value={m}>🔑 {krMove(m)} ({m})</option>)}
+                        </optgroup>
+                      )}
                       {selectedPokemon.unverifiedFast?.length > 0 && (
                         <optgroup label="── 미검증 (교차검증 소스 1개) ──">
                           {selectedPokemon.unverifiedFast.map((m) => <option key={m} value={m}>❔ {krMove(m)} ({m})</option>)}
@@ -740,6 +745,11 @@ export default function Home() {
                       {selectedPokemon.eliteCharged?.length > 0 && (
                         <optgroup label="── 한정기술 ──">
                           {selectedPokemon.eliteCharged.map((m) => <option key={m} value={m}>⭐ {krMove(m)} ({m})</option>)}
+                        </optgroup>
+                      )}
+                      {selectedPokemon.signatureCharged?.length > 0 && (
+                        <optgroup label="── 전용기 (아이템/폼체인지) ──">
+                          {selectedPokemon.signatureCharged.map((m) => <option key={m} value={m}>🔑 {krMove(m)} ({m})</option>)}
                         </optgroup>
                       )}
                       {selectedPokemon.unverifiedCharged?.length > 0 && (

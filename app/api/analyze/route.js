@@ -168,11 +168,13 @@ function verifiedBlock(label, p) {
     `- 이름: ${p.nameKr} (${p.name}) #${p.id} / 폼: ${p.form}`,
     `- 종족값: 공격 ${p.baseAttack} / 방어 ${p.baseDefense} / 체력 ${p.baseStamina}`,
     `- 타입: ${(p.types || []).join("/") || "데이터 없음"}`,
-    `- 빠른기술: ${(p.fast || []).join(", ") || "데이터 없음"}${p.eliteFast?.length ? ` / 한정: ${p.eliteFast.join(", ")}` : ""}`,
-    `- 차징기술: ${(p.charged || []).join(", ") || "데이터 없음"}${p.eliteCharged?.length ? ` / 한정: ${p.eliteCharged.join(", ")}` : ""}`,
+    `- 빠른기술(일반, 일반 기술머신으로 습득 가능): ${(p.fast || []).join(", ") || "데이터 없음"}`,
+    `- 차징기술(일반, 일반 기술머신으로 습득 가능): ${(p.charged || []).join(", ") || "데이터 없음"}`,
+    `- 레거시 기술(대단한 기술머신 필요): ${[...(p.eliteFast || []), ...(p.eliteCharged || [])].join(", ") || "없음"}`,
+    `- 전용기(아이템·폼 체인지로만 습득, 기술머신 불가): ${[...(p.signatureFast || []), ...(p.signatureCharged || [])].join(", ") || "없음"}`,
+    `- 미검증 기술(교차검증 소스 1개 — 미출시라는 뜻이 아님): ${[...(p.unverifiedFast || []), ...(p.unverifiedCharged || [])].join(", ") || "없음"}`,
+    `- ⚠️ 위 구분을 그대로 따르세요. "일반" 기술을 대단한 기술머신 필요라고 안내하지 마세요.`,
   ];
-  const unv = [...(p.unverifiedFast || []), ...(p.unverifiedCharged || [])];
-  if (unv.length) lines.push(`- 미검증 기술(교차검증 소스 1개 — 미출시라는 뜻이 아님): ${unv.join(", ")}`);
   if (t) {
     lines.push(`- 약점(받는 피해 증가, 서버 계산): ${t.weaknesses.join(", ") || "없음"}`);
     lines.push(`- 저항(받는 피해 감소, 서버 계산): ${t.resistances.join(", ") || "없음"}`);
@@ -332,11 +334,20 @@ ${verifiedBlock("B 교차검증 데이터", vB)}
           baseAttack: verified.baseAttack, baseDefense: verified.baseDefense, baseStamina: verified.baseStamina,
           types: verified.types, fast: verified.fast, charged: verified.charged,
           eliteFast: verified.eliteFast, eliteCharged: verified.eliteCharged,
+          signatureFast: verified.signatureFast, signatureCharged: verified.signatureCharged,
           unverifiedFast: verified.unverifiedFast, unverifiedCharged: verified.unverifiedCharged,
           dataSources: verified.sources,
         };
       }
       const typeInfo = analyzeDefender(pokemonData?.types);
+      // 기술 구분(일반/레거시/전용기/미검증)을 명시적으로 전달
+      const moveCategoryLines = pokemonData ? [
+        `- 일반 기술(일반 기술머신 가능): ${[...(pokemonData.fast || []), ...(pokemonData.charged || [])].join(", ") || "데이터 없음"}`,
+        `- 레거시 기술(대단한 기술머신 필요): ${[...(pokemonData.eliteFast || []), ...(pokemonData.eliteCharged || [])].join(", ") || "없음"}`,
+        `- 전용기(아이템·폼 체인지로만 습득, 기술머신 불가): ${[...(pokemonData.signatureFast || []), ...(pokemonData.signatureCharged || [])].join(", ") || "없음"}`,
+        `- 미검증 기술(교차검증 소스 1개, 미출시 아님): ${[...(pokemonData.unverifiedFast || []), ...(pokemonData.unverifiedCharged || [])].join(", ") || "없음"}`,
+        `- ⚠️ 위 구분을 그대로 따르세요. "일반" 기술을 대단한 기술머신 필요라고 안내하지 마세요.`,
+      ].join("\n") : "";
 
       let collectionContext = "";
       if (collection && collection.length > 0) {
@@ -350,6 +361,9 @@ ${verifiedBlock("B 교차검증 데이터", vB)}
 ${JSON.stringify(pokemonData, null, 2)}
 ${typeInfo ? `- 약점(받는 피해 증가, 서버 계산): ${typeInfo.weaknesses.join(", ") || "없음"}
 - 저항(받는 피해 감소, 서버 계산): ${typeInfo.resistances.join(", ") || "없음"}` : "- 타입/상성: 데이터 없음"}
+
+## 기술 구분 (서버 교차검증 데이터 기준)
+${moveCategoryLines}
 
 ## 사용자 입력
 - 포켓몬: ${userInput.name}

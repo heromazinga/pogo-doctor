@@ -284,6 +284,21 @@ function parsePokeminers(json) {
     moveIdByNumber.set(Number(mt[1]), mt[2]);
     moveKinds.set(moveKey(mt[2]), /_FAST$/.test(mt[2]) ? "fast" : "charged");
   }
+  // 폼 체인지(융합·왕관 등)로만 얻는 전용기: pokemonSettings.formChange[].moveReassignment → 대상 폼(availableForm)의 전용기
+  const reassignByForm = new Map(); // formId → { fast:Set, charged:Set }
+  for (const t of json) {
+    const ps = t?.data?.pokemonSettings;
+    for (const fc of ps?.formChange || []) {
+      const mr = fc?.moveReassignment;
+      if (!mr) continue;
+      for (const formId of fc.availableForm || []) {
+        if (!reassignByForm.has(formId)) reassignByForm.set(formId, { fast: new Set(), charged: new Set() });
+        const slot = reassignByForm.get(formId);
+        for (const r of mr.cinematicMoves || []) for (const m of r?.replacementMoves || []) slot.charged.add(m);
+        for (const r of mr.quickMoves || []) for (const m of r?.replacementMoves || []) slot.fast.add(m);
+      }
+    }
+  }
   let unresolvedNumeric = 0;
   const resolveMove = (id) => {
     if (typeof id === "number" || /^\d+$/.test(String(id))) {
@@ -316,15 +331,19 @@ function parsePokeminers(json) {
       return key;
     }).filter(Boolean);
     const fast = reg(ps.quickMoves), charged = reg(ps.cinematicMoves);
-    // 전용기(nonTmCinematicMoves: 메테오나이트 등 아이템/이벤트로만 배우는 기술)는 한정 차징기술로 포함
+    // 레거시(대단한 기술머신 필요)
     const eliteFast = reg(ps.eliteQuickMove);
-    const eliteCharged = dedupe([...reg(ps.eliteCinematicMove), ...reg(ps.nonTmCinematicMoves)]);
+    const eliteCharged = reg(ps.eliteCinematicMove);
+    // 전용기: nonTmCinematicMoves(메테오나이트 등 아이템으로만 습득) + 폼 체인지 moveReassignment(융합·왕관 등)
+    const reassign = reassignByForm.get(formId) || reassignByForm.get(pokemonId) || { fast: new Set(), charged: new Set() };
+    const signatureFast = reg([...reassign.fast]);
+    const signatureCharged = dedupe([...reg(ps.nonTmCinematicMoves), ...reg([...reassign.charged])]);
     records.set(key, {
       key, id: dex, form,
       name: titleCase(pokemonId), nameKr: null,
       atk: ps.stats?.baseAttack, def: ps.stats?.baseDefense, sta: ps.stats?.baseStamina,
       types: [normType(ps.type), normType(ps.type2)].filter(Boolean),
-      fast, charged, eliteFast, eliteCharged,
+      fast, charged, eliteFast, eliteCharged, signatureFast, signatureCharged,
       hasMoves: fast.length + charged.length > 0,
       _explicitForm: Boolean(formId),
     });
@@ -447,20 +466,19 @@ function pickValue(values /* [{src, value}] */, updatedAtOf) {
 function mergeMoves(entries /* [{src, list, elite}] */) {
   // entries 는 기술 목록을 제공하는 소스만
   const providers = entries.filter((e) => e.hasMoves);
-  if (providers.length === 0) return { regular: [], elite: [], unverified: [], warnings: [] };
-  const votes = new Map(); // moveKey → { srcs:Set, eliteVotes:number }
+  if (providers.length === 0) return { regular: [], elite: [], signature: [], unverified: [], warnings: [] };
+  const votes = new Map(); // moveKey → { srcs:Set, eliteVotes:number, signatureVotes:number }
+  const add = (k, src, field) => {
+    if (!votes.has(k)) votes.set(k, { srcs: new Set(), eliteVotes: 0, signatureVotes: 0 });
+    votes.get(k).srcs.add(src);
+    if (field) votes.get(k)[field] += 1;
+  };
   for (const e of providers) {
-    for (const k of e.list) {
-      if (!votes.has(k)) votes.set(k, { srcs: new Set(), eliteVotes: 0 });
-      votes.get(k).srcs.add(e.src);
-    }
-    for (const k of e.elite) {
-      if (!votes.has(k)) votes.set(k, { srcs: new Set(), eliteVotes: 0 });
-      votes.get(k).srcs.add(e.src);
-      votes.get(k).eliteVotes += 1;
-    }
+    for (const k of e.list) add(k, e.src, null);
+    for (const k of e.elite) add(k, e.src, "eliteVotes");
+    for (const k of e.signature || []) add(k, e.src, "signatureVotes");
   }
-  const regular = [], elite = [], unverified = [], warnings = [];
+  const regular = [], elite = [], signature = [], unverified = [], warnings = [];
   for (const [k, v] of votes) {
     const n = v.srcs.size;
     // 검증됨: 2개 이상 소스 일치(또는 기술 목록을 주는 소스가 하나뿐)
@@ -472,10 +490,12 @@ function mergeMoves(entries /* [{src, list, elite}] */) {
       continue;
     }
     if (n < providers.length && providers.length > 1) warnings.push({ move: k, srcs: [...v.srcs], action: "majority" });
-    if (v.eliteVotes * 2 >= n) elite.push(k);
+    // 분류: 전용기(아이템·폼체인지 전용, 게임 원본 필드로만 판별) > 레거시(대단한 기술머신) > 일반
+    if (v.signatureVotes > 0) signature.push(k);
+    else if (v.eliteVotes * 2 >= n) elite.push(k);
     else regular.push(k);
   }
-  return { regular, elite, unverified, warnings };
+  return { regular, elite, signature, unverified, warnings };
 }
 
 // 갱신 시각이 SOURCE_STALE_DAYS(기본 60일) 이상 지난 소스는 투표에서 제외한다. 갱신 시각을 모르는 소스는 판단 불가 → 제외하지 않음.
@@ -545,16 +565,23 @@ function crossValidate(loaded /* {sourceKey: {meta, parsed}} */) {
   };
   // 소스 레코드의 fast/charged/elite 목록을 전역 종류 기준으로 재배치
   const normalizeLists = (rec) => {
-    const fast = [], charged = [], eliteFast = [], eliteCharged = [];
-    const place = (list, fallback, elite) => {
+    const out = { Fast: [], Charged: [], eliteFast: [], eliteCharged: [], signatureFast: [], signatureCharged: [] };
+    const place = (list, fallback, tier) => {
       for (const k of list || []) {
         const kind = kindOf(k, fallback);
-        (elite ? (kind === "fast" ? eliteFast : eliteCharged) : (kind === "fast" ? fast : charged)).push(k);
+        out[tier + (kind === "fast" ? "Fast" : "Charged")].push(k);
       }
     };
-    place(rec.fast, "fast", false); place(rec.charged, "charged", false);
-    place(rec.eliteFast, "fast", true); place(rec.eliteCharged, "charged", true);
-    return { ...rec, fast: dedupe(fast), charged: dedupe(charged), eliteFast: dedupe(eliteFast), eliteCharged: dedupe(eliteCharged) };
+    place(rec.fast, "fast", ""); place(rec.charged, "charged", "");
+    place(rec.eliteFast, "fast", "elite"); place(rec.eliteCharged, "charged", "elite");
+    place(rec.signatureFast, "fast", "signature"); place(rec.signatureCharged, "charged", "signature");
+    // tier "" 는 키 이름이 "Fast"/"Charged" 가 되므로 정리
+    return {
+      ...rec,
+      fast: dedupe(out.Fast), charged: dedupe(out.Charged),
+      eliteFast: dedupe(out.eliteFast), eliteCharged: dedupe(out.eliteCharged),
+      signatureFast: dedupe(out.signatureFast), signatureCharged: dedupe(out.signatureCharged),
+    };
   };
 
   const allKeys = new Set();
@@ -589,8 +616,8 @@ function crossValidate(loaded /* {sourceKey: {meta, parsed}} */) {
       warnings.push(`[type] ${key} ${first.name}: ${recs.map((x) => `${x.src}=${x.rec.types.join("/") || "-"}`).join(", ")} → ${(typeWinner || []).join("/")} (${typeVote.by})`);
     }
 
-    const fastM = mergeMoves(recs.map((x) => ({ src: x.src, list: x.rec.fast, elite: x.rec.eliteFast, hasMoves: x.rec.hasMoves })));
-    const chM = mergeMoves(recs.map((x) => ({ src: x.src, list: x.rec.charged, elite: x.rec.eliteCharged, hasMoves: x.rec.hasMoves })));
+    const fastM = mergeMoves(recs.map((x) => ({ src: x.src, list: x.rec.fast, elite: x.rec.eliteFast, signature: x.rec.signatureFast, hasMoves: x.rec.hasMoves })));
+    const chM = mergeMoves(recs.map((x) => ({ src: x.src, list: x.rec.charged, elite: x.rec.eliteCharged, signature: x.rec.signatureCharged, hasMoves: x.rec.hasMoves })));
     for (const w of [...fastM.warnings, ...chM.warnings]) {
       moveDisputes++;
       if (w.action === "unverified") counts.moveUnverified++;
@@ -606,8 +633,11 @@ function crossValidate(loaded /* {sourceKey: {meta, parsed}} */) {
       baseAttack: atk, baseDefense: def, baseStamina: sta,
       types: typeWinner || [],
       fast: fastM.regular.map(moveDisplay), charged: chM.regular.map(moveDisplay),
+      // 레거시: 대단한 기술머신 필요
       eliteFast: fastM.elite.map(moveDisplay), eliteCharged: chM.elite.map(moveDisplay),
-      // 1개 소스(PokeMiners 제외)에만 있는 기술 — 게임 반영 미확인
+      // 전용기: 아이템(메테오나이트 등)·폼 체인지(융합·왕관)로만 습득, 기술머신 불가
+      signatureFast: fastM.signature.map(moveDisplay), signatureCharged: chM.signature.map(moveDisplay),
+      // 교차검증 소스 1개 — 미출시라는 뜻은 아님
       unverifiedFast: fastM.unverified.map(moveDisplay), unverifiedCharged: chM.unverified.map(moveDisplay),
       sources: recs.map((x) => x.src),
     });
