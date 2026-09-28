@@ -107,13 +107,23 @@ const MAX_BATTLE_SYSTEM_PROMPT = `당신은 포켓몬GO 맥스배틀 전문 지�
 
 한국어로 답변하세요.`;
 
-// quality first → speed fallback (all free tier)
-const MODELS = [
+// 기본 폴백 순서 (전부 무료 티어). 환경변수 GEMINI_MODELS(쉼표 구분)로 교체 가능.
+// - gemini-2.0-flash: 2026-06-01 종료 → 삭제
+// - gemini-2.5-pro: 무료 티어 미제공 + 2026-10-16 종료 → 삭제
+// - gemini-3.1-flash-lite-preview: 2026-05-25 종료 → 정식 gemini-3.1-flash-lite 로 교체
+const DEFAULT_MODELS = [
+  "gemini-3.6-flash",
+  "gemini-3.1-flash-lite",
   "gemini-3-flash-preview",
-  "gemini-2.5-pro",
-  "gemini-3.1-flash-lite-preview",
-  "gemini-2.0-flash",
 ];
+
+function getModels() {
+  const fromEnv = (process.env.GEMINI_MODELS || "")
+    .split(",")
+    .map((m) => m.trim())
+    .filter(Boolean);
+  return fromEnv.length > 0 ? fromEnv : DEFAULT_MODELS;
+}
 
 // ─── CP 계산 (서버에서 미리 계산해서 AI 환각 방지) ───
 const CPM_40 = 0.7903;
@@ -262,7 +272,7 @@ PvP 메타 포켓몬이면 PvP 기준으로, PvE 메타면 PvE 기준으로 IV�
 
     let lastError = "";
 
-    for (const model of MODELS) {
+    for (const model of getModels()) {
       try {
         // Use Gemini streaming SSE endpoint
         const res = await fetch(
