@@ -28,6 +28,10 @@ export default function Home() {
   const [usedModel, setUsedModel] = useState("");
   const [viewingEntry, setViewingEntry] = useState(null);
 
+  // ─── 데이터 기준 시각 / 소스 상태 (서버 교차검증 메타) ───
+  const [dataMeta, setDataMeta] = useState(null);
+  const [analysisMeta, setAnalysisMeta] = useState(null);
+
   // ─── Streaming ───
   const [streaming, setStreaming] = useState(false);
   const abortRef = useRef(null);
@@ -116,7 +120,17 @@ export default function Home() {
     fetch("/api/pokemon-data")
       .then((r) => r.json())
       .then((data) => {
-        if (Array.isArray(data)) setAllPokemon(data);
+        if (Array.isArray(data)) {
+          setAllPokemon(data); // 구버전 응답 호환
+        } else if (data && Array.isArray(data.pokemon)) {
+          setAllPokemon(data.pokemon);
+          // 서버가 모아준 한국어 기술명 (pokemon-go-api) → PokeAPI 호출 최소화
+          if (data.moveNamesKr) setMoveNamesKr((prev) => ({ ...data.moveNamesKr, ...prev }));
+          setDataMeta({ generatedAt: data.generatedAt, stale: data.stale, dataSources: data.dataSources || [], dataWarningCount: data.dataWarningCount || 0 });
+        } else if (data && data.error) {
+          setError(`포켓몬 데이터 로드 실패: ${data.error}`);
+          if (data.dataSources) setDataMeta({ generatedAt: null, dataSources: data.dataSources, dataWarningCount: 0 });
+        }
         setDataLoading(false);
       })
       .catch(() => setDataLoading(false));
@@ -267,6 +281,10 @@ export default function Home() {
         signal: controller.signal,
       });
       const contentType = res.headers.get("content-type") || "";
+      try {
+        const metaRaw = res.headers.get("x-pogo-meta");
+        setAnalysisMeta(metaRaw ? JSON.parse(decodeURIComponent(metaRaw)) : null);
+      } catch { setAnalysisMeta(null); }
       if (contentType.includes("application/json")) {
         const data = await res.json();
         if (data.error) { onError(data.error); return; }
@@ -339,7 +357,7 @@ export default function Home() {
         const poke = raidSelectedPoke;
         if (!poke && !raidBossName.trim()) return;
         setLoading(true); setStreaming(true); setError(null); setRaidResult(null); setRaidModel("");
-        const raidBoss = poke ? { name: poke.name, nameKr: poke.nameKr, id: poke.id, baseAttack: poke.baseAttack, baseDefense: poke.baseDefense, baseStamina: poke.baseStamina } : { name: raidBossName };
+        const raidBoss = poke ? { name: poke.name, nameKr: poke.nameKr, id: poke.id, form: poke.form, types: poke.types, baseAttack: poke.baseAttack, baseDefense: poke.baseDefense, baseStamina: poke.baseStamina } : { name: raidBossName };
         streamFetch(
           { mode: "raid", raidBoss, collection: collection.map((c) => ({ name: c.name, pokemonId: c.pokemonId, cp: c.cp, ivPercent: c.ivPercent, verdict: c.verdict, isShiny: c.isShiny, isShadow: c.isShadow })) },
           (text) => setRaidResult(text), (model) => setRaidModel(model),
@@ -359,7 +377,7 @@ export default function Home() {
     setLoading(true); setStreaming(true); setError(null); setResult(null); setCurrentKept(false); setUsedModel("");
 
     const pokemonData = selectedPokemon
-      ? { name: selectedPokemon.name, nameKr: selectedPokemon.nameKr, id: selectedPokemon.id, form: selectedPokemon.form, baseAttack: selectedPokemon.baseAttack, baseDefense: selectedPokemon.baseDefense, baseStamina: selectedPokemon.baseStamina, fast: selectedPokemon.fast, charged: selectedPokemon.charged, eliteFast: selectedPokemon.eliteFast, eliteCharged: selectedPokemon.eliteCharged }
+      ? { name: selectedPokemon.name, nameKr: selectedPokemon.nameKr, id: selectedPokemon.id, form: selectedPokemon.form, types: selectedPokemon.types, baseAttack: selectedPokemon.baseAttack, baseDefense: selectedPokemon.baseDefense, baseStamina: selectedPokemon.baseStamina, fast: selectedPokemon.fast, charged: selectedPokemon.charged, eliteFast: selectedPokemon.eliteFast, eliteCharged: selectedPokemon.eliteCharged }
       : { name: pokemonName, note: "API에서 매칭 안됨" };
 
     const fastMoveDisplay = fastMove ? `${krMove(fastMove)} (${fastMove})` : "";
@@ -395,7 +413,7 @@ export default function Home() {
     const poke = raidSelectedPoke;
     if (!poke && !raidBossName.trim()) { setError("레이드 보스를 선택해주세요!"); return; }
     setLoading(true); setStreaming(true); setError(null); setRaidResult(null); setRaidModel("");
-    const raidBoss = poke ? { name: poke.name, nameKr: poke.nameKr, id: poke.id, baseAttack: poke.baseAttack, baseDefense: poke.baseDefense, baseStamina: poke.baseStamina } : { name: raidBossName };
+    const raidBoss = poke ? { name: poke.name, nameKr: poke.nameKr, id: poke.id, form: poke.form, types: poke.types, baseAttack: poke.baseAttack, baseDefense: poke.baseDefense, baseStamina: poke.baseStamina } : { name: raidBossName };
     await streamFetch(
       { mode: "raid", raidBoss, collection: collection.map((c) => ({ name: c.name, pokemonId: c.pokemonId, cp: c.cp, ivPercent: c.ivPercent, verdict: c.verdict, isShiny: c.isShiny, isShadow: c.isShadow })) },
       (text) => setRaidResult(text), (model) => setRaidModel(model),
@@ -553,6 +571,15 @@ export default function Home() {
     }
     return "";
   };
+
+  // ─── 데이터 기준 시각 표시 ───
+  const fmtStamp = (iso) => {
+    if (!iso) return "확인 불가";
+    const d = new Date(iso);
+    if (isNaN(d.getTime())) return "확인 불가";
+    return `${d.getMonth() + 1}/${d.getDate()} ${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+  };
+  const modelLine = (model) => `⚡ ${model.replace("gemini-", "").replace("-preview", "")}${analysisMeta?.generatedAt ? ` · 데이터 ${fmtStamp(analysisMeta.generatedAt)}${analysisMeta.verified ? " ✓검증" : ""}` : ""}`;
 
   const hasFast = selectedPokemon && selectedPokemon.fast && selectedPokemon.fast.length > 0;
   const hasCharged = selectedPokemon && selectedPokemon.charged && selectedPokemon.charged.length > 0;
@@ -718,7 +745,7 @@ export default function Home() {
             </div>
             {usedModel && !streaming && (
               <div style={{ padding: "4px 20px 0", fontSize: 10, color: "#576574", textAlign: "right" }}>
-                ⚡ {usedModel.replace("gemini-", "").replace("-preview", "")}
+                {modelLine(usedModel)}
               </div>
             )}
             {selectedPokemon && !streaming && (
@@ -823,7 +850,7 @@ export default function Home() {
                 : <div style={{ fontSize: 64 }}>⚔️</div>}
             </div>
             <div style={s.resultContent}>{formatResult(raidResult)}{streaming && <span style={s.cursor}>▌</span>}</div>
-            {raidModel && !streaming && <div style={{ padding: "4px 20px 0", fontSize: 10, color: "#576574", textAlign: "right" }}>⚡ {raidModel.replace("gemini-", "").replace("-preview", "")}</div>}
+            {raidModel && !streaming && <div style={{ padding: "4px 20px 0", fontSize: 10, color: "#576574", textAlign: "right" }}>{modelLine(raidModel)}</div>}
             {!streaming && <button onClick={resetRaid} style={s.resetBtn}>🔄 다른 보스 분석하기</button>}
           </div>
         )}
@@ -867,7 +894,7 @@ export default function Home() {
                         </span>
                       </div>
                       <div style={s.resultContent}>{formatResult(maxBattleResult)}{streaming && <span style={s.cursor}>▌</span>}</div>
-                      {maxBattleModel && !streaming && <div style={{ padding: "4px 20px 0", fontSize: 10, color: "#576574", textAlign: "right" }}>⚡ {maxBattleModel.replace("gemini-", "").replace("-preview", "")}</div>}
+                      {maxBattleModel && !streaming && <div style={{ padding: "4px 20px 0", fontSize: 10, color: "#576574", textAlign: "right" }}>{modelLine(maxBattleModel)}</div>}
                     </div>
                     {!streaming && (
                       <button onClick={resetMaxBattle} style={{ ...s.resetBtn, margin: "0 0 8px 0", width: "100%", borderColor: "#a890f0", color: "#a890f0" }}>
@@ -996,7 +1023,15 @@ export default function Home() {
         )}
 
         <div style={s.footer}>
-          <p>포고박사 v1.1</p>
+          <p>포고박사 v1.2</p>
+          {dataMeta && (
+            <p style={{ fontSize: 10, opacity: 0.7, marginTop: 4, lineHeight: 1.6 }}>
+              데이터 기준 시각: {fmtStamp(dataMeta.generatedAt)}{dataMeta.stale ? " (이전 캐시)" : ""}
+              <br />
+              {dataMeta.dataSources.map((src) => `${src.name} ${src.ok ? "✓" : "✗"}`).join(" · ")}
+              {dataMeta.dataWarningCount > 0 ? ` · 소스 불일치 ${dataMeta.dataWarningCount}건(다수결 적용)` : ""}
+            </p>
+          )}
           <p style={{ fontSize: 10, opacity: 0.4, marginTop: 4 }}>Pokémon GO는 Niantic, Inc.의 상표입니다</p>
         </div>
       </div>
@@ -1157,7 +1192,7 @@ export default function Home() {
                   {formatResult(compareResult)}
                   {streaming && <span style={s.cursor}>▌</span>}
                 </div>
-                {compareModel && !streaming && <div style={{ padding: "4px 0 0", fontSize: 10, color: "#576574", textAlign: "right" }}>⚡ {compareModel.replace("gemini-", "").replace("-preview", "")}</div>}
+                {compareModel && !streaming && <div style={{ padding: "4px 0 0", fontSize: 10, color: "#576574", textAlign: "right" }}>{modelLine(compareModel)}</div>}
               </div>
             )}
           </div>

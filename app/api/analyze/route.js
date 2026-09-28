@@ -1,4 +1,8 @@
 import { NextResponse } from "next/server";
+import { getPokemonDataset, findPokemon } from "../../lib/pokemonData";
+import { analyzeDefender } from "../../lib/typeChart";
+
+export const maxDuration = 60;
 
 const SYSTEM_PROMPT = `당신은 포켓몬GO 최고 권위자 "포고박사"입니다.
 초보자에게는 친절하되, 별의 모래와 사탕 낭비를 막기 위해 아주 단호하고 냉철하게(팩트 폭격) 분석하세요.
@@ -125,6 +129,65 @@ function getModels() {
   return fromEnv.length > 0 ? fromEnv : DEFAULT_MODELS;
 }
 
+// ─── 최신성 규칙: 오늘 날짜 + "제공 데이터 우선" 을 모든 시스템 프롬프트에 덧붙인다 ───
+function todayKST() {
+  const now = new Date();
+  const iso = now.toLocaleDateString("sv-SE", { timeZone: "Asia/Seoul" }); // YYYY-MM-DD
+  const human = now.toLocaleDateString("ko-KR", { timeZone: "Asia/Seoul", year: "numeric", month: "long", day: "numeric", weekday: "long" });
+  return `${iso} (${human})`;
+}
+
+function freshnessBlock(dataset) {
+  const stamp = dataset?.generatedAt ? new Date(dataset.generatedAt).toLocaleString("ko-KR", { timeZone: "Asia/Seoul" }) : "확인 불가";
+  const okSources = (dataset?.dataSources || []).filter((s) => s.ok).map((s) => s.name).join(", ") || "없음";
+  return `
+
+## 📅 데이터 최신성 규칙 (최우선 준수)
+- 오늘 날짜: ${todayKST()} 기준 한국 시간. 당신의 학습 지식은 이 날짜보다 오래되었을 수 있습니다.
+- 사용자 메시지에 포함된 **"교차검증 데이터"**(종족값, 타입, 기술 목록, 상성, CP)가 당신의 학습 지식과 다르면 **반드시 제공된 데이터를 따르세요.** 학습 지식으로 덮어쓰지 마세요.
+- 제공된 데이터에 없는 내용(현재 메타 순위, 진행 중 이벤트, 최근 밸런스 변경, 신규 기술 등)은 단정하지 말고 **"데이터 없음"**이라고 명시한 뒤 일반 원칙만 설명하세요. 추측 금지.
+- 데이터 기준 시각: ${stamp} / 정상 소스: ${okSources}`;
+}
+
+// 데이터셋 조회 (실패해도 분석은 계속 진행)
+async function loadDatasetSafe() {
+  try {
+    return await getPokemonDataset();
+  } catch (e) {
+    console.warn(`[analyze] 데이터셋 로드 실패: ${e.message}`);
+    return null;
+  }
+}
+
+function verifiedBlock(label, p) {
+  if (!p) return `## ${label}\n- 데이터 없음 (서버 교차검증 데이터에서 찾지 못함)`;
+  const t = analyzeDefender(p.types);
+  const lines = [
+    `## ${label} (서버 교차검증 데이터 — 소스: ${(p.sources || []).join(", ")})`,
+    `- 이름: ${p.nameKr} (${p.name}) #${p.id} / 폼: ${p.form}`,
+    `- 종족값: 공격 ${p.baseAttack} / 방어 ${p.baseDefense} / 체력 ${p.baseStamina}`,
+    `- 타입: ${(p.types || []).join("/") || "데이터 없음"}`,
+    `- 빠른기술: ${(p.fast || []).join(", ") || "데이터 없음"}${p.eliteFast?.length ? ` / 한정: ${p.eliteFast.join(", ")}` : ""}`,
+    `- 차징기술: ${(p.charged || []).join(", ") || "데이터 없음"}${p.eliteCharged?.length ? ` / 한정: ${p.eliteCharged.join(", ")}` : ""}`,
+  ];
+  if (t) {
+    lines.push(`- 약점(받는 피해 증가, 서버 계산): ${t.weaknesses.join(", ") || "없음"}`);
+    lines.push(`- 저항(받는 피해 감소, 서버 계산): ${t.resistances.join(", ") || "없음"}`);
+  }
+  return lines.join("\n");
+}
+
+function metaHeader(dataset, extra = {}) {
+  const meta = {
+    generatedAt: dataset?.generatedAt || null,
+    stale: Boolean(dataset?.stale),
+    dataSources: (dataset?.dataSources || []).map((s) => ({ name: s.name, ok: s.ok, fetchedAt: s.fetchedAt })),
+    dataWarningCount: dataset?.dataWarningCount || 0,
+    ...extra,
+  };
+  return encodeURIComponent(JSON.stringify(meta));
+}
+
 // ─── CP 계산 (서버에서 미리 계산해서 AI 환각 방지) ───
 const CPM_40 = 0.7903;
 const CPM_50 = 0.84029999;
@@ -179,12 +242,22 @@ export async function POST(req) {
 
   try {
     const body = await req.json();
-    const { pokemonData, userInput, collection, mode, raidBoss, compareA, compareB } = body;
+    const { userInput, collection, mode, raidBoss, compareA, compareB } = body;
+    let { pokemonData } = body;
+
+    const dataset = await loadDatasetSafe();
+    let verifiedCount = 0;
 
     let systemPrompt, userMessage;
 
     if (mode === "maxbattle") {
       systemPrompt = MAX_BATTLE_SYSTEM_PROMPT;
+
+      const boss = dataset ? findPokemon(dataset, { id: raidBoss?.id, form: raidBoss?.form, name: raidBoss?.name }) : null;
+      if (boss) verifiedCount++;
+      // snacknap 이 준 타입이 있으면 우선, 없으면 교차검증 데이터의 타입
+      const bossTypes = raidBoss?.types?.length ? raidBoss.types : boss?.types || [];
+      const bossBlock = verifiedBlock("맥스배틀 보스 교차검증 데이터", boss ? { ...boss, types: bossTypes } : null);
 
       let collectionContext = "";
       if (collection && collection.length > 0) {
@@ -194,13 +267,20 @@ export async function POST(req) {
         collectionContext = `\n\n## 사용자 보유 포켓몬 (${collection.length}마리)\n${relevant}\n→ 이 중 다이맥스/거다이맥스 가능한 포켓몬이 있다면 우선 추천해주세요.`;
       }
 
-      userMessage = `## 맥스배틀 보스 정보
+      userMessage = `## 맥스배틀 보스 정보 (snacknap)
 ${JSON.stringify(raidBoss, null, 2)}
+
+${bossBlock}
 ${collectionContext}
 
-이 맥스배틀 보스의 최적 다이맥스 카운터를 추천해주세요. 맥스배틀 규칙(다이맥스 포켓몬만 가능)을 반드시 고려하세요.`;
+이 맥스배틀 보스의 최적 다이맥스 카운터를 추천해주세요. 맥스배틀 규칙(다이맥스 포켓몬만 가능)을 반드시 고려하세요.
+약점/저항은 위 "서버 계산" 값을 그대로 사용하세요.`;
     } else if (mode === "raid") {
       systemPrompt = RAID_SYSTEM_PROMPT;
+
+      const boss = dataset ? findPokemon(dataset, { id: raidBoss?.id, form: raidBoss?.form, name: raidBoss?.name }) : null;
+      if (boss) verifiedCount++;
+      const bossBlock = verifiedBlock("레이드 보스 교차검증 데이터", boss);
 
       let collectionContext = "";
       if (collection && collection.length > 0) {
@@ -210,23 +290,49 @@ ${collectionContext}
         collectionContext = `\n\n## 사용자 보유 포켓몬 (${collection.length}마리)\n${relevant}\n→ 가능하면 보유 포켓몬 중에서 카운터를 우선 추천해주세요. 보유하지 않은 추천 포켓몬도 함께 알려주세요.`;
       }
 
-      userMessage = `## 레이드 보스 정보
+      userMessage = `## 레이드 보스 정보 (사용자 선택)
 ${JSON.stringify(raidBoss, null, 2)}
+
+${bossBlock}
 ${collectionContext}
 
-이 레이드 보스의 최적 카운터를 추천해주세요. 보스의 타입/약점을 분석하고, 초보자도 이해하기 쉽게 설명해주세요.`;
+이 레이드 보스의 최적 카운터를 추천해주세요. 보스의 타입/약점은 위 "서버 계산" 값을 그대로 사용하고, 초보자도 이해하기 쉽게 설명해주세요.`;
     } else if (mode === "compare") {
       systemPrompt = COMPARE_SYSTEM_PROMPT;
+
+      const vA = dataset ? findPokemon(dataset, { id: compareA?.id, form: compareA?.form, name: compareA?.enName }) : null;
+      const vB = dataset ? findPokemon(dataset, { id: compareB?.pokemonId, form: compareB?.form, name: compareB?.enName }) : null;
+      if (vA) verifiedCount++;
+      if (vB) verifiedCount++;
 
       userMessage = `## 비교 대상 A (현재 분석 중)
 ${JSON.stringify(compareA, null, 2)}
 
+${verifiedBlock("A 교차검증 데이터", vA)}
+
 ## 비교 대상 B (보유목록)
 ${JSON.stringify(compareB, null, 2)}
+
+${verifiedBlock("B 교차검증 데이터", vB)}
 
 이 두 포켓몬을 비교 분석해주세요. 어느 쪽을 키워야 할지, 둘 다 킵해야 할지 판정해주세요.`;
     } else {
       systemPrompt = SYSTEM_PROMPT;
+
+      // 클라이언트가 보낸 값 대신 서버 교차검증 데이터를 우선 사용 (종족값·기술·타입)
+      const verified = dataset ? findPokemon(dataset, { id: pokemonData?.id, form: pokemonData?.form, name: pokemonData?.name }) : null;
+      if (verified) {
+        verifiedCount++;
+        pokemonData = {
+          ...pokemonData,
+          name: verified.name, nameKr: verified.nameKr, id: verified.id, form: verified.form,
+          baseAttack: verified.baseAttack, baseDefense: verified.baseDefense, baseStamina: verified.baseStamina,
+          types: verified.types, fast: verified.fast, charged: verified.charged,
+          eliteFast: verified.eliteFast, eliteCharged: verified.eliteCharged,
+          dataSources: verified.sources,
+        };
+      }
+      const typeInfo = analyzeDefender(pokemonData?.types);
 
       let collectionContext = "";
       if (collection && collection.length > 0) {
@@ -236,8 +342,10 @@ ${JSON.stringify(compareB, null, 2)}
         collectionContext = `\n\n## 사용자 보유목록 (${collection.length}마리)\n${relevant}\n→ 이미 보유 중인 포켓몬과 비교해서 판정에 반영해주세요.`;
       }
 
-      userMessage = `## API에서 가져온 정확한 데이터
+      userMessage = `## 교차검증 데이터 (${verified ? `서버 교차검증 완료 — 소스: ${verified.sources.join(", ")}` : "서버 데이터 없음 — 클라이언트 값"})
 ${JSON.stringify(pokemonData, null, 2)}
+${typeInfo ? `- 약점(받는 피해 증가, 서버 계산): ${typeInfo.weaknesses.join(", ") || "없음"}
+- 저항(받는 피해 감소, 서버 계산): ${typeInfo.resistances.join(", ") || "없음"}` : "- 타입/상성: 데이터 없음"}
 
 ## 사용자 입력
 - 포켓몬: ${userInput.name}
@@ -263,11 +371,18 @@ ${(() => {
 - UL(2500): ${cpInfo.ulFit}`;
 })()}${collectionContext}
 
-위 API 데이터를 기반으로 이 포켓몬을 분석해주세요.
+위 교차검증 데이터를 기반으로 이 포켓몬을 분석해주세요. 기술 목록·종족값·상성은 위 데이터를 그대로 사용하세요.
 CP를 기반으로 어떤 리그에 적합한지, 강화가 필요한지도 분석해주세요.
 PvP 메타 포켓몬이면 PvP 기준으로, PvE 메타면 PvE 기준으로 IV를 평가하세요.
 "**판정:**" 줄은 반드시 포함하세요.
 ⚠️ 핵심만 간결하게. 너무 길지 않게 답변하세요.`;
+    }
+
+    systemPrompt += freshnessBlock(dataset);
+    const metaValue = metaHeader(dataset, { verified: verifiedCount });
+    if (process.env.POGO_DEBUG_PROMPT) {
+      console.log("[analyze] system prompt tail:\n" + systemPrompt.slice(-600));
+      console.log("[analyze] user message:\n" + userMessage);
     }
 
     let lastError = "";
@@ -343,6 +458,8 @@ PvP 메타 포켓몬이면 PvP 기준으로, PvE 메타면 PvE 기준으로 IV�
             "Content-Type": "text/plain; charset=utf-8",
             "Transfer-Encoding": "chunked",
             "Cache-Control": "no-cache",
+            // 데이터 기준 시각·소스 상태 (URL 인코딩된 JSON)
+            "X-Pogo-Meta": metaValue,
           },
         });
       } catch (e) {

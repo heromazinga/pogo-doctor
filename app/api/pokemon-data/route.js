@@ -1,66 +1,30 @@
 import { NextResponse } from "next/server";
+import { getPokemonDataset } from "../../lib/pokemonData";
 
-let cache = null;
-let cacheTime = 0;
-const CACHE_DURATION = 1000 * 60 * 60;
+export const dynamic = "force-dynamic";
+export const maxDuration = 60; // PokeMiners 원본(약 20MB) 수신을 고려
 
+// 응답 형식
+// {
+//   generatedAt, pokemon: [...], moveNamesKr: { "Thunder Shock": "전기쇼크", ... },
+//   dataSources: [{ name, url, fetchedAt, ok, count, error? }],
+//   dataWarnings: [...최대 100건], dataWarningCount, dataWarningCounts: { stats, moves, types }
+// }
 export async function GET() {
-  if (cache && Date.now() - cacheTime < CACHE_DURATION) {
-    return NextResponse.json(cache);
-  }
-
   try {
-    const [statsRes, movesRes, namesRes] = await Promise.all([
-      fetch("https://pogoapi.net/api/v1/pokemon_stats.json"),
-      fetch("https://pogoapi.net/api/v1/current_pokemon_moves.json"),
-      fetch("https://pokemon-go-api.github.io/pokemon-go-api/api/pokedex.json").catch(() => null),
-    ]);
-
-    const stats = await statsRes.json();
-    const moves = await movesRes.json();
-
-    const krNames = {};
-    if (namesRes && namesRes.ok) {
-      try {
-        const namesData = await namesRes.json();
-        if (Array.isArray(namesData)) {
-          for (const p of namesData) {
-            const dex = p.dexNr || p.dex_nr || p.id;
-            const kr = p.names?.Korean || p.names?.ko || null;
-            if (dex && kr && !krNames[dex]) krNames[dex] = kr;
-          }
-        }
-      } catch (e) {}
+    const data = await getPokemonDataset();
+    if (!data.pokemon || data.pokemon.length === 0) {
+      return NextResponse.json(
+        { error: "모든 데이터 소스에서 포켓몬 데이터를 받지 못했습니다", dataSources: data.dataSources, dataWarnings: data.dataWarnings },
+        { status: 503 }
+      );
     }
-
-    const movesMap = {};
-    for (const m of moves) {
-      const key = m.pokemon_id;
-      if (!movesMap[key]) movesMap[key] = [];
-      movesMap[key].push(m);
-    }
-
-    const pokemon = stats.map((s) => {
-      const pokeMoves = movesMap[s.pokemon_id] || [];
-      const matchedMoves = pokeMoves.find((m) => m.form === s.form) || pokeMoves[0] || {};
-      return {
-        id: s.pokemon_id,
-        name: s.pokemon_name,
-        nameKr: krNames[s.pokemon_id] || s.pokemon_name,
-        form: s.form || "Normal",
-        baseAttack: s.base_attack,
-        baseDefense: s.base_defense,
-        baseStamina: s.base_stamina,
-        fast: matchedMoves.fast_moves || [],
-        charged: matchedMoves.charged_moves || [],
-        eliteFast: matchedMoves.elite_fast_moves || [],
-        eliteCharged: matchedMoves.elite_charged_moves || [],
-      };
+    return NextResponse.json(data, {
+      headers: {
+        // Vercel CDN 캐시 1시간, 갱신 중 최대 6시간 이전 응답 제공
+        "Cache-Control": "public, s-maxage=3600, stale-while-revalidate=21600",
+      },
     });
-
-    cache = pokemon;
-    cacheTime = Date.now();
-    return NextResponse.json(pokemon);
   } catch (e) {
     return NextResponse.json({ error: e.message }, { status: 500 });
   }
