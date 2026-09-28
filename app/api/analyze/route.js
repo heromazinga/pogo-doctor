@@ -197,16 +197,17 @@ function moveCategoryLines(dataset, p) {
 function defenseTableBlock(types) {
   const table = defenseTable(types);
   if (!table) return "- 방어 배율표: 데이터 없음 (타입 미상)";
-  const rows = table.map((r) => `${r.kr}(${r.type}) ×${r.mult}${r.label ? ` ${r.label}` : ""}`);
-  return `- 방어 배율표(서버 계산, 이 값만 사용하고 직접 계산·환산 금지): ${rows.join(" / ")}`;
+  // 보통(×1) 행은 제외하고 약점·반감만 전달
+  const rows = table.filter((r) => r.mult !== 1).map((r) => `${r.kr}(${r.type}) ×${r.mult}${r.label ? ` ${r.label}` : ""}`);
+  return `- 방어 배율표(서버 계산, 이 값만 사용하고 직접 계산·환산 금지. 표에 없는 타입은 보통 ×1): ${rows.join(" / ")}`;
 }
 
-// 천적 후보 (서버 계산): 대상의 약점 타입을 가진 포켓몬을 공격 종족값 × 배율 순으로
+// 천적 후보 (서버 계산): 약점 타입의 빠른+차징 기술을 실제 보유한 출시 포켓몬을 간이 화력 점수 순으로
 function counterBlock(dataset, target) {
-  const list = counterCandidates(dataset?.pokemon, target, 8);
+  const list = counterCandidates(dataset?.pokemon, target, 8, dataset?.moveStats || {});
   if (!list.length) return "- 천적 후보: 데이터 없음";
-  return `- 천적 후보(서버 계산: 대상의 약점 타입 보유 포켓몬, 공격 종족값 × 상성 배율 순): ${list
-    .map((c) => `${c.nameKr}(${c.name})${c.form !== "Normal" ? `[${c.form}]` : ""} 공${c.baseAttack} ${c.attackType}타입 ×${c.mult}${c.incoming > 1 ? ` (단, 대상에게 ×${c.incoming} 약점)` : ""}`)
+  return `- 천적 후보(서버 계산: 출시된 포켓몬 중 약점 타입의 빠른+차징 기술 보유, 점수 = 공격 종족값 × 사이클 DPS × 자속 1.2 × 배율): ${list
+    .map((c) => `${c.nameKr}(${c.name})${c.form !== "Normal" ? `[${c.form}]` : ""} ${mvName(dataset, c.fastMove)}+${mvName(dataset, c.chargedMove)} ×${c.mult}${c.stab > 1 ? " 자속" : ""} 점수${c.score}${c.incoming > 1 ? ` (단, 대상에게 ×${c.incoming} 약점)` : ""}`)
     .join(", ")}
 - "천적/추천 카운터" 항목은 항상 **이 포켓몬을 상대할 때 유리한 포켓몬**을 뜻한다. 위 후보 중에서 고르고, 후보 밖 포켓몬을 추천할 때는 이유를 명시한다.`;
 }
