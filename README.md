@@ -58,6 +58,7 @@
 |---|---|---|
 | `GEMINI_API_KEY` | O | AI Studio 에서 발급한 키 |
 | `GEMINI_MODELS` | X | 모델 폴백 순서(쉼표 구분). 비우면 코드 기본값 |
+| `GEMINI_MODELS_TEAM` | X | 박사 코멘트(`mode: "team"`) 전용 모델 순서. 비우면 `gemini-3.1-flash-lite,gemini-3-flash-preview` (고급 모델 한도를 개체값 분석용으로 남김) |
 | `GEMINI_MIN_CHARS` | X | 응답 본문이 이 글자 수 미만이거나 `finishReason` 이 `STOP` 이 아니면 비정상으로 보고 다음 모델로 재시도(기본 400). 재시도 시 클라이언트는 `__RESET__` 마커로 이전 본문을 버리고, 사용 횟수는 최종 채택된 응답 1회만 기록 |
 | `GEMINI_MIN_CHARS_TEAM` | X | 박사 코멘트(`mode: "team"`, 3~5줄)의 짧은 응답 기준(기본 60) |
 | `GEMINI_API_BASE` | X | 테스트용 모의 서버 지정(기본 공식 엔드포인트) |
@@ -162,7 +163,7 @@ Vercel 에서는 환경변수 `POGO_DISABLE_SOURCES` 를 Preview 환경에 잠�
 ### API
 - `POST /api/team` `{ mode: "raid", boss: {id, form}, myPokemon: [my_pokemon 행] }` / `{ mode: "rocket", lineup, myPokemon }` → 팀 JSON (AI 호출 없음).
 - `GET /api/rocket-lineups` — ScrapedDuck `rocketLineups.min.json`(26개 라인업), 메모리 캐시 6시간, 실패 시 이전 캐시 또는 502 + 화면 안내(해당 탭만 비활성화).
-- `POST /api/analyze` `mode: "team"` — 박사 코멘트(3~5줄). 짧은 응답 재시도 기준은 `GEMINI_MIN_CHARS_TEAM`(기본 60자).
+- `POST /api/analyze` `mode: "team"` — 박사 코멘트(3~5줄). **기본 모델 고정**: `GEMINI_MODELS_TEAM`(기본 `gemini-3.1-flash-lite → gemini-3-flash-preview`)을 쓰며 고급 모델 `gemini-3.6-flash` 는 호출하지 않는다(무료 일일 한도 약 20회를 개체값 분석용으로 보존). 폴백 시 상단 안내는 "코멘트 모델(…) → …로 코멘트 중". 짧은 응답 재시도 기준은 `GEMINI_MIN_CHARS_TEAM`(기본 60자).
 
 ### 맥스배틀 팀 추천은 구현하지 않음 (근거)
 다이맥스/거다이맥스 **가능 여부** 데이터가 교차검증 소스에 없다.

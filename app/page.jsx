@@ -371,10 +371,12 @@ export default function Home() {
           else if (line.startsWith("__USAGE__:")) { flushText(); const n = Number(line.replace("__USAGE__:", "")); if (Number.isFinite(n)) setUsageCount(n); }
           else if (line.startsWith("__FALLBACK__:")) {
             flushText();
-            const [reason, primary, used] = line.replace("__FALLBACK__:", "").split("|");
+            const [reason, primary, used, fbMode] = line.replace("__FALLBACK__:", "").split("|");
             const short = (m) => (m || "").replace("gemini-", "").replace("-preview", "");
             setFallbackNotice(
-              reason === "quota_minute" ? `고급 모델(${short(primary)}) 분당 한도 초과 → 기본 모델(${short(used)})로 분석 중 · 잠시 후 고급 모델로 자동 복귀`
+              // 박사 코멘트는 기본 모델(GEMINI_MODELS_TEAM)로 고정되어 있어 "고급 모델" 문구를 쓰지 않는다
+              fbMode === "team" ? `코멘트 모델(${short(primary)}) ${reason === "quota_minute" ? "분당 한도 초과" : reason === "quota_day" || reason === "quota" ? "오늘 한도 소진" : `응답 실패(${reason})`} → ${short(used)}로 코멘트 중`
+              : reason === "quota_minute" ? `고급 모델(${short(primary)}) 분당 한도 초과 → 기본 모델(${short(used)})로 분석 중 · 잠시 후 고급 모델로 자동 복귀`
               : reason === "quota_day" || reason === "quota" ? `오늘 고급 모델(${short(primary)}) 한도 소진 → 기본 모델(${short(used)})로 분석 중`
               : `고급 모델(${short(primary)}) 응답 실패(${reason}) → 기본 모델(${short(used)})로 분석 중`
             );
