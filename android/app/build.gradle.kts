@@ -16,7 +16,9 @@ val hasReleaseKey = !envKsPath.isNullOrBlank() && File(envKsPath).exists() && !e
 if (!hasReleaseKey) logger.warn("[pogo-doctor] 릴리스 keystore 없음 → debug 키로 서명합니다 (기기에서 기존 설치 위에 업데이트 불가)")
 
 // 서버 URL: gradle 속성 -PpogoServerUrl 또는 환경변수 POGO_SERVER_URL, 기본은 운영 도메인 (앱 설정 화면에서 변경 가능)
-val serverUrl: String = (project.findProperty("pogoServerUrl") as String?) ?: System.getenv("POGO_SERVER_URL") ?: "https://pogo-doctor.vercel.app"
+// 빈 문자열(Actions 변수 미설정 시 "")도 미설정으로 취급한다
+val serverUrl: String = listOf(project.findProperty("pogoServerUrl") as String?, System.getenv("POGO_SERVER_URL"))
+    .firstOrNull { !it.isNullOrBlank() } ?: "https://pogo-doctor.vercel.app"
 
 android {
     namespace = "com.pogodoctor.app"

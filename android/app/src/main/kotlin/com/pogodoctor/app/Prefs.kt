@@ -14,7 +14,13 @@ class Prefs(ctx: Context) {
     }
 
     var serverUrl: String
-        get() = plain.getString("server_url", BuildConfig.DEFAULT_SERVER_URL)!!.trimEnd('/')
+        get() {
+            // 저장값·빌드 기본값이 비었거나 http(s) 가 아니면 운영 도메인으로 대체 (빈 값이면 "no protocol" 오류)
+            val v = plain.getString("server_url", null)?.trim()?.trimEnd('/')
+            val d = BuildConfig.DEFAULT_SERVER_URL.trim().trimEnd('/')
+            return listOf(v, d).firstOrNull { it != null && (it.startsWith("https://") || it.startsWith("http://")) }
+                ?: "https://pogo-doctor.vercel.app"
+        }
         set(v) = plain.edit().putString("server_url", v.trim().trimEnd('/')).apply()
 
     var deviceToken: String?
