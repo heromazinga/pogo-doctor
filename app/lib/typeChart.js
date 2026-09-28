@@ -1,5 +1,5 @@
 // 포켓몬GO 타입 상성표 (공격 타입 → 방어 타입)
-// 배율: 효과 굉장함 1.6 / 효과 별로 0.625 / 무효(본가 기준) 0.390625
+// 배율(포켓몬GO 기준): 약점 1.6 / 이중 약점 2.56 / 반감 0.625 / 이중 반감 0.390625 (본가의 "무효"는 GO 에서 이중 반감)
 
 export const TYPES = [
   "normal", "fire", "water", "electric", "grass", "ice", "fighting", "poison", "ground",

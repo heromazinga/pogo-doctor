@@ -466,7 +466,7 @@ function pickValue(values /* [{src, value}] */, updatedAtOf) {
 function mergeMoves(entries /* [{src, list, elite}] */) {
   // entries 는 기술 목록을 제공하는 소스만
   const providers = entries.filter((e) => e.hasMoves);
-  if (providers.length === 0) return { regular: [], elite: [], signature: [], unverified: [], warnings: [] };
+  if (providers.length === 0) return { regular: [], elite: [], signature: [], unverified: [], unverifiedElite: [], warnings: [] };
   const votes = new Map(); // moveKey → { srcs:Set, eliteVotes:number, signatureVotes:number }
   const add = (k, src, field) => {
     if (!votes.has(k)) votes.set(k, { srcs: new Set(), eliteVotes: 0, signatureVotes: 0 });
@@ -478,14 +478,15 @@ function mergeMoves(entries /* [{src, list, elite}] */) {
     for (const k of e.elite) add(k, e.src, "eliteVotes");
     for (const k of e.signature || []) add(k, e.src, "signatureVotes");
   }
-  const regular = [], elite = [], signature = [], unverified = [], warnings = [];
+  const regular = [], elite = [], signature = [], unverified = [], unverifiedElite = [], warnings = [];
   for (const [k, v] of votes) {
     const n = v.srcs.size;
     // 검증됨: 2개 이상 소스 일치(또는 기술 목록을 주는 소스가 하나뿐)
     const verified = n >= 2 || providers.length === 1;
     if (!verified) {
-      // 1개 소스에만 있는 기술은 버리지 않고 "미검증"으로 노출 (미출시로 판단하지 않는다)
-      unverified.push(k);
+      // 1개 소스에만 있는 기술은 버리지 않고 "미검증"으로 노출 (미출시로 판단하지 않는다).
+      // 그 소스가 한정기(elite/전용)로 표시했으면 "한정기(미검증)" 로 구분
+      (v.eliteVotes + v.signatureVotes > 0 ? unverifiedElite : unverified).push(k);
       warnings.push({ move: k, srcs: [...v.srcs], action: "unverified" });
       continue;
     }
@@ -495,7 +496,7 @@ function mergeMoves(entries /* [{src, list, elite}] */) {
     else if (v.eliteVotes * 2 >= n) elite.push(k);
     else regular.push(k);
   }
-  return { regular, elite, signature, unverified, warnings };
+  return { regular, elite, signature, unverified, unverifiedElite, warnings };
 }
 
 // 갱신 시각이 SOURCE_STALE_DAYS(기본 60일) 이상 지난 소스는 투표에서 제외한다. 갱신 시각을 모르는 소스는 판단 불가 → 제외하지 않음.
@@ -639,6 +640,8 @@ function crossValidate(loaded /* {sourceKey: {meta, parsed}} */) {
       signatureFast: fastM.signature.map(moveDisplay), signatureCharged: chM.signature.map(moveDisplay),
       // 교차검증 소스 1개 — 미출시라는 뜻은 아님
       unverifiedFast: fastM.unverified.map(moveDisplay), unverifiedCharged: chM.unverified.map(moveDisplay),
+      // 한정기(미검증): 1개 소스만 보고했고 그 소스가 한정기/전용기로 표시 (예: PvPoke 만 가진 Roar of Time)
+      unverifiedEliteFast: fastM.unverifiedElite.map(moveDisplay), unverifiedEliteCharged: chM.unverifiedElite.map(moveDisplay),
       sources: recs.map((x) => x.src),
     });
   }
