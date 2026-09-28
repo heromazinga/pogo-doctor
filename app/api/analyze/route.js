@@ -2,6 +2,17 @@ import { NextResponse } from "next/server";
 import { getPokemonDataset, findPokemon } from "../../lib/pokemonData";
 import { analyzeDefender, defenseTable, counterCandidates } from "../../lib/typeChart";
 import { renderGlossary, findForbidden } from "../../lib/glossary";
+import { getUserFromRequest, incrementAiUsage } from "../../lib/supabaseServer";
+import { usageDate, nextResetKST } from "../../lib/aiUsage";
+
+// 내 포켓몬 목록 항목 → 프롬프트 한 줄 (판정은 저장하지 않으므로 상태·용도만 전달)
+const STATUS_KR = { keep: "보관", transfer: "박사에게 보낼 예정" };
+const PURPOSE_KR = { raid: "레이드", great: "슈퍼리그", ultra: "하이퍼리그", master: "마스터리그" };
+function collLine(c) {
+  const iv = Number.isFinite(c.ivPercent) ? `/IV${c.ivPercent}%` : "";
+  const tags = [c.isShadow ? "섀도" : null, c.isShiny ? "이로치" : null, STATUS_KR[c.status] || null, ...((c.purposes || []).map((p) => PURPOSE_KR[p] || p))].filter(Boolean);
+  return `${c.name}(CP${c.cp || "?"}${iv}${tags.length ? "/" + tags.join("·") : ""})`;
+}
 
 export const maxDuration = 60;
 
@@ -209,7 +220,8 @@ function counterBlock(dataset, target) {
   return `- 천적 후보(서버 계산: 출시된 포켓몬 중 약점 타입의 빠른+차징 기술 보유, 점수 = 공격 종족값 × 사이클 DPS × 자속 1.2 × 배율): ${list
     .map((c) => `${c.nameKr}(${c.name})${c.form !== "Normal" ? `[${c.form}]` : ""} ${mvName(dataset, c.fastMove)}+${mvName(dataset, c.chargedMove)} ×${c.mult}${c.stab > 1 ? " 자속" : ""} 점수${c.score}${c.releasedUnknown ? " (출시 미확인)" : ""}${c.incoming > 1 ? ` (단, 대상에게 ×${c.incoming} 약점)` : ""}`)
     .join(", ")}
-- "천적/추천 카운터" 항목은 항상 **이 포켓몬을 상대할 때 유리한 포켓몬**을 뜻한다. 위 후보 중에서 고르고, 후보 밖 포켓몬을 추천할 때는 이유를 명시한다.`;
+- "천적/추천 카운터" 항목은 항상 **이 포켓몬을 상대할 때 유리한 포켓몬**을 뜻한다. 위 후보 중에서 고르고, 후보 밖 포켓몬을 추천할 때는 이유를 명시한다.
+- 후보에 "(출시 미확인)" 표기가 있으면 답변에서도 그 포켓몬 이름 뒤에 **(출시 미확인)** 을 그대로 붙인다.`;
 }
 
 function verifiedBlock(label, p, dataset) {
@@ -299,7 +311,9 @@ export async function POST(req) {
     const { userInput, collection, mode, raidBoss, compareA, compareB } = body;
     let { pokemonData } = body;
 
-    const dataset = await loadDatasetSafe();
+    // 사용자 식별 (Authorization: Bearer <Supabase access token>). 없으면 분석은 허용, 횟수 기록만 생략
+    const [dataset, user] = await Promise.all([loadDatasetSafe(), getUserFromRequest(req)]);
+    if (!user) console.warn(`[analyze] 사용자 식별 없음 (mode=${mode || "analyze"}) → ai_usage 기록 생략`);
     let verifiedCount = 0;
 
     let systemPrompt, userMessage;
@@ -316,7 +330,7 @@ export async function POST(req) {
       let collectionContext = "";
       if (collection && collection.length > 0) {
         const relevant = collection
-          .map((c) => `${c.name}(CP${c.cp}/IV${c.ivPercent}%)`)
+          .map(collLine)
           .join(", ");
         collectionContext = `\n\n## 사용자 보유 포켓몬 (${collection.length}마리)\n${relevant}\n→ 이 중 다이맥스/거다이맥스 가능한 포켓몬이 있다면 우선 추천해주세요.`;
       }
@@ -339,7 +353,7 @@ ${collectionContext}
       let collectionContext = "";
       if (collection && collection.length > 0) {
         const relevant = collection
-          .map((c) => `${c.name}(CP${c.cp}/IV${c.ivPercent}%/${c.verdict})`)
+          .map(collLine)
           .join(", ");
         collectionContext = `\n\n## 사용자 보유 포켓몬 (${collection.length}마리)\n${relevant}\n→ 가능하면 보유 포켓몬 중에서 카운터를 우선 추천해주세요. 보유하지 않은 추천 포켓몬도 함께 알려주세요.`;
       }
@@ -396,7 +410,7 @@ ${verifiedBlock("B 교차검증 데이터", vB, dataset)}
       let collectionContext = "";
       if (collection && collection.length > 0) {
         const relevant = collection
-          .map((c) => `${c.name}(CP${c.cp}/IV${c.ivPercent}%/${c.verdict})`)
+          .map(collLine)
           .join(", ");
         collectionContext = `\n\n## 사용자 보유목록 (${collection.length}마리)\n${relevant}\n→ 이미 보유 중인 포켓몬과 비교해서 판정에 반영해주세요.`;
       }
@@ -485,6 +499,8 @@ PvP 메타 포켓몬이면 PvP 기준으로, PvE 메타면 PvE 기준으로 IV�
     const encoder = new TextEncoder();
     const t0 = Date.now();
 
+    let rateLimited = false; // Gemini 429 (무료 한도 초과) 여부
+
     const stream = new ReadableStream({
       async start(controller) {
         // 즉시 첫 바이트: 클라이언트는 빈 줄을 무시한다
@@ -510,6 +526,7 @@ PvP 메타 포켓몬이면 PvP 기준으로, PvE 메타면 PvE 기준으로 IV�
             if (!res.ok) {
               const errData = await res.json().catch(() => ({}));
               errors.push(`${model}: ${errData?.error?.message || res.statusText} (HTTP ${res.status})`);
+              if (res.status === 429) rateLimited = true;
               continue;
             }
 
@@ -572,6 +589,11 @@ PvP 메타 포켓몬이면 PvP 기준으로, PvE 메타면 PvE 기준으로 IV�
             } else if (process.env.POGO_DEBUG_PROMPT) {
               console.log(`[analyze] ${model} finishReason=${finishReason} usage=${JSON.stringify(usage)}`);
             }
+            // 성공한 AI 호출 → 사용자별 오늘 사용 횟수 +1 (서버에서만)
+            if (user && fullText.length > 0) {
+              const count = await incrementAiUsage(user.id, usageDate());
+              if (count !== null) controller.enqueue(encoder.encode(`\n__USAGE__:${count}\n`));
+            }
             controller.close();
             return;
           } catch (e) {
@@ -580,7 +602,12 @@ PvP 메타 포켓몬이면 PvP 기준으로, PvE 메타면 PvE 기준으로 IV�
         }
 
         console.error("[analyze] 모든 Gemini 모델 실패: " + errors.join(" | "));
-        controller.enqueue(encoder.encode(`\n__ERROR__:Gemini 오류: ${errors.join(" / ")}`));
+        if (rateLimited) {
+          const reset = nextResetKST();
+          controller.enqueue(encoder.encode(`\n__ERROR__:오늘 무료 한도 소진 · 초기화 예정 ${reset.day} ${reset.kst}(한국 시간)`));
+        } else {
+          controller.enqueue(encoder.encode(`\n__ERROR__:Gemini 오류: ${errors.join(" / ")}`));
+        }
         controller.close();
       },
     });
