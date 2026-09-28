@@ -761,11 +761,29 @@ export async function buildDataset({ fetchImpl = fetch } = {}) {
   // 기술 한국어명 보완: pokemon-go-api → PokeAPI CSV → 수동 매핑. 그래도 없으면 목록에 남긴다.
   const missingBefore = moveNamesAll.filter((en) => !moveNamesKr[en]);
   const pokeapi = missingBefore.length ? await loadPokeapiKoreanNames(fetchImpl) : { meta: { name: POKEAPI_CSV.name, ok: null, skipped: true, role: "names", count: 0, reason: "누락 없음 → 조회 생략" }, slugKr: new Map() };
+  // GO 전용 변형("Aura Wheel Dark", "Hydro Pump Blastoise", "Weather Ball (Rock)")은 기본 기술명으로 찾고 접미사를 붙인다
+  const TYPE_KR = { normal: "노말", fire: "불꽃", water: "물", electric: "전기", grass: "풀", ice: "얼음", fighting: "격투", poison: "독", ground: "땅", flying: "비행", psychic: "에스퍼", bug: "벌레", rock: "바위", ghost: "고스트", dragon: "드래곤", dark: "악", steel: "강철", fairy: "페어리" };
+  const lookupKr = (en) => {
+    const direct = pokeapi.slugKr.get(pokeapiSlug(en)) || pokeapi.slugKr.get(pokeapiSlug(en).replace(/^vise-/, "vice-"));
+    if (direct) return direct;
+    const paren = en.match(/^(.*?)\s*\((.+)\)\s*$/);
+    const words = paren ? [paren[1], paren[2]] : null;
+    // "Aura Wheel Dark" → base "Aura Wheel" + suffix "Dark" / "Water Gun Fast Blastoise" → base "Water Gun" + suffix "Blastoise"
+    const parts = en.replace(/\bFast\b/g, "").trim().split(/\s+/);
+    for (let cut = parts.length - 1; cut >= 1; cut--) {
+      const base = words ? words[0] : parts.slice(0, cut).join(" ");
+      const suffix = words ? words[1] : parts.slice(cut).join(" ");
+      const kr = pokeapi.slugKr.get(pokeapiSlug(base));
+      if (kr) return `${kr}(${TYPE_KR[suffix.toLowerCase()] || suffix})`;
+      if (words) break;
+    }
+    return null;
+  };
   let filledByPokeapi = 0, filledByManual = 0;
   for (const en of missingBefore) {
-    const kr = pokeapi.slugKr.get(pokeapiSlug(en));
+    if (MOVE_NAMES_KR_MANUAL[en]) { moveNamesKr[en] = MOVE_NAMES_KR_MANUAL[en]; filledByManual++; continue; }
+    const kr = lookupKr(en);
     if (kr) { moveNamesKr[en] = kr; filledByPokeapi++; }
-    else if (MOVE_NAMES_KR_MANUAL[en]) { moveNamesKr[en] = MOVE_NAMES_KR_MANUAL[en]; filledByManual++; }
   }
   const moveNamesKrMissing = moveNamesAll.filter((en) => !moveNamesKr[en]).sort();
   const nameSources = [pokeapi.meta, { name: "manual", ok: true, role: "names", count: Object.keys(MOVE_NAMES_KR_MANUAL).length }];
