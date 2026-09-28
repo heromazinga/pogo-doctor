@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { getPokemonDataset, findPokemon } from "../../lib/pokemonData";
-import { analyzeDefender } from "../../lib/typeChart";
+import { analyzeDefender, defenseTable, counterCandidates } from "../../lib/typeChart";
 import { renderGlossary, findForbidden } from "../../lib/glossary";
 
 export const maxDuration = 60;
@@ -37,7 +37,7 @@ const SYSTEM_PROMPT = `당신은 포켓몬GO 최고 권위자 "포고박사"입�
 3. **⚔️ 기술 및 세팅 진단** (현재 기술 평가 및 추천 기술)
 4. **판정:** [🟢 영구 보존 / 🟡 보류 / 🔴 사탕행 / 🔵 PvP용 킵] ← 이 줄은 마크다운 없이 정확히 이 텍스트 그대로 포함할 것
 5. **💡 박사의 최종 처방전** (강화, 진화 등 구체적인 행동 지침을 짧고 명확하게)
-6. **추천 카운터 / 상성 TOP 3** (이름과 이유만 한 줄씩 간결하게)
+6. **천적 TOP 3 — 이 포켓몬을 상대할 때 유리한 포켓몬** (서버가 넘긴 "천적 후보" 중에서 고르고, 이름과 이유만 한 줄씩. 이 항목은 언제나 '이 포켓몬을 잡는 쪽'을 뜻함)
 
 한국어로 답변하세요.`;
 
@@ -165,6 +165,7 @@ function freshnessBlock(dataset) {
 - 오늘 날짜: ${todayKST()} 기준 한국 시간. 당신의 학습 지식은 이 날짜보다 오래되었을 수 있습니다.
 - 사용자 메시지에 포함된 **"교차검증 데이터"**(종족값, 타입, 기술 목록, 상성, CP)가 당신의 학습 지식과 다르면 **반드시 제공된 데이터를 따르세요.** 학습 지식으로 덮어쓰지 마세요.
 - 제공된 데이터에 없는 내용(현재 메타 순위, 진행 중 이벤트, 최근 밸런스 변경, 신규 기술 등)은 단정하지 말고 **"데이터 없음"**이라고 명시한 뒤 일반 원칙만 설명하세요. 추측 금지.
+- 타입 상성 배율은 사용자 메시지의 **"방어 배율표"에 있는 값만** 그대로 사용하세요. 직접 계산·환산·반올림하지 말고, 표에 없는 배율을 쓰지 마세요.
 - "미검증 기술"은 교차검증 소스가 1개뿐이라는 뜻이며 **미출시라는 뜻이 아닙니다.** 추천에서 배제하지 말고, 언급할 때 반드시 "(미검증)"이라고 표시하세요. 주력 추천은 검증된 기술을 우선하세요.
 - 데이터 기준 시각: ${stamp} / 정상 소스: ${okSources}`;
 }
@@ -192,6 +193,24 @@ function moveCategoryLines(dataset, p) {
   ];
 }
 
+// 방어 배율표 (18타입 전부) — 배율은 이 표 값만 쓰게 한다
+function defenseTableBlock(types) {
+  const table = defenseTable(types);
+  if (!table) return "- 방어 배율표: 데이터 없음 (타입 미상)";
+  const rows = table.map((r) => `${r.kr}(${r.type}) ×${r.mult}${r.label ? ` ${r.label}` : ""}`);
+  return `- 방어 배율표(서버 계산, 이 값만 사용하고 직접 계산·환산 금지): ${rows.join(" / ")}`;
+}
+
+// 천적 후보 (서버 계산): 대상의 약점 타입을 가진 포켓몬을 공격 종족값 × 배율 순으로
+function counterBlock(dataset, target) {
+  const list = counterCandidates(dataset?.pokemon, target, 8);
+  if (!list.length) return "- 천적 후보: 데이터 없음";
+  return `- 천적 후보(서버 계산: 대상의 약점 타입 보유 포켓몬, 공격 종족값 × 상성 배율 순): ${list
+    .map((c) => `${c.nameKr}(${c.name})${c.form !== "Normal" ? `[${c.form}]` : ""} 공${c.baseAttack} ${c.attackType}타입 ×${c.mult}${c.incoming > 1 ? ` (단, 대상에게 ×${c.incoming} 약점)` : ""}`)
+    .join(", ")}
+- "천적/추천 카운터" 항목은 항상 **이 포켓몬을 상대할 때 유리한 포켓몬**을 뜻한다. 위 후보 중에서 고르고, 후보 밖 포켓몬을 추천할 때는 이유를 명시한다.`;
+}
+
 function verifiedBlock(label, p, dataset) {
   if (!p) return `## ${label}\n- 데이터 없음 (서버 교차검증 데이터에서 찾지 못함)`;
   const t = analyzeDefender(p.types);
@@ -205,6 +224,8 @@ function verifiedBlock(label, p, dataset) {
   if (t) {
     lines.push(`- 약점(받는 피해 증가, 서버 계산): ${t.weaknesses.join(", ") || "없음"}`);
     lines.push(`- 저항(받는 피해 감소, 서버 계산): ${t.resistances.join(", ") || "없음"}`);
+    lines.push(defenseTableBlock(p.types));
+    lines.push(counterBlock(dataset, p));
   }
   return lines.join("\n");
 }
@@ -382,7 +403,9 @@ ${verifiedBlock("B 교차검증 데이터", vB, dataset)}
       userMessage = `## 교차검증 데이터 (${verified ? `서버 교차검증 완료 — 소스: ${verified.sources.join(", ")}` : "서버 데이터 없음 — 클라이언트 값"})
 ${JSON.stringify(pokemonData, null, 2)}
 ${typeInfo ? `- 약점(받는 피해 증가, 서버 계산): ${typeInfo.weaknesses.join(", ") || "없음"}
-- 저항(받는 피해 감소, 서버 계산): ${typeInfo.resistances.join(", ") || "없음"}` : "- 타입/상성: 데이터 없음"}
+- 저항(받는 피해 감소, 서버 계산): ${typeInfo.resistances.join(", ") || "없음"}
+${defenseTableBlock(pokemonData.types)}
+${counterBlock(dataset, pokemonData)}` : "- 타입/상성: 데이터 없음"}
 
 ## 기술 구분 (서버 교차검증 데이터 기준, 표기: 한국어(영어))
 - 포켓몬: ${pokemonData?.nameKr || "?"}(${pokemonData?.name || "?"})

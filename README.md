@@ -19,7 +19,7 @@
   ├─ GET /api/raid-bosses   ← ScrapedDuck raids.min.json (LeekDuck)
   ├─ GET /api/events        ← ScrapedDuck events.min.json
   ├─ GET /api/max-battles   ← snacknap.com/max-battles HTML 파싱 (app/lib/maxBattles.js)
-  └─ POST /api/analyze      ← Gemini (스트리밍). 서버 교차검증 데이터 + 타입 상성(app/lib/typeChart.js) 주입
+  └─ POST /api/analyze      ← Gemini (스트리밍). 서버 교차검증 데이터 + 타입 상성(app/lib/typeChart.js: 18타입 방어 배율표·천적 후보) + 용어집(app/lib/glossary.js) 주입
 ```
 
 - **프레임워크**: Next.js 16 (App Router) + React 19, Vercel 배포
