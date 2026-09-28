@@ -309,8 +309,6 @@ export default function Home() {
     setThinking(true);
     const rawOnChunk = onChunk;
     onChunk = (t) => { setThinking(false); rawOnChunk(t); };
-    // 스트림 안의 __USAGE__:N 줄(오늘 사용 횟수) 추출
-    const takeUsage = (text) => text.replace(/__USAGE__:(\d+)\n?/g, (_, n) => { setUsageCount(Number(n)); return ""; });
     try {
       const res = await fetch("/api/analyze", {
         method: "POST",
@@ -332,24 +330,30 @@ export default function Home() {
       const reader = res.body.getReader();
       const decoder = new TextDecoder();
       let accumulated = "";
-      let modelSent = false;
+      // 제어 마커(__MODEL__/__ERROR__/__RESET__/__USAGE__)는 항상 한 줄로 온다. 마커가 없는 조각은 그대로 본문.
+      const processChunk = (chunk) => {
+        if (!/__(MODEL|ERROR|RESET|USAGE)__/.test(chunk)) {
+          accumulated += chunk; if (accumulated.trim()) onChunk(accumulated); return;
+        }
+        const lines = chunk.split("\n");
+        let textBuf = [];
+        const flushText = () => { if (textBuf.length) { accumulated += textBuf.join("\n"); textBuf = []; if (accumulated.trim()) onChunk(accumulated); } };
+        for (const line of lines) {
+          if (line.startsWith("__MODEL__:")) { flushText(); onModel(line.replace("__MODEL__:", "").trim()); }
+          else if (line.startsWith("__ERROR__:")) { flushText(); onError(line.replace("__ERROR__:", "").trim()); }
+          else if (line.startsWith("__RESET__")) {
+            // 비정상 응답 → 서버가 다른 모델로 다시 생성: 지금까지 받은 본문을 버린다
+            flushText(); accumulated = ""; setThinking(true); onChunk("🔄 응답이 비정상이라 다른 모델로 다시 생성 중…\n");
+          }
+          else if (line.startsWith("__USAGE__:")) { flushText(); const n = Number(line.replace("__USAGE__:", "")); if (Number.isFinite(n)) setUsageCount(n); }
+          else textBuf.push(line);
+        }
+        flushText();
+      };
       while (true) {
         const { done, value } = await reader.read();
         if (done) break;
-        const chunk = takeUsage(decoder.decode(value, { stream: true }));
-        if (!modelSent && chunk.includes("__MODEL__:")) {
-          const lines = chunk.split("\n");
-          for (const line of lines) {
-            if (line.startsWith("__MODEL__:")) { onModel(line.replace("__MODEL__:", "")); modelSent = true; }
-            else if (line.startsWith("__ERROR__:")) { onError(line.replace("__ERROR__:", "")); }
-            else if (line) { accumulated += line; onChunk(accumulated); }
-          }
-        } else {
-          if (chunk.includes("__ERROR__:")) {
-            const parts = chunk.split("__ERROR__:");
-            accumulated += parts[0]; if (accumulated.trim()) onChunk(accumulated); onError(parts[1].trim());
-          } else { accumulated += chunk; if (accumulated.trim()) onChunk(accumulated); }
-        }
+        processChunk(decoder.decode(value, { stream: true }));
       }
       onDone();
     } catch (e) { if (e.name !== "AbortError") onError("네트워크 오류입니다. 다시 시도해주세요."); }

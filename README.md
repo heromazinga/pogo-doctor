@@ -58,6 +58,8 @@
 |---|---|---|
 | `GEMINI_API_KEY` | O | AI Studio 에서 발급한 키 |
 | `GEMINI_MODELS` | X | 모델 폴백 순서(쉼표 구분). 비우면 코드 기본값 |
+| `GEMINI_MIN_CHARS` | X | 응답 본문이 이 글자 수 미만이거나 `finishReason` 이 `STOP` 이 아니면 비정상으로 보고 다음 모델로 재시도(기본 400). 재시도 시 클라이언트는 `__RESET__` 마커로 이전 본문을 버리고, 사용 횟수는 최종 채택된 응답 1회만 기록 |
+| `GEMINI_API_BASE` | X | 테스트용 모의 서버 지정(기본 공식 엔드포인트) |
 | `GEMINI_THINKING_LEVEL` | X | thinking 수준(`generationConfig.thinkingConfig.thinkingLevel`), 기본 `low`. 모델이 거부(400)하면 파라미터 없이 재시도. `off` 면 미전송 |
 | `POGO_DISABLE_SOURCES` | X | 테스트용. 지정한 데이터 소스를 실패한 것으로 처리 (`pokemon-go-api,pvpoke,pogoapi,pokeminers`) |
 | `POKEMON_DATA_TTL_MS` | X | 포켓몬 데이터 메모리 캐시 시간(ms), 기본 6시간 |

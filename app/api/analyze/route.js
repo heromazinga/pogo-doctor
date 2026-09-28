@@ -478,7 +478,8 @@ PvP 메타 포켓몬이면 PvP 기준으로, PvE 메타면 PvE 기준으로 IV�
       };
       if (withThinking) generationConfig.thinkingConfig = { thinkingLevel };
       return fetch(
-        `https://generativelanguage.googleapis.com/v1beta/models/${model}:streamGenerateContent?alt=sse&key=${apiKey}`,
+        // GEMINI_API_BASE 는 테스트용 모의 서버 지정에만 사용 (기본: 공식 엔드포인트)
+        `${process.env.GEMINI_API_BASE || "https://generativelanguage.googleapis.com"}/v1beta/models/${model}:streamGenerateContent?alt=sse&key=${apiKey}`,
         {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -506,7 +507,16 @@ PvP 메타 포켓몬이면 PvP 기준으로, PvE 메타면 PvE 기준으로 IV�
         // 즉시 첫 바이트: 클라이언트는 빈 줄을 무시한다
         controller.enqueue(encoder.encode("\n"));
 
-        for (const model of getModels()) {
+        // 비정상 응답(finishReason ≠ STOP, 또는 본문이 너무 짧음)이면 다음 모델로 재시도한다.
+        // 이미 전달한 텍스트는 __RESET__ 마커로 클라이언트가 지우고 새 모델의 출력으로 대체한다.
+        const MIN_CHARS = Number(process.env.GEMINI_MIN_CHARS) || 400;
+        const models = getModels();
+        let accepted = null; // { model, fullText, finishReason, usage }
+        let lastAttempt = null;
+
+        for (let mi = 0; mi < models.length; mi++) {
+          const model = models[mi];
+          const isLast = mi === models.length - 1;
           try {
             let res = await callGemini(model, thinkingLevel !== "off");
 
@@ -519,19 +529,26 @@ PvP 메타 포켓몬이면 PvP 기준으로, PvE 메타면 PvE 기준으로 IV�
                 res = await callGemini(model, false);
               } else {
                 errors.push(`${model}: ${msg || res.statusText} (HTTP ${res.status})`);
+                console.warn(`[analyze] fallback: ${model} 거절 HTTP ${res.status} (${msg || res.statusText}) → 다음 모델`);
                 continue;
               }
             }
 
             if (!res.ok) {
               const errData = await res.json().catch(() => ({}));
-              errors.push(`${model}: ${errData?.error?.message || res.statusText} (HTTP ${res.status})`);
+              const msg = errData?.error?.message || res.statusText;
+              const retryAfter = res.headers.get("retry-after");
+              errors.push(`${model}: ${msg} (HTTP ${res.status})`);
               if (res.status === 429) rateLimited = true;
+              // 폴백 사유 로그 (429 한도 초과, 404 모델 없음, 503 과부하 등)
+              console.warn(`[analyze] fallback: ${model} 거절 HTTP ${res.status}${retryAfter ? ` retry-after=${retryAfter}` : ""} (${msg}) → ${isLast ? "남은 모델 없음" : "다음 모델"}`);
               continue;
             }
 
             const tHeaders = Date.now();
             let tFirstText = 0;
+            // 이전 모델의 출력이 이미 전달됐다면 클라이언트에 초기화 지시
+            if (lastAttempt && lastAttempt.fullText.length > 0) controller.enqueue(encoder.encode(`\n__RESET__\n`));
             // Send model name as metadata
             controller.enqueue(encoder.encode(`__MODEL__:${model}\n`));
 
@@ -540,6 +557,7 @@ PvP 메타 포켓몬이면 PvP 기준으로, PvE 메타면 PvE 기준으로 IV�
             let buffer = "";
             let finishReason = null;
             let usage = null;
+            let blockReason = null;
             let fullText = ""; // 금지 표현 검사용 (전달과 별개로 누적)
             const handleLine = (line) => {
               if (!line.startsWith("data:")) return;
@@ -558,9 +576,11 @@ PvP 메타 포켓몬이면 PvP 기준으로, PvE 메타면 PvE 기준으로 IV�
                   }
                 }
                 if (cand?.finishReason) finishReason = cand.finishReason;
+                if (parsed?.promptFeedback?.blockReason) blockReason = parsed.promptFeedback.blockReason;
                 if (parsed?.usageMetadata) usage = parsed.usageMetadata;
               } catch {}
             };
+            let streamError = null;
             try {
               while (true) {
                 const { done, value } = await reader.read();
@@ -573,32 +593,48 @@ PvP 메타 포켓몬이면 PvP 기준으로, PvE 메타면 PvE 기준으로 IV�
               buffer += decoder.decode();
               if (buffer.trim()) handleLine(buffer);
             } catch (e) {
-              controller.enqueue(encoder.encode(`\n__ERROR__:스트리밍 중 오류 발생`));
+              streamError = e?.message || String(e);
             }
             const tEnd = Date.now();
-            // 타이밍 로그: 요청→Gemini 헤더 / →첫 텍스트 / →완료 (스트리밍 확인용)
-            console.log(`[analyze] timing model=${model} mode=${mode || "analyze"} headersMs=${tHeaders - t0} firstTextMs=${tFirstText ? tFirstText - t0 : -1} totalMs=${tEnd - t0} chars=${fullText.length}`);
-            // 용어집 금지 표현 검사 → 서버 로그 경고 (답변은 그대로 전달)
-            const forbidden = findForbidden(fullText);
-            if (forbidden.length) {
-              console.warn(`[analyze] ${model} 금지 표현 ${forbidden.length}건 (${mode || "analyze"}): ${forbidden.map((f) => `"${f.matched}"→${f.term}`).join(" | ")}`);
+            const u = usage || {};
+            // 타이밍 로그: 요청→Gemini 헤더 / →첫 텍스트 / →완료, finishReason, 출력·thinking 토큰
+            console.log(`[analyze] timing model=${model} mode=${mode || "analyze"} headersMs=${tHeaders - t0} firstTextMs=${tFirstText ? tFirstText - t0 : -1} totalMs=${tEnd - t0} chars=${fullText.length} finishReason=${finishReason || "(none)"}${blockReason ? ` blockReason=${blockReason}` : ""} promptTokens=${u.promptTokenCount ?? "-"} outputTokens=${u.candidatesTokenCount ?? "-"} thinkingTokens=${u.thoughtsTokenCount ?? "-"} totalTokens=${u.totalTokenCount ?? "-"}${streamError ? ` streamError=${streamError}` : ""}`);
+
+            lastAttempt = { model, fullText, finishReason, usage, streamError };
+            const abnormal = streamError || blockReason || (finishReason && finishReason !== "STOP") || fullText.length < MIN_CHARS;
+            if (abnormal && !isLast) {
+              console.warn(`[analyze] fallback: ${model} 비정상 응답 (finishReason=${finishReason || "(none)"}${blockReason ? `, blockReason=${blockReason}` : ""}, chars=${fullText.length} < ${MIN_CHARS}?${fullText.length < MIN_CHARS}${streamError ? `, streamError=${streamError}` : ""}) → 다음 모델로 재시도`);
+              errors.push(`${model}: 비정상 응답 (finishReason=${finishReason || "none"}, chars=${fullText.length})`);
+              continue;
             }
-            if (finishReason && finishReason !== "STOP") {
-              console.warn(`[analyze] ${model} finishReason=${finishReason} usage=${JSON.stringify(usage)}`);
-              if (finishReason === "MAX_TOKENS") controller.enqueue(encoder.encode("\n\n⚠️ 응답이 출력 길이 제한으로 잘렸습니다. 다시 시도해 주세요."));
-            } else if (process.env.POGO_DEBUG_PROMPT) {
-              console.log(`[analyze] ${model} finishReason=${finishReason} usage=${JSON.stringify(usage)}`);
-            }
-            // 성공한 AI 호출 → 사용자별 오늘 사용 횟수 +1 (서버에서만)
-            if (user && fullText.length > 0) {
-              const count = await incrementAiUsage(user.id, usageDate());
-              if (count !== null) controller.enqueue(encoder.encode(`\n__USAGE__:${count}\n`));
-            }
-            controller.close();
-            return;
+            if (abnormal) console.warn(`[analyze] ${model} 비정상 응답이지만 남은 모델이 없어 그대로 전달 (finishReason=${finishReason || "(none)"}, chars=${fullText.length})`);
+            accepted = lastAttempt;
+            break;
           } catch (e) {
             errors.push(`${model}: ${e.message}`);
+            console.warn(`[analyze] fallback: ${model} 예외 (${e.message}) → 다음 모델`);
           }
+        }
+
+        if (accepted) {
+          const { model, fullText, finishReason, usage, streamError } = accepted;
+          if (streamError) controller.enqueue(encoder.encode(`\n__ERROR__:스트리밍 중 오류 발생`));
+          // 용어집 금지 표현 검사 → 서버 로그 경고 (답변은 그대로 전달)
+          const forbidden = findForbidden(fullText);
+          if (forbidden.length) {
+            console.warn(`[analyze] ${model} 금지 표현 ${forbidden.length}건 (${mode || "analyze"}): ${forbidden.map((f) => `"${f.matched}"→${f.term}`).join(" | ")}`);
+          }
+          if (finishReason && finishReason !== "STOP") {
+            console.warn(`[analyze] ${model} finishReason=${finishReason} usage=${JSON.stringify(usage)}`);
+            if (finishReason === "MAX_TOKENS") controller.enqueue(encoder.encode("\n\n⚠️ 응답이 출력 길이 제한으로 잘렸습니다. 다시 시도해 주세요."));
+          }
+          // 최종 채택된 응답 1회만 사용 횟수 +1 (재시도로 버린 응답은 기록하지 않음)
+          if (user && fullText.length > 0) {
+            const count = await incrementAiUsage(user.id, usageDate());
+            if (count !== null) controller.enqueue(encoder.encode(`\n__USAGE__:${count}\n`));
+          }
+          controller.close();
+          return;
         }
 
         console.error("[analyze] 모든 Gemini 모델 실패: " + errors.join(" | "));
