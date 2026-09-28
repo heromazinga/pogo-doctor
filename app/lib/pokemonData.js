@@ -4,7 +4,7 @@
 //   1. pokemon-go-api  (종족값·기술·한국어명·타입)
 //   2. PvPoke gamemaster (종족값·기술·타입)
 //   3. pogoapi.net     (기존 소스, 보조)
-//   참고. PokeMiners game master (게임 원본, 분쟁 시 최종 기준 — 서버에서만 사용)
+//   참고. PokeMiners game master (게임 원본. 불일치가 있을 때만 추가 투표용으로 조회, 서버에서만 사용)
 //
 // 교차검증 규칙
 //   - 값(종족값/타입/기술)은 2개 이상 소스가 일치하면 채택
@@ -29,13 +29,13 @@ export const SOURCE_DEFS = {
     name: "pogoapi",
     url: "https://pogoapi.net/api/v1/pokemon_stats.json",
     movesUrl: "https://pogoapi.net/api/v1/current_pokemon_moves.json",
+    hashesUrl: "https://pogoapi.net/api/v1/api_hashes.json",
     priority: 3,
   },
   pokeminers: {
     name: "pokeminers",
     url: "https://raw.githubusercontent.com/PokeMiners/game_masters/master/latest/latest.json",
-    priority: 4,
-    referee: true, // 분쟁 시 최종 기준
+    priority: 4, // 게임 원본이지만 "latest" 가 항상 최신은 아니어서 특별 취급하지 않음 (동률 시 갱신 시각으로 판단)
   },
 };
 
@@ -314,7 +314,18 @@ async function fetchJson(url, { timeoutMs = 10000, revalidate, fetchImpl = fetch
   else opts.cache = "no-store";
   const res = await fetchImpl(url, opts);
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
-  return res.json();
+  const json = await res.json();
+  // 소스 갱신 시각 판단용 Last-Modified (없으면 null)
+  const lm = typeof res.headers?.get === "function" ? res.headers.get("last-modified") : null;
+  const lastModified = lm && !isNaN(Date.parse(lm)) ? new Date(lm).toISOString() : null;
+  return { json, lastModified };
+}
+
+// 소스 갱신 시각: 값이 동률일 때 "가장 최근 갱신된 소스" 를 고르는 기준
+function toIso(v) {
+  if (!v) return null;
+  const d = typeof v === "number" ? new Date(v < 1e12 ? v * 1000 : v) : new Date(v);
+  return isNaN(d.getTime()) ? null : d.toISOString();
 }
 // 주의: pokemon-go-api pokedex.json 은 약 15MB, PokeMiners latest.json 은 약 20MB 로 Next fetch 캐시(2MB) 대상이 아니다.
 
@@ -324,31 +335,45 @@ function disabledSources() {
 
 async function loadSource(sourceKey, fetchImpl) {
   const def = SOURCE_DEFS[sourceKey];
-  const meta = { name: def.name, url: def.url, fetchedAt: new Date().toISOString(), ok: false, count: 0, sizeBytes: 0 };
+  // updatedAt: 소스 데이터의 갱신 시각, updatedAtFrom: 그 근거 (timestamp 필드 / api_hashes / Last-Modified / 없음)
+  const meta = { name: def.name, url: def.url, fetchedAt: new Date().toISOString(), ok: false, count: 0, updatedAt: null, updatedAtFrom: null };
   if (disabledSources().has(def.name) || disabledSources().has(sourceKey)) {
     meta.error = "POGO_DISABLE_SOURCES 로 비활성화됨";
     return { meta, parsed: null };
   }
+  const setUpdated = (iso, from) => { if (iso && !meta.updatedAt) { meta.updatedAt = iso; meta.updatedAtFrom = from; } };
   try {
     let parsed;
     if (sourceKey === "pokemonGoApi") {
-      parsed = parsePokemonGoApi(await fetchJson(def.url, { fetchImpl, timeoutMs: 12000 }));
+      const r = await fetchJson(def.url, { fetchImpl, timeoutMs: 12000 });
+      parsed = parsePokemonGoApi(r.json);
+      setUpdated(r.lastModified, "Last-Modified");
     } else if (sourceKey === "pvpoke") {
-      parsed = parsePvpoke(await fetchJson(def.url, { fetchImpl, revalidate: 6 * 3600 }));
+      const r = await fetchJson(def.url, { fetchImpl, revalidate: 6 * 3600 });
+      parsed = parsePvpoke(r.json);
+      setUpdated(toIso(r.json?.timestamp), "gamemaster.timestamp");
+      setUpdated(r.lastModified, "Last-Modified");
     } else if (sourceKey === "pogoapi") {
-      const [stats, moves] = await Promise.all([
+      const [stats, moves, hashes] = await Promise.all([
         fetchJson(def.url, { fetchImpl, revalidate: 6 * 3600 }),
         fetchJson(def.movesUrl, { fetchImpl, revalidate: 6 * 3600 }).catch((e) => {
           console.warn(`[pokemonData] pogoapi moves 실패: ${e.message}`);
           return null;
         }),
+        fetchJson(def.hashesUrl, { fetchImpl, revalidate: 6 * 3600 }).catch(() => null),
       ]);
-      parsed = parsePogoapi(stats, moves);
+      parsed = parsePogoapi(stats.json, moves?.json);
+      // api_hashes.json: { "pokemon_stats.json": { last_modified: "2026-..." } }
+      setUpdated(toIso(hashes?.json?.["pokemon_stats.json"]?.last_modified), "api_hashes.last_modified");
+      setUpdated(stats.lastModified, "Last-Modified");
     } else if (sourceKey === "pokeminers") {
-      parsed = parsePokeminers(await fetchJson(def.url, { fetchImpl, timeoutMs: 20000 }));
+      const r = await fetchJson(def.url, { fetchImpl, timeoutMs: 20000 });
+      parsed = parsePokeminers(r.json);
+      setUpdated(r.lastModified, "Last-Modified");
     }
     meta.ok = true;
     meta.count = parsed.records.size;
+    if (!meta.updatedAt) meta.updatedAtFrom = "unknown";
     return { meta, parsed };
   } catch (e) {
     meta.error = e?.message || String(e);
@@ -359,27 +384,28 @@ async function loadSource(sourceKey, fetchImpl) {
 
 // ─── 교차검증 ───
 
-function pickValue(values /* [{src, value}] */, refereeName) {
+// 규칙: 2개 이상 일치하는 값 채택(다수결). 최다 득표가 동률이거나 전부 다르면 가장 최근 갱신된 소스의 값.
+// updatedAtOf(srcName) → epoch ms (알 수 없으면 0)
+function pickValue(values /* [{src, value}] */, updatedAtOf) {
   const valid = values.filter((v) => v.value !== undefined && v.value !== null && v.value !== "");
   if (valid.length === 0) return { value: null, agreed: true };
-  const counts = new Map();
+  const groups = new Map(); // JSON → { value, srcs }
   for (const v of valid) {
     const k = JSON.stringify(v.value);
-    counts.set(k, (counts.get(k) || 0) + 1);
+    if (!groups.has(k)) groups.set(k, { value: v.value, srcs: [] });
+    groups.get(k).srcs.push(v.src);
   }
-  const allSame = counts.size === 1;
-  if (allSame) return { value: valid[0].value, agreed: true };
-  // 2개 이상 일치하는 값
-  let best = null, bestCount = 0;
-  for (const [k, c] of counts) if (c > bestCount) { best = k; bestCount = c; }
-  if (bestCount >= 2) return { value: JSON.parse(best), agreed: false, by: "majority" };
-  // 전부 다르면 PokeMiners 기준
-  const ref = valid.find((v) => v.src === refereeName);
-  if (ref) return { value: ref.value, agreed: false, by: "referee" };
-  return { value: valid[0].value, agreed: false, by: "priority" };
+  if (groups.size === 1) return { value: valid[0].value, agreed: true };
+  const ranked = [...groups.values()]
+    .map((g) => ({ ...g, count: g.srcs.length, newest: Math.max(...g.srcs.map((s) => updatedAtOf(s) || 0)) }))
+    .sort((a, b) => b.count - a.count || b.newest - a.newest);
+  const top = ranked[0];
+  const tie = ranked.length > 1 && ranked[1].count === top.count;
+  if (top.count >= 2 && !tie) return { value: top.value, agreed: false, by: "majority" };
+  return { value: top.value, agreed: false, by: top.newest ? "newest" : "priority" };
 }
 
-function mergeMoves(entries /* [{src, list, elite}] */, refereeName) {
+function mergeMoves(entries /* [{src, list, elite}] */) {
   // entries 는 기술 목록을 제공하는 소스만
   const providers = entries.filter((e) => e.hasMoves);
   if (providers.length === 0) return { regular: [], elite: [], unverified: [], warnings: [] };
@@ -398,10 +424,10 @@ function mergeMoves(entries /* [{src, list, elite}] */, refereeName) {
   const regular = [], elite = [], unverified = [], warnings = [];
   for (const [k, v] of votes) {
     const n = v.srcs.size;
-    // 검증됨: 2개 이상 소스 일치, 소스가 하나뿐, 또는 PokeMiners(게임 원본)에 존재
-    const verified = n >= 2 || providers.length === 1 || v.srcs.has(refereeName);
+    // 검증됨: 2개 이상 소스 일치(또는 기술 목록을 주는 소스가 하나뿐)
+    const verified = n >= 2 || providers.length === 1;
     if (!verified) {
-      // 1개 소스에만 있는 기술은 버리지 않고 "미검증"으로 노출
+      // 1개 소스에만 있는 기술은 버리지 않고 "미검증"으로 노출 (미출시로 판단하지 않는다)
       unverified.push(k);
       warnings.push({ move: k, srcs: [...v.srcs], action: "unverified" });
       continue;
@@ -414,8 +440,13 @@ function mergeMoves(entries /* [{src, list, elite}] */, refereeName) {
 }
 
 function crossValidate(loaded /* {sourceKey: {meta, parsed}} */) {
-  const refereeName = SOURCE_DEFS.pokeminers.name;
   const active = SOURCE_ORDER.filter((k) => loaded[k]?.parsed).map((k) => ({ key: k, name: SOURCE_DEFS[k].name, ...loaded[k].parsed }));
+  const updatedMs = {};
+  for (const k of SOURCE_ORDER) {
+    const iso = loaded[k]?.meta?.updatedAt;
+    updatedMs[SOURCE_DEFS[k].name] = iso ? Date.parse(iso) || 0 : 0;
+  }
+  const updatedAtOf = (srcName) => updatedMs[srcName] || 0;
 
   // 기술 표시명/한국어명 레지스트리 (우선순위: pokemon-go-api → pvpoke → pogoapi → pokeminers)
   const moveRegistry = new Map();
@@ -456,7 +487,7 @@ function crossValidate(loaded /* {sourceKey: {meta, parsed}} */) {
     const first = recs[0].rec;
 
     const stat = (field) => {
-      const r = pickValue(recs.map((x) => ({ src: x.src, value: x.rec[field] })), refereeName);
+      const r = pickValue(recs.map((x) => ({ src: x.src, value: x.rec[field] })), updatedAtOf);
       if (!r.agreed) {
         statDisputes++;
         warnings.push(`[stat] ${key} ${first.name} ${field}: ${recs.map((x) => `${x.src}=${x.rec[field]}`).join(", ")} → ${r.value} (${r.by})`);
@@ -467,15 +498,15 @@ function crossValidate(loaded /* {sourceKey: {meta, parsed}} */) {
 
     // 타입은 순서와 무관하게 비교(정렬 후 투표)하고, 표기 순서는 채택된 집합을 가진 첫 소스를 따른다
     const typeRecs = recs.filter((x) => x.rec.types.length);
-    const typeVote = pickValue(typeRecs.map((x) => ({ src: x.src, value: [...x.rec.types].sort() })), refereeName);
+    const typeVote = pickValue(typeRecs.map((x) => ({ src: x.src, value: [...x.rec.types].sort() })), updatedAtOf);
     const typeWinner = typeVote.value ? typeRecs.find((x) => [...x.rec.types].sort().join("/") === typeVote.value.join("/"))?.rec.types : [];
     if (!typeVote.agreed) {
       typeDisputes++;
       warnings.push(`[type] ${key} ${first.name}: ${recs.map((x) => `${x.src}=${x.rec.types.join("/") || "-"}`).join(", ")} → ${(typeWinner || []).join("/")} (${typeVote.by})`);
     }
 
-    const fastM = mergeMoves(recs.map((x) => ({ src: x.src, list: x.rec.fast, elite: x.rec.eliteFast, hasMoves: x.rec.hasMoves })), refereeName);
-    const chM = mergeMoves(recs.map((x) => ({ src: x.src, list: x.rec.charged, elite: x.rec.eliteCharged, hasMoves: x.rec.hasMoves })), refereeName);
+    const fastM = mergeMoves(recs.map((x) => ({ src: x.src, list: x.rec.fast, elite: x.rec.eliteFast, hasMoves: x.rec.hasMoves })));
+    const chM = mergeMoves(recs.map((x) => ({ src: x.src, list: x.rec.charged, elite: x.rec.eliteCharged, hasMoves: x.rec.hasMoves })));
     for (const w of [...fastM.warnings, ...chM.warnings]) {
       moveDisputes++;
       if (w.action === "unverified") counts.moveUnverified++;
@@ -540,7 +571,7 @@ export async function buildDataset({ fetchImpl = fetch } = {}) {
   let cv = crossValidate(loaded);
   const primaryOk = PRIMARY_SOURCES.filter((k) => loaded[k].parsed).length;
 
-  // 불일치가 있거나 정상 소스가 2개 미만이면 PokeMiners 원본으로 재검증
+  // 불일치가 있거나 정상 소스가 2개 미만이면 PokeMiners 를 추가 투표 소스로 조회
   const needReferee = cv.disputes > 0 || primaryOk < 2;
   if (needReferee) {
     loaded.pokeminers = await loadPokeminersCached(fetchImpl);
@@ -556,7 +587,7 @@ export async function buildDataset({ fetchImpl = fetch } = {}) {
   const extra = [];
   if (!loaded.pokemonGoApi.parsed) extra.push("[source] pokemon-go-api 실패 → 한국어 이름 미제공(영문 표기)");
   if (okCount < 2) extra.push(`[source] 정상 소스 ${okCount}개 → 교차검증 불가, 단일 소스 값 사용`);
-  if (needReferee && !loaded.pokeminers.parsed) extra.push("[source] PokeMiners 조회 실패 → 불일치 항목은 우선순위 소스 값 사용");
+  if (needReferee && !loaded.pokeminers.parsed) extra.push("[source] PokeMiners 조회 실패 → 불일치 항목은 다수결·최신 갱신 소스 기준으로만 판단");
   const allWarnings = [...extra, ...warnings];
 
   if (allWarnings.length) {

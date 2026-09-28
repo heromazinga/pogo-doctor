@@ -80,9 +80,10 @@
 ### 교차검증 규칙 (`app/lib/pokemonData.js`)
 
 - 종족값(공/방/체)·타입·기술 목록을 소스별로 정규화해 비교한다.
-- **2개 이상 소스가 일치하는 값을 채택**한다. 전부 다르면 PokeMiners 원본을 따르고, PokeMiners 도 없으면 우선순위가 높은 소스를 따른다.
-- 기술은 2개 이상 소스에 있거나 PokeMiners(게임 원본)에 있으면 "검증됨"으로 채택한다. 한 소스에만 있는 기술은 제외하지 않고 `unverifiedFast/unverifiedCharged` 로 분리해 화면에 **미검증(❔)** 으로 노출하며, AI 프롬프트에도 "미검증"으로 전달한다.
-- PokeMiners 원본(약 20MB)은 1~3순위 소스 간 불일치가 있을 때(또는 정상 소스가 2개 미만일 때)만 조회하고, 파싱 결과는 24시간(`POKEMINERS_TTL_MS`) 메모리 캐시한다. 실제로는 소스 간 기술 목록 차이가 거의 항상 존재하므로 데이터셋 재생성(6시간)마다 캐시된 결과를 재사용하고, 하루 1회 정도만 새로 받는다.
+- **2개 이상 소스가 일치하는 값을 채택**한다(다수결). 최다 득표가 동률이거나 전부 다르면 **가장 최근 갱신된 소스**의 값을 따른다. PokeMiners 를 "최종 기준"으로 특별 취급하지 않는다(`latest.json` 이 항상 최신이 아님이 확인됨).
+- 소스 갱신 시각(`dataSources[].updatedAt`)은 PvPoke `gamemaster.timestamp`, pogoapi `api_hashes.json` 의 `last_modified`, 그 외 HTTP `Last-Modified` 로 기록하며(`updatedAtFrom` 에 근거 표기), 화면 하단에 소스별로 표시된다. 알 수 없으면 동률 판단에서 가장 후순위.
+- 기술은 2개 이상 소스에 있으면 "검증됨"으로 채택한다. 한 소스에만 있는 기술은 제외하지 않고 `unverifiedFast/unverifiedCharged` 로 분리해 화면에 **미검증(❔)** 으로 노출한다. "미검증"은 교차검증 소스가 1개라는 뜻일 뿐 **미출시로 판단하지 않는다.** AI 프롬프트 규칙: 미검증 기술은 배제하지 않되 "(미검증)"으로 명시하고, 주력 추천은 검증 기술 우선.
+- PokeMiners 원본(약 20MB)은 1~3순위 소스 간 불일치가 있을 때(또는 정상 소스가 2개 미만일 때)만 추가 투표용으로 조회하고, 파싱 결과는 24시간(`POKEMINERS_TTL_MS`) 메모리 캐시한다.
 - 불일치 유형은 `dataWarningCounts` 로 집계된다: `stat`(종족값 실제 차이), `type`(타입 차이), `moveMajority`(일부 소스에 없지만 2개 이상 일치로 채택), `moveUnverified`(1개 소스만 보유).
 - 불일치는 서버 로그(`[pokemonData] ...`)와 응답의 `dataWarnings`(최대 100건) / `dataWarningCount` 에 남긴다.
 - 응답의 `dataSources: [{ name, url, fetchedAt, ok, count, error? }]` 로 소스별 상태를 확인할 수 있고, 화면 하단에 "데이터 기준 시각"으로 표시된다.

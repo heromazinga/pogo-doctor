@@ -709,7 +709,7 @@ export default function Home() {
                         </optgroup>
                       )}
                       {selectedPokemon.unverifiedFast?.length > 0 && (
-                        <optgroup label="── 미검증 (1개 소스만 보고) ──">
+                        <optgroup label="── 미검증 (교차검증 소스 1개) ──">
                           {selectedPokemon.unverifiedFast.map((m) => <option key={m} value={m}>❔ {krMove(m)} ({m})</option>)}
                         </optgroup>
                       )}
@@ -728,7 +728,7 @@ export default function Home() {
                         </optgroup>
                       )}
                       {selectedPokemon.unverifiedCharged?.length > 0 && (
-                        <optgroup label="── 미검증 (1개 소스만 보고) ──">
+                        <optgroup label="── 미검증 (교차검증 소스 1개) ──">
                           {selectedPokemon.unverifiedCharged.map((m) => <option key={m} value={m}>❔ {krMove(m)} ({m})</option>)}
                         </optgroup>
                       )}
@@ -1063,7 +1063,7 @@ export default function Home() {
             <p style={{ fontSize: 10, opacity: 0.7, marginTop: 4, lineHeight: 1.6 }}>
               데이터 기준 시각: {fmtStamp(dataMeta.generatedAt)}{dataMeta.stale ? " (이전 캐시)" : ""}
               <br />
-              {dataMeta.dataSources.map((src) => `${src.name} ${src.ok ? "✓" : src.skipped ? "생략" : "✗"}`).join(" · ")}
+              {dataMeta.dataSources.map((src) => `${src.name} ${src.ok ? "✓" : src.skipped ? "생략" : "✗"}${src.ok && src.updatedAt ? ` (갱신 ${fmtStamp(src.updatedAt)})` : src.ok ? " (갱신 시각 미상)" : ""}`).join(" · ")}
               {dataMeta.dataWarningCount > 0 ? ` · 소스 불일치 ${dataMeta.dataWarningCount}건 (종족값 ${dataMeta.dataWarningCounts?.stat ?? 0} · 타입 ${dataMeta.dataWarningCounts?.type ?? 0} · 기술 다수결 ${dataMeta.dataWarningCounts?.moveMajority ?? 0} · 기술 미검증 ${dataMeta.dataWarningCounts?.moveUnverified ?? 0})` : ""}
             </p>
           )}

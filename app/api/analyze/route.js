@@ -146,6 +146,7 @@ function freshnessBlock(dataset) {
 - 오늘 날짜: ${todayKST()} 기준 한국 시간. 당신의 학습 지식은 이 날짜보다 오래되었을 수 있습니다.
 - 사용자 메시지에 포함된 **"교차검증 데이터"**(종족값, 타입, 기술 목록, 상성, CP)가 당신의 학습 지식과 다르면 **반드시 제공된 데이터를 따르세요.** 학습 지식으로 덮어쓰지 마세요.
 - 제공된 데이터에 없는 내용(현재 메타 순위, 진행 중 이벤트, 최근 밸런스 변경, 신규 기술 등)은 단정하지 말고 **"데이터 없음"**이라고 명시한 뒤 일반 원칙만 설명하세요. 추측 금지.
+- "미검증 기술"은 교차검증 소스가 1개뿐이라는 뜻이며 **미출시라는 뜻이 아닙니다.** 추천에서 배제하지 말고, 언급할 때 반드시 "(미검증)"이라고 표시하세요. 주력 추천은 검증된 기술을 우선하세요.
 - 데이터 기준 시각: ${stamp} / 정상 소스: ${okSources}`;
 }
 
@@ -171,7 +172,7 @@ function verifiedBlock(label, p) {
     `- 차징기술: ${(p.charged || []).join(", ") || "데이터 없음"}${p.eliteCharged?.length ? ` / 한정: ${p.eliteCharged.join(", ")}` : ""}`,
   ];
   const unv = [...(p.unverifiedFast || []), ...(p.unverifiedCharged || [])];
-  if (unv.length) lines.push(`- 미검증 기술(1개 소스만 보고, 게임 반영 미확인 — 추천 시 "미검증"이라고 명시): ${unv.join(", ")}`);
+  if (unv.length) lines.push(`- 미검증 기술(교차검증 소스 1개 — 미출시라는 뜻이 아님): ${unv.join(", ")}`);
   if (t) {
     lines.push(`- 약점(받는 피해 증가, 서버 계산): ${t.weaknesses.join(", ") || "없음"}`);
     lines.push(`- 저항(받는 피해 감소, 서버 계산): ${t.resistances.join(", ") || "없음"}`);
