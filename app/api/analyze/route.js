@@ -511,8 +511,9 @@ PvP 메타 포켓몬이면 PvP 기준으로, PvE 메타면 PvE 기준으로 IV�
         // 이미 전달한 텍스트는 __RESET__ 마커로 클라이언트가 지우고 새 모델의 출력으로 대체한다.
         const MIN_CHARS = Number(process.env.GEMINI_MIN_CHARS) || 400;
         const models = getModels();
-        let accepted = null; // { model, fullText, finishReason, usage }
+        let accepted = null; // { model, fullText, finishReason, usage, abnormal }
         let lastAttempt = null;
+        let primaryRejectReason = null; // 1순위 모델이 거절/비정상이었던 사유 (폴백 안내용)
 
         for (let mi = 0; mi < models.length; mi++) {
           const model = models[mi];
@@ -530,6 +531,7 @@ PvP 메타 포켓몬이면 PvP 기준으로, PvE 메타면 PvE 기준으로 IV�
               } else {
                 errors.push(`${model}: ${msg || res.statusText} (HTTP ${res.status})`);
                 console.warn(`[analyze] fallback: ${model} 거절 HTTP ${res.status} (${msg || res.statusText}) → 다음 모델`);
+                if (mi === 0) primaryRejectReason = `http${res.status}`;
                 continue;
               }
             }
@@ -538,10 +540,16 @@ PvP 메타 포켓몬이면 PvP 기준으로, PvE 메타면 PvE 기준으로 IV�
               const errData = await res.json().catch(() => ({}));
               const msg = errData?.error?.message || res.statusText;
               const retryAfter = res.headers.get("retry-after");
+              // 429 상세: quotaId(일일/분당 구분), quotaValue 등이 error.details[].violations[] 에 담겨 온다
+              const quotaInfo = (errData?.error?.details || [])
+                .flatMap((d) => d?.violations || [])
+                .map((v) => `${v.quotaId || v.subject || "?"}${v.quotaValue ? `=${v.quotaValue}` : ""}`)
+                .join(",");
               errors.push(`${model}: ${msg} (HTTP ${res.status})`);
               if (res.status === 429) rateLimited = true;
+              if (mi === 0) primaryRejectReason = res.status === 429 ? "quota" : `http${res.status}`;
               // 폴백 사유 로그 (429 한도 초과, 404 모델 없음, 503 과부하 등)
-              console.warn(`[analyze] fallback: ${model} 거절 HTTP ${res.status}${retryAfter ? ` retry-after=${retryAfter}` : ""} (${msg}) → ${isLast ? "남은 모델 없음" : "다음 모델"}`);
+              console.warn(`[analyze] fallback: ${model} 거절 HTTP ${res.status}${retryAfter ? ` retry-after=${retryAfter}` : ""}${quotaInfo ? ` quota=${quotaInfo}` : ""} (${msg}) → ${isLast ? "남은 모델 없음" : "다음 모델"}`);
               continue;
             }
 
@@ -605,20 +613,26 @@ PvP 메타 포켓몬이면 PvP 기준으로, PvE 메타면 PvE 기준으로 IV�
             if (abnormal && !isLast) {
               console.warn(`[analyze] fallback: ${model} 비정상 응답 (finishReason=${finishReason || "(none)"}${blockReason ? `, blockReason=${blockReason}` : ""}, chars=${fullText.length} < ${MIN_CHARS}?${fullText.length < MIN_CHARS}${streamError ? `, streamError=${streamError}` : ""}) → 다음 모델로 재시도`);
               errors.push(`${model}: 비정상 응답 (finishReason=${finishReason || "none"}, chars=${fullText.length})`);
+              if (mi === 0) primaryRejectReason = "abnormal";
               continue;
             }
             if (abnormal) console.warn(`[analyze] ${model} 비정상 응답이지만 남은 모델이 없어 그대로 전달 (finishReason=${finishReason || "(none)"}, chars=${fullText.length})`);
-            accepted = lastAttempt;
+            accepted = { ...lastAttempt, abnormal: Boolean(abnormal), index: mi };
             break;
           } catch (e) {
             errors.push(`${model}: ${e.message}`);
             console.warn(`[analyze] fallback: ${model} 예외 (${e.message}) → 다음 모델`);
+            if (mi === 0) primaryRejectReason = "error";
           }
         }
 
         if (accepted) {
-          const { model, fullText, finishReason, usage, streamError } = accepted;
+          const { model, fullText, finishReason, usage, streamError, abnormal, index } = accepted;
           if (streamError) controller.enqueue(encoder.encode(`\n__ERROR__:스트리밍 중 오류 발생`));
+          // 모든 모델이 비정상이어서 마지막 응답을 그대로 보낸 경우 안내
+          if (abnormal) controller.enqueue(encoder.encode("\n\n⚠️ 응답이 불완전할 수 있습니다. 다시 시도해 주세요."));
+          // 1순위 모델이 아닌 모델이 답한 경우 폴백 안내 (사유: quota=무료 한도 소진, 그 외=오류/비정상)
+          if (index > 0) controller.enqueue(encoder.encode(`\n__FALLBACK__:${primaryRejectReason || "unknown"}|${models[0]}|${model}\n`));
           // 용어집 금지 표현 검사 → 서버 로그 경고 (답변은 그대로 전달)
           const forbidden = findForbidden(fullText);
           if (forbidden.length) {

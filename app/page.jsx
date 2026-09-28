@@ -56,6 +56,8 @@ export default function Home() {
   const [editing, setEditing] = useState(null); // { id, status, purposes, memo }
   const [thinking, setThinking] = useState(false); // 첫 텍스트 도착 전(모델 thinking 구간)
   const [pendingReanalyze, setPendingReanalyze] = useState(false);
+  const [ivMissing, setIvMissing] = useState(false); // 이전된 항목 등 개체값이 없는 경우: 입력 전 분석 금지
+  const [fallbackNotice, setFallbackNotice] = useState(null); // 폴백 모델로 답한 경우 안내
 
   // ─── 데이터 기준 시각 / 소스 상태 (서버 교차검증 메타) ───
   const [dataMeta, setDataMeta] = useState(null);
@@ -111,6 +113,10 @@ export default function Home() {
   const [compareResult, setCompareResult] = useState(null);
   const [compareModel, setCompareModel] = useState("");
 
+  // 개체값을 하나라도 입력하면 "미입력" 상태 해제
+  const setAtkIvU = (v) => { setIvMissing(false); setAtkIv(v); };
+  const setDefIvU = (v) => { setIvMissing(false); setDefIv(v); };
+  const setStaIvU = (v) => { setIvMissing(false); setStaIv(v); };
   const ivPercent = Math.round(((atkIv + defIv + staIv) / 45) * 100);
   const getIvColor = () => ivPercent >= 93 ? "#4ecdc4" : ivPercent >= 82 ? "#ffd93d" : "#ff6b6b";
   const getIvLabel = () => ivPercent >= 98 ? "거의 완벽!" : ivPercent >= 93 ? "매우 우수" : ivPercent >= 82 ? "괜찮음" : ivPercent >= 67 ? "보통" : "별로";
@@ -332,7 +338,7 @@ export default function Home() {
       let accumulated = "";
       // 제어 마커(__MODEL__/__ERROR__/__RESET__/__USAGE__)는 항상 한 줄로 온다. 마커가 없는 조각은 그대로 본문.
       const processChunk = (chunk) => {
-        if (!/__(MODEL|ERROR|RESET|USAGE)__/.test(chunk)) {
+        if (!/__(MODEL|ERROR|RESET|USAGE|FALLBACK)__/.test(chunk)) {
           accumulated += chunk; if (accumulated.trim()) onChunk(accumulated); return;
         }
         const lines = chunk.split("\n");
@@ -346,6 +352,12 @@ export default function Home() {
             flushText(); accumulated = ""; setThinking(true); onChunk("🔄 응답이 비정상이라 다른 모델로 다시 생성 중…\n");
           }
           else if (line.startsWith("__USAGE__:")) { flushText(); const n = Number(line.replace("__USAGE__:", "")); if (Number.isFinite(n)) setUsageCount(n); }
+          else if (line.startsWith("__FALLBACK__:")) {
+            flushText();
+            const [reason, primary, used] = line.replace("__FALLBACK__:", "").split("|");
+            const short = (m) => (m || "").replace("gemini-", "").replace("-preview", "");
+            setFallbackNotice(reason === "quota" ? `오늘 고급 모델(${short(primary)}) 한도 소진 → 기본 모델(${short(used)})로 분석 중` : `고급 모델(${short(primary)}) 응답 실패(${reason}) → 기본 모델(${short(used)})로 분석 중`);
+          }
           else textBuf.push(line);
         }
         flushText();
@@ -417,7 +429,8 @@ export default function Home() {
 
   const analyze = useCallback(async () => {
     if (!pokemonName.trim()) { setError("포켓몬 이름을 입력해주세요!"); return; }
-    setLoading(true); setStreaming(true); setError(null); setResult(null); setCurrentKept(false); setUsedModel("");
+    if (ivMissing) { setError("개체값 미입력 — 공격/방어/HP 를 입력한 뒤 분석하세요"); return; }
+    setLoading(true); setStreaming(true); setError(null); setResult(null); setCurrentKept(false); setUsedModel(""); setFallbackNotice(null);
 
     const pokemonData = selectedPokemon
       ? { name: selectedPokemon.name, nameKr: selectedPokemon.nameKr, id: selectedPokemon.id, form: selectedPokemon.form, types: selectedPokemon.types, baseAttack: selectedPokemon.baseAttack, baseDefense: selectedPokemon.baseDefense, baseStamina: selectedPokemon.baseStamina, fast: selectedPokemon.fast, charged: selectedPokemon.charged, eliteFast: selectedPokemon.eliteFast, eliteCharged: selectedPokemon.eliteCharged, signatureFast: selectedPokemon.signatureFast, signatureCharged: selectedPokemon.signatureCharged, unverifiedEliteFast: selectedPokemon.unverifiedEliteFast, unverifiedEliteCharged: selectedPokemon.unverifiedEliteCharged, unverifiedFast: selectedPokemon.unverifiedFast, unverifiedCharged: selectedPokemon.unverifiedCharged }
@@ -434,7 +447,7 @@ export default function Home() {
       () => { setLoading(false); setStreaming(false); },
       (err) => { setError(err); setLoading(false); setStreaming(false); }
     );
-  }, [pokemonName, cp, atkIv, defIv, staIv, ivPercent, fastMove, chargedMove, isShiny, isShadow, selectedPokemon, moveNamesKr, collection]);
+  }, [pokemonName, cp, atkIv, defIv, staIv, ivPercent, fastMove, chargedMove, isShiny, isShadow, selectedPokemon, moveNamesKr, collection, ivMissing]);
 
   useEffect(() => {
     if (pendingReanalyze && selectedPokemon) { setPendingReanalyze(false); analyze(); }
@@ -443,6 +456,7 @@ export default function Home() {
   const reset = () => {
     if (abortRef.current) abortRef.current.abort();
     setPokemonName(""); setCp(""); setAtkIv(15); setDefIv(15); setStaIv(15);
+    setIvMissing(false); setFallbackNotice(null);
     setFastMove(""); setChargedMove(""); setIsShiny(false); setIsShadow(false);
     setResult(null); setSelectedPokemon(null); setError(null); setCurrentKept(false); setUsedModel("");
     setStreaming(false); setLoading(false); setShowCompare(false); setCompareResult(null); setCompareTarget(null);
@@ -453,6 +467,7 @@ export default function Home() {
     setCp(""); setAtkIv(15); setDefIv(15); setStaIv(15);
     setFastMove(""); setChargedMove(""); setIsShiny(false); setIsShadow(false);
     setResult(null); setError(null); setCurrentKept(false); setUsedModel("");
+    setIvMissing(false);
     setStreaming(false); setLoading(false); setShowCompare(false); setCompareResult(null); setCompareTarget(null);
   };
 
@@ -529,6 +544,18 @@ export default function Home() {
     setSaveOpts({ open: false, status: "keep", purposes: [], memo: "" });
   };
 
+  // 내 목록 JSON 백업 다운로드 (서버 목록 기준, 가져오기는 범위 밖)
+  const exportCollection = () => {
+    const data = JSON.stringify({ exportedAt: new Date().toISOString(), count: collection.length, items: collection }, null, 2);
+    const blob = new Blob([data], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `포고박사_내포켓몬목록_${new Date().toISOString().slice(0, 10)}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
   const togglePurpose = (list, p) => (list.includes(p) ? list.filter((x) => x !== p) : [...list, p]);
 
   const removeFromCollection = async (entryId) => {
@@ -552,12 +579,15 @@ export default function Home() {
     if (abortRef.current) abortRef.current.abort();
     selectPokemon(match);
     setCp(item.cp ? String(item.cp) : "");
-    setAtkIv(Number.isInteger(item.atkIv) ? item.atkIv : 15); setDefIv(Number.isInteger(item.defIv) ? item.defIv : 15); setStaIv(Number.isInteger(item.staIv) ? item.staIv : 15);
+    const hasIv = [item.atkIv, item.defIv, item.staIv].every((v) => Number.isInteger(v));
+    if (hasIv) { setAtkIv(item.atkIv); setDefIv(item.defIv); setStaIv(item.staIv); setIvMissing(false); }
+    else { setAtkIv(15); setDefIv(15); setStaIv(15); setIvMissing(true); } // 이전된 항목: 개체값 없음 → 입력 후 분석
     setFastMove(item.fastMove || ""); setChargedMove(item.chargedMove || "");
     setIsShiny(item.isShiny); setIsShadow(item.isShadow);
     setResult(null); setError(null); setCurrentKept(false); setUsedModel("");
     setShowCollection(false); setEditing(null); setActiveTab("analyze");
-    setPendingReanalyze(true);
+    if (hasIv) setPendingReanalyze(true);
+    else setError("개체값 미입력 — 공격/방어/HP 를 입력한 뒤 분석하세요");
   };
 
   const renderBold = (text) => {
@@ -649,7 +679,7 @@ export default function Home() {
           </div>
         </div>
         <div style={s.statusBar}>
-          <span>{usageCount === null ? (session ? "오늘 AI 사용 —회" : "AI 사용 횟수 기록 안 됨") : `오늘 AI 사용 ${usageCount}회`}</span>
+          <span>{usageCount === null ? (session ? "오늘 AI 사용 —회" : "AI 사용 횟수 기록 안 됨") : `오늘 AI 사용 ${usageCount}회`}{fallbackNotice ? <span style={{ color: "#ffd93d", marginLeft: 8 }}>· {fallbackNotice}</span> : null}</span>
           <span style={{ opacity: 0.7 }}>{sessionNotice || (session ? "이 기기에 저장됨 · 브라우저 데이터를 지우면 목록이 사라질 수 있음" : "")}</span>
         </div>
 
@@ -700,7 +730,7 @@ export default function Home() {
             <div style={s.group}>
               <label style={s.label}>개체값 (IV) <span style={{ ...s.ivBadge, background: getIvColor() }}>{ivPercent}% — {getIvLabel()}</span></label>
               <div style={s.ivBox}>
-                {[{ label: "공격", value: atkIv, set: setAtkIv }, { label: "방어", value: defIv, set: setDefIv }, { label: "HP", value: staIv, set: setStaIv }].map(({ label, value, set }) => (
+                {[{ label: "공격", value: atkIv, set: setAtkIvU }, { label: "방어", value: defIv, set: setDefIvU }, { label: "HP", value: staIv, set: setStaIvU }].map(({ label, value, set }) => (
                   <div key={label} style={s.ivItem}>
                     <div style={s.ivLabelRow}>
                       <span style={s.ivStatLabel}>{label}</span>
@@ -728,7 +758,8 @@ export default function Home() {
                   </div>
                 ))}
               </div>
-              {getPvpTag() && (
+              {ivMissing && <div style={{ ...s.sourceNotice, marginTop: 10, marginBottom: 0 }}>⚠️ 개체값 미입력 — 이전된 항목에는 개체값이 없습니다. 공격/방어/HP 를 입력한 뒤 분석하세요.</div>}
+              {getPvpTag() && !ivMissing && (
                 <div style={s.pvpTag}>
                   <span style={{ color: getPvpTag().color }}>{getPvpTag().text}</span>
                   <span style={s.pvpHint}>PvP는 공격↓ 방어·HP↑가 유리 (CP 제한 리그)</span>
@@ -1168,7 +1199,12 @@ export default function Home() {
           <div style={s.collPanel}>
             <div style={s.collHeader}>
               <h2 style={{ fontSize: 18, fontWeight: 800, color: "#e0e0e0" }}>📋 내 포켓몬 목록 ({collection.length})</h2>
-              <button style={s.collClose} onClick={() => { setShowCollection(false); setEditing(null); setCollStatusFilter("all"); setCollPurposeFilter("all"); }}>✕</button>
+              <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                {collection.length > 0 && (
+                  <button onClick={exportCollection} style={{ background: "none", border: "1px solid #2a3a5c", borderRadius: 8, color: "#8899aa", fontSize: 11, padding: "4px 8px", cursor: "pointer", fontFamily: "'Outfit',sans-serif" }}>📤 내보내기</button>
+                )}
+                <button style={s.collClose} onClick={() => { setShowCollection(false); setEditing(null); setCollStatusFilter("all"); setCollPurposeFilter("all"); }}>✕</button>
+              </div>
             </div>
             {sessionNotice && <div style={s.sourceNotice}>{sessionNotice}</div>}
             {collError && <div style={s.error}>{collError}</div>}
@@ -1211,7 +1247,7 @@ export default function Home() {
                           <span style={{ fontSize: 11, opacity: 0.4, marginLeft: 4 }}>#{item.pokemonId}</span>
                         </div>
                         <div style={{ fontSize: 11, color: "#8899aa", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                          CP{item.cp || "?"} {item.ivPercent !== null ? `IV${item.ivPercent}% (${item.atkIv}/${item.defIv}/${item.staIv})` : "IV 미상"} | {item.fastMove ? krMove(item.fastMove) : "-"}/{item.chargedMove ? krMove(item.chargedMove) : "-"}
+                          CP{item.cp || "?"} {item.ivPercent !== null ? `IV${item.ivPercent}% (${item.atkIv}/${item.defIv}/${item.staIv})` : "개체값 미입력"} | {item.fastMove ? krMove(item.fastMove) : "-"}/{item.chargedMove ? krMove(item.chargedMove) : "-"}
                         </div>
                         <div style={{ display: "flex", gap: 4, flexWrap: "wrap", marginTop: 3 }}>
                           <span style={{ ...s.tagBadge, color: item.status === "transfer" ? "#ff6b6b" : "#4ecdc4" }}>{STATUS_LABELS[item.status] || item.status}</span>
@@ -1279,7 +1315,7 @@ export default function Home() {
                       <img src={`https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/${item.pokemonId}.png`} alt="" style={{ width: 48, height: 48, imageRendering: "pixelated" }} />
                       <div style={{ flex: 1 }}>
                         <div style={{ fontWeight: 700, color: "#e0e0e0" }}>{item.isShiny ? "✨" : ""}{item.isShadow ? "👤" : ""}{item.name}</div>
-                        <div style={{ fontSize: 12, color: "#8899aa" }}>CP{item.cp || "?"} | {item.ivPercent !== null ? `IV${item.ivPercent}%` : "IV 미상"} | {item.fastMove ? krMove(item.fastMove) : "-"}/{item.chargedMove ? krMove(item.chargedMove) : "-"}</div>
+                        <div style={{ fontSize: 12, color: "#8899aa" }}>CP{item.cp || "?"} | {item.ivPercent !== null ? `IV${item.ivPercent}%` : "개체값 미입력"} | {item.fastMove ? krMove(item.fastMove) : "-"}/{item.chargedMove ? krMove(item.chargedMove) : "-"}</div>
                       </div>
                       <span style={{ fontSize: 11, fontWeight: 700, color: "#ffd93d" }}>{STATUS_LABELS[item.status] || ""}</span>
                     </div>
@@ -1298,7 +1334,7 @@ export default function Home() {
                   <div style={{ ...s.compareMini, borderColor: "rgba(255,217,61,0.3)" }}>
                     <div style={{ fontSize: 10, color: "#ffd93d", fontWeight: 600 }}>B (보유)</div>
                     <div style={{ fontWeight: 700, fontSize: 13, color: "#e0e0e0" }}>{compareTarget?.name}</div>
-                    <div style={{ fontSize: 11, color: "#8899aa" }}>CP{compareTarget?.cp || "?"} {compareTarget?.ivPercent !== null && compareTarget?.ivPercent !== undefined ? `IV${compareTarget.ivPercent}%` : "IV 미상"}</div>
+                    <div style={{ fontSize: 11, color: "#8899aa" }}>CP{compareTarget?.cp || "?"} {compareTarget?.ivPercent !== null && compareTarget?.ivPercent !== undefined ? `IV${compareTarget.ivPercent}%` : "개체값 미입력"}</div>
                   </div>
                 </div>
                 <div style={{ ...s.collAnalysis, lineHeight: 1.7, fontSize: 14 }}>
