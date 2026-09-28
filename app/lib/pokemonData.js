@@ -12,7 +12,55 @@
 //   - 불일치는 dataWarnings 로 남기고 서버 로그에 기록
 //   - 소스 하나가 실패해도 나머지로 동작
 
+import { MOVE_NAMES_KR_MANUAL } from "./moveNamesKrManual.js";
+
 const SIX_HOURS = 6 * 60 * 60 * 1000;
+
+// 기술 한국어명 보조 소스 (투표에는 참여하지 않음): PokeAPI CSV (moves.csv + move_names.csv, language_id 3 = 한국어)
+const POKEAPI_CSV = {
+  name: "pokeapi-csv",
+  movesUrl: "https://raw.githubusercontent.com/PokeAPI/pokeapi/master/data/v2/csv/moves.csv",
+  namesUrl: "https://raw.githubusercontent.com/PokeAPI/pokeapi/master/data/v2/csv/move_names.csv",
+};
+
+async function fetchText(url, fetchImpl, timeoutMs = 8000) {
+  const res = await fetchImpl(url, { signal: AbortSignal.timeout(timeoutMs), next: { revalidate: 24 * 3600 }, headers: { "User-Agent": "PoGoDoctor/1.0 (+vercel)" } });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  return res.text();
+}
+
+// "Weather Ball (Rock)" → "weather-ball", "Mud-Slap" → "mud-slap", "X-Scissor" → "x-scissor"
+function pokeapiSlug(en) {
+  return String(en || "").toLowerCase().replace(/\(.*?\)/g, "").replace(/'/g, "").trim().replace(/[^a-z0-9-]+/g, "-").replace(/-+/g, "-").replace(/^-|-$/g, "");
+}
+
+async function loadPokeapiKoreanNames(fetchImpl) {
+  const meta = { name: POKEAPI_CSV.name, url: POKEAPI_CSV.namesUrl, fetchedAt: new Date().toISOString(), ok: false, count: 0, role: "names" };
+  if (disabledSources().has(POKEAPI_CSV.name)) { meta.error = "POGO_DISABLE_SOURCES 로 비활성화됨"; return { meta, slugKr: new Map() }; }
+  try {
+    const [movesCsv, namesCsv] = await Promise.all([fetchText(POKEAPI_CSV.movesUrl, fetchImpl), fetchText(POKEAPI_CSV.namesUrl, fetchImpl)]);
+    const slugById = new Map();
+    for (const line of movesCsv.split("\n").slice(1)) {
+      const [id, slug] = line.split(",");
+      if (id && slug) slugById.set(Number(id), slug.trim());
+    }
+    const slugKr = new Map();
+    for (const line of namesCsv.split("\n").slice(1)) {
+      const parts = line.split(",");
+      if (parts[1] !== "3") continue; // 3 = 한국어
+      const slug = slugById.get(Number(parts[0]));
+      const kr = parts.slice(2).join(",").trim();
+      if (slug && kr) slugKr.set(slug, kr);
+    }
+    meta.ok = true;
+    meta.count = slugKr.size;
+    return { meta, slugKr };
+  } catch (e) {
+    meta.error = e?.message || String(e);
+    console.warn(`[pokemonData] pokeapi-csv 실패: ${meta.error}`);
+    return { meta, slugKr: new Map() };
+  }
+}
 
 export const SOURCE_DEFS = {
   pokemonGoApi: {
@@ -651,10 +699,14 @@ function crossValidate(loaded /* {sourceKey: {meta, parsed}} */) {
   pokemon.sort((a, b) => a.id - b.id || (a.form === "Normal" ? -1 : b.form === "Normal" ? 1 : a.form.localeCompare(b.form)));
 
   const moveNamesKr = {};
-  for (const [, v] of moveRegistry) if (v.nameKr) moveNamesKr[v.name] = v.nameKr;
+  const moveNamesAll = []; // 한국어명 보완 대상 파악용 (영문 표시명 전체)
+  for (const [, v] of moveRegistry) {
+    moveNamesAll.push(v.name);
+    if (v.nameKr) moveNamesKr[v.name] = v.nameKr;
+  }
 
   return {
-    pokemon, moveNamesKr, warnings, counts,
+    pokemon, moveNamesKr, moveNamesAll, warnings, counts,
     disputes: statDisputes + typeDisputes + moveDisputes,
     votableCount: fallbackToStale ? 0 : active.length,
     excludedStale: excluded,
@@ -703,8 +755,39 @@ export async function buildDataset({ fetchImpl = fetch } = {}) {
     loaded.pokeminers = { meta: { name: SOURCE_DEFS.pokeminers.name, url: SOURCE_DEFS.pokeminers.url, fetchedAt: null, ok: null, skipped: true, count: 0, reason: "1~3순위 소스 불일치 없음 → 조회 생략" }, parsed: null };
   }
 
-  const { pokemon, moveNamesKr, warnings, counts, votableCount, excludedStale, fallbackToStale } = cv;
+  const { pokemon, moveNamesKr, moveNamesAll, warnings, counts, votableCount, excludedStale, fallbackToStale } = cv;
   const dataSources = SOURCE_ORDER.map((k) => loaded[k].meta);
+
+  // 기술 한국어명 보완: pokemon-go-api → PokeAPI CSV → 수동 매핑. 그래도 없으면 목록에 남긴다.
+  const missingBefore = moveNamesAll.filter((en) => !moveNamesKr[en]);
+  const pokeapi = missingBefore.length ? await loadPokeapiKoreanNames(fetchImpl) : { meta: { name: POKEAPI_CSV.name, ok: null, skipped: true, role: "names", count: 0, reason: "누락 없음 → 조회 생략" }, slugKr: new Map() };
+  // GO 전용 변형("Aura Wheel Dark", "Hydro Pump Blastoise", "Weather Ball (Rock)")은 기본 기술명으로 찾고 접미사를 붙인다
+  const TYPE_KR = { normal: "노말", fire: "불꽃", water: "물", electric: "전기", grass: "풀", ice: "얼음", fighting: "격투", poison: "독", ground: "땅", flying: "비행", psychic: "에스퍼", bug: "벌레", rock: "바위", ghost: "고스트", dragon: "드래곤", dark: "악", steel: "강철", fairy: "페어리" };
+  const lookupKr = (en) => {
+    const direct = pokeapi.slugKr.get(pokeapiSlug(en)) || pokeapi.slugKr.get(pokeapiSlug(en).replace(/^vise-/, "vice-"));
+    if (direct) return direct;
+    const paren = en.match(/^(.*?)\s*\((.+)\)\s*$/);
+    const words = paren ? [paren[1], paren[2]] : null;
+    // "Aura Wheel Dark" → base "Aura Wheel" + suffix "Dark" / "Water Gun Fast Blastoise" → base "Water Gun" + suffix "Blastoise"
+    const parts = en.replace(/\bFast\b/g, "").trim().split(/\s+/);
+    for (let cut = parts.length - 1; cut >= 1; cut--) {
+      const base = words ? words[0] : parts.slice(0, cut).join(" ");
+      const suffix = words ? words[1] : parts.slice(cut).join(" ");
+      const kr = pokeapi.slugKr.get(pokeapiSlug(base));
+      if (kr) return `${kr}(${TYPE_KR[suffix.toLowerCase()] || suffix})`;
+      if (words) break;
+    }
+    return null;
+  };
+  let filledByPokeapi = 0, filledByManual = 0;
+  for (const en of missingBefore) {
+    if (MOVE_NAMES_KR_MANUAL[en]) { moveNamesKr[en] = MOVE_NAMES_KR_MANUAL[en]; filledByManual++; continue; }
+    const kr = lookupKr(en);
+    if (kr) { moveNamesKr[en] = kr; filledByPokeapi++; }
+  }
+  const moveNamesKrMissing = moveNamesAll.filter((en) => !moveNamesKr[en]).sort();
+  const nameSources = [pokeapi.meta, { name: "manual", ok: true, role: "names", count: Object.keys(MOVE_NAMES_KR_MANUAL).length }];
+  if (missingBefore.length) console.warn(`[pokemonData] 기술 한국어명 누락 ${missingBefore.length}건 → PokeAPI ${filledByPokeapi}건, 수동 매핑 ${filledByManual}건 보완, 잔여 ${moveNamesKrMissing.length}건${moveNamesKrMissing.length ? ": " + moveNamesKrMissing.join(", ") : ""}`);
   const okCount = dataSources.filter((s) => s.ok).length;
 
   const extra = [];
@@ -726,6 +809,8 @@ export async function buildDataset({ fetchImpl = fetch } = {}) {
     buildMs: Date.now() - startedAt,
     pokemon,
     moveNamesKr,
+    moveNamesKrMissing,
+    nameSources,
     dataSources,
     dataWarnings: allWarnings.slice(0, 100),
     dataWarningCount: allWarnings.length,

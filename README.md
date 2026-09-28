@@ -75,6 +75,7 @@
 | 참고 | [PokeMiners game_masters](https://raw.githubusercontent.com/PokeMiners/game_masters/master/latest/latest.json) | 게임 원본(약 20MB). 불일치가 있을 때만 조회, 분쟁 시 최종 기준. 서버에서만 사용 | 메모리 24h |
 | 유지 | [ScrapedDuck](https://github.com/bigfoott/ScrapedDuck) raids/events | 레이드 보스·이벤트 | 메모리 6h / 3h |
 | 유지 | [snacknap.com/max-battles](https://www.snacknap.com/max-battles) | 맥스배틀 | 메모리 30m |
+| 보조 | [PokeAPI CSV](https://raw.githubusercontent.com/PokeAPI/pokeapi/master/data/v2/csv/move_names.csv) | 기술 한국어명 보충(서버, 투표 미참여) | fetch revalidate 24h |
 | 보조 | [PokeAPI](https://pokeapi.co) | 한국어 기술명 누락분 보충(클라이언트) | sessionStorage |
 
 `/api/pokemon-data` 응답은 CDN 에서 1시간 캐시(`s-maxage=3600, stale-while-revalidate=21600`)된다.
@@ -85,7 +86,8 @@
 - **2개 이상 소스가 일치하는 값을 채택**한다(다수결). 최다 득표가 동률이거나 전부 다르면 **가장 최근 갱신된 소스**의 값을 따른다. PokeMiners 를 "최종 기준"으로 특별 취급하지 않는다(`latest.json` 이 항상 최신이 아님이 확인됨).
 - 갱신 시각이 `SOURCE_STALE_DAYS`(기본 60일) 이상 지난 소스는 투표에서 제외하고 화면에 "오래됨(투표 제외)"으로 표시한다. 투표 가능 소스가 2개 미만이면 화면에 경고를 띄우고, 0개면 오래된 소스 값을 임시로 사용한다. 갱신 시각을 모르는 소스는 제외하지 않는다.
 - 소스 갱신 시각(`dataSources[].updatedAt`)은 PvPoke `gamemaster.timestamp`, pogoapi `api_hashes.json` 의 `last_modified`, PokeMiners 는 GitHub commits API(`latest/latest.json` 최신 커밋 시각, 무인증 60회/시간·24h 캐시), 그 외 HTTP `Last-Modified` 로 기록하며(`updatedAtFrom` 에 근거 표기), 화면 하단에 소스별로 표시된다. 알 수 없으면 동률 판단에서 가장 후순위.
-- 기술의 빠른/차징 구분은 소스별 목록 위치가 아니라 **기술 자체의 종류**(PvPoke 에너지 획득/소모, PokeMiners `_FAST` 접미사, pokemon-go-api quick/cinematic)를 다수결로 정해 통일한다. PokeMiners 의 숫자 기술 ID(예: 497)는 `V0497_MOVE_*` 템플릿으로 이름을 찾고, 못 찾으면 제외한다. 기술은 **일반 / 레거시(`eliteFast/eliteCharged`, 대단한 기술머신 필요) / 전용기(`signatureFast/signatureCharged`, PokeMiners `nonTmCinematicMoves` 와 `formChange[].moveReassignment` 에서 파싱 — 아이템·폼 체인지로만 습득) / 한정기(미검증)(`unverifiedEliteFast/Charged`, 1개 소스만 보고했고 그 소스가 한정기로 표시) / 미검증** 으로 구분해 화면과 프롬프트에 전달한다. 프롬프트에는 기술명을 "한국어(영어)" 로 넘기고, 포켓몬GO 용어집(빠른/차징 기술, 기술머신·대단한 기술머신, 메테오나이트, 타입 배율 1.6/2.56/0.625/0.39 등)을 고정 포함해 임의 용어·번역을 금지한다.
+- 기술의 빠른/차징 구분은 소스별 목록 위치가 아니라 **기술 자체의 종류**(PvPoke 에너지 획득/소모, PokeMiners `_FAST` 접미사, pokemon-go-api quick/cinematic)를 다수결로 정해 통일한다. PokeMiners 의 숫자 기술 ID(예: 497)는 `V0497_MOVE_*` 템플릿으로 이름을 찾고, 못 찾으면 제외한다. 기술은 **일반 / 레거시(`eliteFast/eliteCharged`, 대단한 기술머신 필요) / 전용기(`signatureFast/signatureCharged`, PokeMiners `nonTmCinematicMoves` 와 `formChange[].moveReassignment` 에서 파싱 — 아이템·폼 체인지로만 습득) / 한정기(미검증)(`unverifiedEliteFast/Charged`, 1개 소스만 보고했고 그 소스가 한정기로 표시) / 미검증** 으로 구분해 화면과 프롬프트에 전달한다. 프롬프트에는 기술명을 "한국어(영어)" 로 넘기고, 포켓몬GO 용어집(`app/lib/glossary.js`: 용어/정의/금지 표현)을 고정 포함해 임의 용어·번역을 금지한다. AI 답변에 금지 표현("노멀기술", "운석", "4배", "자폭기", 기술 교체 의미의 "해방" 등)이 나오면 서버 로그에 `[analyze] ... 금지 표현` 경고를 남긴다.
+- 기술 한국어명은 pokemon-go-api → [PokeAPI CSV](https://github.com/PokeAPI/pokeapi/tree/master/data/v2/csv)(`moves.csv` + `move_names.csv`, 한국어 language_id=3, 누락이 있을 때만 조회·24h 캐시) → 수동 매핑(`app/lib/moveNamesKrManual.js`) 순으로 채운다. 그래도 없는 기술은 응답 `moveNamesKrMissing` 에 남고, 프롬프트에 포함되면 서버 로그에 `[analyze] 한국어명 없는 기술` 경고를 남긴다.
 - 기술은 2개 이상 소스에 있으면 "검증됨"으로 채택한다. 한 소스에만 있는 기술은 제외하지 않고 `unverifiedFast/unverifiedCharged` 로 분리해 화면에 **미검증(❔)** 으로 노출한다. "미검증"은 교차검증 소스가 1개라는 뜻일 뿐 **미출시로 판단하지 않는다.** AI 프롬프트 규칙: 미검증 기술은 배제하지 않되 "(미검증)"으로 명시하고, 주력 추천은 검증 기술 우선.
 - PokeMiners 원본(약 20MB)은 1~3순위 소스 간 불일치가 있을 때(또는 정상 소스가 2개 미만일 때)만 추가 투표용으로 조회하고, 파싱 결과는 24시간(`POKEMINERS_TTL_MS`) 메모리 캐시한다.
 - 불일치 유형은 `dataWarningCounts` 로 집계된다: `stat`(종족값 실제 차이), `type`(타입 차이), `moveMajority`(일부 소스에 없지만 2개 이상 일치로 채택), `moveUnverified`(1개 소스만 보유).

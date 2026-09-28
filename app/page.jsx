@@ -729,7 +729,7 @@ export default function Home() {
                         </optgroup>
                       )}
                       {selectedPokemon.unverifiedEliteFast?.length > 0 && (
-                        <optgroup label="── 한정기 (미검증) ──">
+                        <optgroup label="── 한정기 · 확인 필요 ──">
                           {selectedPokemon.unverifiedEliteFast.map((m) => <option key={m} value={m}>⭐❔ {krMove(m)} ({m})</option>)}
                         </optgroup>
                       )}
@@ -758,7 +758,7 @@ export default function Home() {
                         </optgroup>
                       )}
                       {selectedPokemon.unverifiedEliteCharged?.length > 0 && (
-                        <optgroup label="── 한정기 (미검증) ──">
+                        <optgroup label="── 한정기 · 확인 필요 ──">
                           {selectedPokemon.unverifiedEliteCharged.map((m) => <option key={m} value={m}>⭐❔ {krMove(m)} ({m})</option>)}
                         </optgroup>
                       )}
