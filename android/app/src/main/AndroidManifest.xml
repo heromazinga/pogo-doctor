@@ -25,10 +25,41 @@
             </intent-filter>
         </activity>
 
+        <!-- 결과 화면: 반투명 대화상자, 별도 task, 최근 앱 제외 (포켓몬GO 위에 표시, 닫으면 복귀) -->
+        <activity
+            android:name=".ResultActivity"
+            android:exported="false"
+            android:theme="@android:style/Theme.Material.Dialog.NoActionBar"
+            android:excludeFromRecents="true"
+            android:taskAffinity="com.pogodoctor.app.result"
+            android:launchMode="singleTask"
+            android:noHistory="true" />
+
+        <!-- 트램펄린: 타일·알림에서 시작 → 알림창 닫힘 → 지연 캡처 요청 → 즉시 종료 -->
+        <activity
+            android:name=".TrampolineActivity"
+            android:exported="false"
+            android:theme="@android:style/Theme.Translucent.NoTitleBar"
+            android:excludeFromRecents="true"
+            android:taskAffinity="com.pogodoctor.app.trampoline"
+            android:noHistory="true" />
+
         <service
             android:name=".CaptureService"
             android:exported="false"
             android:foregroundServiceType="mediaProjection" />
+
+        <!-- 빠른 설정 타일 "포고박사 캡처" -->
+        <service
+            android:name=".CaptureTileService"
+            android:exported="true"
+            android:icon="@drawable/ic_notif"
+            android:label="포고박사 캡처"
+            android:permission="android.permission.BIND_QUICK_SETTINGS_TILE">
+            <intent-filter>
+                <action android:name="android.service.quicksettings.action.QS_TILE" />
+            </intent-filter>
+        </service>
         <!-- ML Kit 한국어 모델은 text-recognition-korean 아티팩트에 번들 (다운로드 없음) -->
     </application>
 </manifest>
