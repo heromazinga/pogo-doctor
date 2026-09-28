@@ -125,6 +125,8 @@ Vercel 에서는 환경변수 `POGO_DISABLE_SOURCES` 를 Preview 환경에 잠�
 ### 동작
 - 첫 진입 시 세션이 없으면 `signInAnonymously()` 자동 실행(로그인 화면 없음). 세션은 브라우저(localStorage)에 유지. 모든 데이터는 `auth.users.id` 기준이라 나중에 이메일을 연결해도 이어진다.
 - **내 포켓몬 목록** `my_pokemon`: 종·폼, CP, 개체값, 기술(영어 ID), 섀도/정화/이로치/럭키, 상태(`keep`/`transfer`), 용도 태그(`raid`/`great`/`ultra`/`master`), 등록 경로(`web`/`overlay`/`import`), 메모. **판정 결과는 저장하지 않는다.** 목록 항목 "🔄 다시 분석"은 저장된 값으로 새로 판정.
+- 목록에서 ✏️ 로 상태·용도·메모와 **CP·개체값(공/방/HP)** 을 직접 수정할 수 있다. 개체값 미입력 항목은 목록 위쪽에 모아 표시. 📤 내보내기는 서버 행 구조(`species_id, form, atk_iv, …`)의 JSON(`schemaVersion: 1`)으로 백업하며, 가져오기는 범위 밖.
+- 폴백 모델로 답한 경우 상단에 안내: 429 의 `quotaId` 가 일일 한도면 "오늘 고급 모델 한도 소진 → 기본 모델로 분석 중", 분당 한도면 "분당 한도 초과 → … 잠시 후 고급 모델로 자동 복귀"(매 요청 1순위 모델부터 다시 시도).
 - 기존 브라우저 목록(`localStorage.pogo-collection`)은 익명 로그인 직후 1회 자동 이전(`source='import'`, `status='keep'`, verdict 는 버림). 성공 시 키를 `pogo-collection-migrated` 로 바꿔 보존.
 - **AI 사용 횟수** `ai_usage(user_id, usage_date, count)`: `/api/analyze` 가 Gemini 호출에 성공하면 서버에서 `increment_ai_usage()`(SECURITY DEFINER, service_role 만 실행 가능)로 +1. 클라이언트는 `Authorization: Bearer <access_token>` 을 보내고, 없으면 분석은 되지만 기록은 생략(서버 로그 경고). 날짜는 Gemini 일일 한도가 초기화되는 **태평양 시간 자정** 기준(`America/Los_Angeles`, [Gemini rate limits 문서](https://ai.google.dev/gemini-api/docs/rate-limits)). Gemini 429 시 "오늘 무료 한도 소진 · 초기화 예정 M/D HH:MM(한국 시간)" 안내.
 - RLS: 두 테이블 모두 `user_id = auth.uid()` 인 행만 접근. `ai_usage` 는 클라이언트 조회만 허용(증가 정책 없음).
