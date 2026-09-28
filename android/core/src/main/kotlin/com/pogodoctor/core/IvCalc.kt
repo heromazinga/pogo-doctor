@@ -49,4 +49,37 @@ object IvCalc {
     // 평가 화면 막대(공/방/HP 0~15)가 있으면 그 값으로 후보를 걸러 레벨만 확정
     fun filterByAppraisal(cands: List<Candidate>, atk: Int?, def: Int?, sta: Int?): List<Candidate> =
         cands.filter { (atk == null || it.atk == atk) && (def == null || it.def == def) && (sta == null || it.sta == sta) }
+
+    data class Constrained(val candidates: List<Candidate>, val barsUncertain: Boolean, val starsUncertain: Boolean, val levelUncertain: Boolean)
+
+    // 제약을 순서대로 적용하되, 어떤 제약이 CP/HP 후보와 모순되면(결과 0개) 그 제약은 버리고 "불확실" 로 표시한다.
+    //  - bars: 평가 막대 값, stars: 별 개수(합계 범위), levels: 강화 비용으로 좁힌 레벨 목록
+    fun constrain(cands: List<Candidate>, bars: Appraisal?, stars: Int?, levels: List<Double>?): Constrained {
+        var cur = cands
+        var barsUnc = false; var starsUnc = false; var levelUnc = false
+        if (levels != null && levels.isNotEmpty()) {
+            val f = cur.filter { it.level in levels }
+            if (f.isEmpty()) levelUnc = true else cur = f
+        }
+        if (stars != null) {
+            val range = BarReader.starsToSumRange(stars)
+            val f = cur.filter { (it.atk + it.def + it.sta) in range }
+            if (f.isEmpty()) starsUnc = true else cur = f
+        }
+        if (bars != null && (bars.atk != null || bars.def != null || bars.sta != null)) {
+            val f = filterByAppraisal(cur, bars.atk, bars.def, bars.sta)
+            if (f.isEmpty()) {
+                // 막대 하나씩 완화: 일치하는 축만 적용
+                var partial = cur; var applied = false
+                for ((k, v) in listOf("atk" to bars.atk, "def" to bars.def, "sta" to bars.sta)) {
+                    if (v == null) continue
+                    val g = partial.filter { c -> when (k) { "atk" -> c.atk == v; "def" -> c.def == v; else -> c.sta == v } }
+                    if (g.isNotEmpty()) { partial = g; applied = true }
+                }
+                barsUnc = true
+                if (applied) cur = partial
+            } else cur = f
+        }
+        return Constrained(cur, barsUnc, starsUnc, levelUnc)
+    }
 }

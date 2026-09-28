@@ -3,8 +3,8 @@ import { useState, useEffect, useCallback, useRef } from "react";
 import { ensureAnonymousSession, authHeader, supabaseConfigured } from "./lib/supabaseClient";
 import { listMyPokemon, insertMyPokemon, updateMyPokemon, deleteMyPokemon, migrateLocalCollection, getTodayUsage, STATUS_LABELS, PURPOSE_LABELS } from "./lib/myPokemon";
 import { usageDate } from "./lib/aiUsage";
-import { getAccountState, requestLinkEmail, verifyLinkEmail, snapshotAnonymousRows, requestSignInEmail, verifySignInEmail, mergeRowsIntoCurrent, signOutAccount } from "./lib/account";
-import { listDevices, revokeDevice } from "./lib/devices";
+import { getAccountState, requestLinkEmail, verifyLinkEmail, snapshotAnonymousRows, requestSignInEmail, verifySignInEmail, mergeRowsIntoCurrent, signOutAccount, loginWithAppCode } from "./lib/account";
+import { listDevices, revokeDevice, listDebugLogs, debugImageUrl, deleteDebugLog } from "./lib/devices";
 
 // 이메일 계정 연결 UI 는 기본 숨김 (Supabase 기본 발송은 템플릿 수정 불가·발송 제약 → 사용 안 함). 코드는 유지.
 const EMAIL_LINK_ENABLED = process.env.NEXT_PUBLIC_ENABLE_EMAIL_LINK === "true";
@@ -65,6 +65,14 @@ export default function Home() {
   const [pairCode, setPairCode] = useState(null); // { code, expiresAt }
   const [devError, setDevError] = useState(null);
   const [devBusy, setDevBusy] = useState(false);
+  // 3-1c: 앱 코드로 로그인(계정 복구) · 디버그 캡처
+  const [appCode, setAppCode] = useState("");
+  const [appLoginInfo, setAppLoginInfo] = useState(null);
+  const [appMerge, setAppMerge] = useState(null); // 로그인 전 익명 목록 스냅샷 (합칠지 질문)
+  const [showDebug, setShowDebug] = useState(false);
+  const [debugRows, setDebugRows] = useState([]);
+  const [debugUrls, setDebugUrls] = useState({});
+  const [debugError, setDebugError] = useState(null);
   const [usageCount, setUsageCount] = useState(null);
   const [saveOpts, setSaveOpts] = useState({ open: false, status: "keep", purposes: [], memo: "" });
   const [saving, setSaving] = useState(false);
@@ -784,6 +792,48 @@ export default function Home() {
       else setPairCode({ code: data.code, expiresAt: data.expiresAt });
     } catch { setDevError("네트워크 오류 — 코드 발급 실패"); }
     setDevBusy(false);
+  };
+  // 앱 "웹 로그인 코드" 로 이 브라우저를 앱이 연결된 계정으로 전환. 익명 목록이 있으면 PR #19 병합 로직 재사용
+  const loginWithApp = async () => {
+    const code = appCode.replace(/[\s-]/g, "").toUpperCase();
+    if (code.length !== 8) { setDevError("앱에서 받은 8자리 코드를 입력하세요"); return; }
+    setDevBusy(true); setDevError(null); setAppLoginInfo(null);
+    const snap = await snapshotAnonymousRows();
+    const { error, user } = await loginWithAppCode(code);
+    if (error) { setDevError(error); setDevBusy(false); return; }
+    await afterAuthChange();
+    setAppCode("");
+    const sameUser = snap?.userId && user?.id === snap.userId;
+    if (snap?.rows?.length > 0 && !sameUser) { setAppMerge(snap); setAppLoginInfo(`로그인했습니다. 이 브라우저의 익명 목록 ${snap.rows.length}건을 이 계정으로 합칠까요? (종·CP·개체값이 같은 항목은 건너뜀)`); }
+    else setAppLoginInfo("로그인했습니다 — 앱이 연결된 계정의 내 목록이 표시됩니다");
+    await reloadDevices();
+    setDevBusy(false);
+  };
+  const appMergeDecide = async (yes) => {
+    const snap = appMerge; setAppMerge(null);
+    if (!yes) { setAppLoginInfo("익명 목록은 합치지 않았습니다 (이 브라우저에서는 더 이상 보이지 않습니다)"); return; }
+    setDevBusy(true);
+    const r = await mergeRowsIntoCurrent(snap?.rows || []);
+    if (r.error) setDevError(`병합 실패: ${r.error}`); else { await reloadCollection(); setAppLoginInfo(`병합 완료: ${r.inserted}건 추가, 중복 ${r.skipped}건 건너뜀`); }
+    setDevBusy(false);
+  };
+  const openDebug = async () => {
+    setShowDebug(true); setDebugError(null);
+    const { rows, error } = await listDebugLogs(30);
+    if (error) { setDebugError(`디버그 기록 불러오기 실패: ${error}${/relation|does not exist|permission/i.test(error) ? " — 마이그레이션 0003 적용 여부 확인" : ""}`); return; }
+    setDebugRows(rows);
+    const urls = {};
+    for (const r of rows) if (r.image_path) urls[r.id] = await debugImageUrl(r.image_path);
+    setDebugUrls(urls);
+  };
+  const removeDebug = async (row) => {
+    const { error } = await deleteDebugLog(row);
+    if (error) setDebugError(`삭제 실패: ${error}`); else setDebugRows((rows) => rows.filter((r) => r.id !== row.id));
+  };
+  const exportDebug = (row) => {
+    const data = JSON.stringify({ id: row.id, kind: row.kind, created_at: row.created_at, result: row.result, ocr: row.ocr, image_url: debugUrls[row.id] || null }, null, 2);
+    const blob = new Blob([data], { type: "application/json" }); const url = URL.createObjectURL(blob);
+    const a = document.createElement("a"); a.href = url; a.download = `pogo-debug-${row.id.slice(0, 8)}.json`; a.click(); URL.revokeObjectURL(url);
   };
   const doRevokeDevice = async (d) => {
     if (!confirm(`"${d.name}" 연결을 해제할까요? 해제 후 그 기기의 저장 요청은 거부됩니다.`)) return;
@@ -1682,6 +1732,55 @@ export default function Home() {
               </div>
             ))}
             {devices.some((d) => d.revoked_at) && <div style={{ fontSize: 10, color: "#576574", marginTop: 6 }}>해제된 기기 {devices.filter((d) => d.revoked_at).length}대 (숨김)</div>}
+
+            <div style={{ ...s.saveRowLabel, marginTop: 18 }}>🔑 앱 코드로 로그인 (계정 복구)</div>
+            <div style={{ fontSize: 11, color: "#8899aa", lineHeight: 1.6 }}>이 브라우저의 세션을 잃었을 때(브라우저 종료·시크릿 창 등) 앱 → "웹 로그인 코드" 로 받은 8자리 코드를 입력하면 앱이 연결된 계정으로 돌아옵니다.{account?.appLinked ? " 현재 이 브라우저는 앱 연결 계정입니다." : ""}</div>
+            {appLoginInfo && <div style={{ ...s.collNote, marginTop: 8 }}>{appLoginInfo}</div>}
+            {appMerge ? (
+              <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
+                <button onClick={() => appMergeDecide(true)} disabled={devBusy} style={{ ...s.keepBtn, flex: 1, padding: 8 }}>합치기</button>
+                <button onClick={() => appMergeDecide(false)} disabled={devBusy} style={{ ...s.resetBtn, flex: 1, margin: 0, padding: 8 }}>합치지 않음</button>
+              </div>
+            ) : (
+              <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
+                <input style={{ ...s.input, fontSize: 15, letterSpacing: 3 }} placeholder="ABCD EFGH" value={appCode} onChange={(e) => setAppCode(e.target.value.toUpperCase())} disabled={devBusy} />
+                <button onClick={loginWithApp} disabled={devBusy || appCode.replace(/[\s-]/g, "").length !== 8} style={{ ...s.keepBtn, width: "auto", padding: "8px 14px" }}>로그인</button>
+              </div>
+            )}
+            {collection.length > 0 && !appMerge && <div style={{ fontSize: 10, color: "#ffd93d", marginTop: 6 }}>이 브라우저의 목록 {collection.length}건은 로그인 후 합칠지 물어봅니다</div>}
+
+            <div style={{ ...s.saveRowLabel, marginTop: 18 }}>🐞 디버그 캡처</div>
+            <div style={{ fontSize: 11, color: "#8899aa" }}>앱 디버그 모드에서 올린 캡처(상태바 가림)·OCR 원문·판독값. 7일 후 자동 삭제.</div>
+            <button onClick={openDebug} style={{ ...s.resetBtn, margin: "8px 0 0", padding: 8, width: "100%" }}>디버그 캡처 보기</button>
+          </div>
+        </div>
+      )}
+
+      {/* ─── 3-1c 디버그 캡처 Panel ─── */}
+      {showDebug && (
+        <div style={s.collOverlay}>
+          <div style={s.collPanel}>
+            <div style={s.collHeader}>
+              <h2 style={{ fontSize: 18, fontWeight: 800, color: "#e0e0e0" }}>🐞 디버그 캡처 ({debugRows.length})</h2>
+              <button style={s.collClose} onClick={() => setShowDebug(false)}>✕</button>
+            </div>
+            {debugError && <div style={s.error}>{debugError}</div>}
+            {debugRows.length === 0 && !debugError && <div style={{ fontSize: 12, color: "#576574", padding: "8px 0" }}>기록이 없습니다 — 앱 설정에서 디버그 모드를 켜고 캡처하세요</div>}
+            {debugRows.map((r) => (
+              <div key={r.id} style={{ ...s.collItem, flexDirection: "column", alignItems: "stretch", marginBottom: 8 }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                  <span style={{ fontSize: 12, fontWeight: 700, color: "#e0e0e0" }}>{r.kind} · {fmtStamp(r.created_at)}</span>
+                  <span style={{ display: "flex", gap: 6 }}>
+                    <button onClick={() => exportDebug(r)} style={{ ...s.collIconBtn, fontSize: 11 }}>JSON</button>
+                    <button onClick={() => removeDebug(r)} style={{ ...s.collIconBtn, color: "#ff6b6b", fontSize: 11 }}>삭제</button>
+                  </span>
+                </div>
+                {r.result && <div style={{ fontSize: 11, color: "#4ecdc4", marginTop: 4, whiteSpace: "pre-wrap" }}>{r.result}</div>}
+                {debugUrls[r.id] && <a href={debugUrls[r.id]} target="_blank" rel="noopener noreferrer"><img src={debugUrls[r.id]} alt="" style={{ width: "100%", maxHeight: 360, objectFit: "contain", marginTop: 6, borderRadius: 8, background: "#000" }} /></a>}
+                {r.image_path && !debugUrls[r.id] && <div style={{ fontSize: 10, color: "#ffd93d", marginTop: 4 }}>이미지 URL 생성 실패 (storage 정책 확인)</div>}
+                {Array.isArray(r.ocr) && r.ocr.length > 0 && <div style={{ fontSize: 10, color: "#8899aa", marginTop: 4 }}>OCR: {r.ocr.join(" | ")}</div>}
+              </div>
+            ))}
           </div>
         </div>
       )}

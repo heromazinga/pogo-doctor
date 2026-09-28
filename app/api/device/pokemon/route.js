@@ -1,18 +1,9 @@
 import { NextResponse } from "next/server";
 import { getServiceClient } from "../../../lib/supabaseServer";
-import { bearerToken, sha256Hex, validatePokemonBody, rateLimit, clientIp } from "../../../lib/deviceAuth";
+import { validatePokemonBody, rateLimit, clientIp } from "../../../lib/deviceAuth";
+import { userFromDeviceToken } from "../../../lib/deviceServer";
 
 const COLUMNS = "id,species_id,form,name_kr,cp,atk_iv,def_iv,sta_iv,level,fast_move,charged_moves,is_shadow,is_purified,is_shiny,is_lucky,status,purposes,source,memo,created_at,updated_at";
-
-// 기기 토큰 → user_id. 없거나 해제됐으면 null
-async function userFromDeviceToken(sb, req) {
-  const token = bearerToken(req);
-  if (!token || token.length < 32) return null;
-  const { data } = await sb.from("device_tokens").select("id,user_id,revoked_at").eq("token_hash", sha256Hex(token)).maybeSingle();
-  if (!data || data.revoked_at) return null;
-  sb.from("device_tokens").update({ last_used_at: new Date().toISOString() }).eq("id", data.id).then(() => {}, () => {});
-  return { userId: data.user_id, deviceId: data.id };
-}
 
 // 앱 → my_pokemon 저장 (source='overlay'). 본문의 user_id/id/source 는 무시하고 서버가 정한다.
 export async function POST(req) {

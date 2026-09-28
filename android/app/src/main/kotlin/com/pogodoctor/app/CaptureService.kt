@@ -29,8 +29,14 @@ import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
 import android.widget.Toast
+import android.graphics.Canvas
+import android.graphics.Color
+import android.graphics.Paint
+import android.util.Base64
 import com.pogodoctor.core.Appraisal
 import com.pogodoctor.core.BarReader
+import com.pogodoctor.core.Merge
+import com.pogodoctor.core.PowerUp
 import com.pogodoctor.core.ScreenInfo
 import com.pogodoctor.core.ScreenParser
 import com.pogodoctor.core.SpeciesRef
@@ -75,7 +81,10 @@ class CaptureService : Service() {
 
     // 상세 + 평가 화면을 합쳐 개체값 확정
     private var lastDetail: ScreenInfo? = null
+    private var lastDetailAt = 0L
+    private var lastLevels: List<Double>? = null
     private var lastAppraisal: Appraisal? = null
+    private var lastStars: Int? = null
     private var chosenSpecies: SpeciesRef? = null
 
     override fun onBind(intent: Intent?): IBinder? = null
@@ -214,6 +223,7 @@ class CaptureService : Service() {
                 val bright = averageBrightness(bmp)
                 if (bright <= BLACK_THRESHOLD) {
                     DebugLog.add(this@CaptureService, "blocked", emptyList(), "캡처 차단(검은 화면) 평균 밝기 ${"%.1f".format(bright)} · ${bubbleVisibility()}")
+                    if (prefs.debugMode) uploadDebug("blocked", emptyList(), "평균 밝기 ${"%.1f".format(bright)}", bmp)
                     show(ResultStore.Result.Blocked(bright), viaActivity); return@launch
                 }
                 analyze(bmp, viaActivity)
@@ -229,21 +239,51 @@ class CaptureService : Service() {
         val lines = Ocr.recognize(bmp)
         val parser = ScreenParser(data.species, data.allMoveNamesKr)
         var info = parser.parse(lines)
+        val now = System.currentTimeMillis()
         if (info.kind == ScreenInfo.Kind.APPRAISAL) {
+            // 평가 화면: 라벨 기준 상대 좌표로 막대 3개 + 별 개수 판독 (기술·사탕은 가려지므로 미인식이 정상)
             val labels = lines.filter { l -> val t = l.text.replace(" ", ""); t.contains("공격") || t.contains("방어") || t == "HP" || t.contains("체력") }
-            val bars = withContext(Dispatchers.Default) { BarReader.readAppraisal({ x, y -> if (x in 0 until bmp.width && y in 0 until bmp.height) bmp.getPixel(x, y) else 0 }, bmp.width, labels) }
-            info = parser.parse(lines, bars)
-            lastAppraisal = bars
-            if (prefs.debugMode) DebugLog.add(this, "appraisal", lines.map { it.text }, "막대 공${bars.atk} 방${bars.def} HP${bars.sta}")
-            show(ResultStore.Result.Screen(lastDetail, bars, chosenSpecies), viaActivity); return
+            val reading = withContext(Dispatchers.Default) { BarReader.readAppraisal({ x, y -> if (x in 0 until bmp.width && y in 0 until bmp.height) bmp.getPixel(x, y) else 0 }, bmp.width, bmp.height, labels) }
+            info = parser.parse(lines, reading.appraisal)
+            lastAppraisal = reading.appraisal; lastStars = reading.stars
+            val mergeable = Merge.canMerge(lastDetail, lastDetailAt, info, now)
+            val summary = "막대 ${reading.detail} · 병합=${mergeable}${if (!mergeable && lastDetail != null) " (직전 상세 CP${lastDetail?.cp} ${(now - lastDetailAt) / 1000}초 전)" else ""}"
+            if (prefs.debugMode) { DebugLog.add(this, "appraisal", lines.map { it.text }, summary); uploadDebug(if (mergeable) "merged" else "appraisal", lines, summary, bmp) }
+            if (mergeable) show(ResultStore.Result.Screen(lastDetail, reading.appraisal, chosenSpecies, merged = true, stars = reading.stars, levels = lastLevels, barDetail = reading.detail), viaActivity)
+            else show(ResultStore.Result.Screen(null, reading.appraisal, null, stars = reading.stars, barDetail = reading.detail), viaActivity)
+            return
         }
         if (info.kind == ScreenInfo.Kind.UNKNOWN) {
-            if (prefs.debugMode) DebugLog.add(this, "unknown", lines.map { it.text }, "포켓몬 화면 아님")
+            if (prefs.debugMode) { DebugLog.add(this, "unknown", lines.map { it.text }, "포켓몬 화면 아님"); uploadDebug("unknown", lines, "포켓몬 화면 아님", bmp) }
             show(ResultStore.Result.Error("포켓몬 상세 화면을 찾지 못했습니다 (CP·이름 없음)"), viaActivity); return
         }
-        lastDetail = info; chosenSpecies = info.species
-        if (prefs.debugMode) DebugLog.add(this, "detail", lines.map { it.text }, "CP${info.cp} HP${info.hp} 종=${info.species?.nameKr ?: "?"}(${(info.nameScore * 100).toInt()}%) 기술=${info.moves.joinToString("/") { it.nameKr }}")
-        show(ResultStore.Result.Screen(info, lastAppraisal, chosenSpecies), viaActivity)
+        // 상세 화면: 강화 비용(별의모래·사탕·XL)으로 레벨 범위를 좁힌다
+        val pu = PowerUp.parse(lines, bmp.height)
+        val levels = PowerUp.levelsForCost(pu.stardust, pu.candy, pu.xlCandy).takeIf { it.isNotEmpty() }
+        lastDetail = info; lastDetailAt = now; lastLevels = levels; chosenSpecies = info.species
+        // 새 상세 화면(다른 CP)이면 이전 평가 판독은 버린다
+        lastAppraisal = null; lastStars = null
+        val summary = "CP${info.cp} HP${info.hp} 종=${info.species?.nameKr ?: "?"}(${(info.nameScore * 100).toInt()}%) 기술=${info.moves.joinToString("/") { it.nameKr }} 강화=${pu.stardust}/${pu.candy}/${pu.xlCandy}XL → L${levels?.joinToString(",") ?: "?"}"
+        if (prefs.debugMode) { DebugLog.add(this, "detail", lines.map { it.text }, summary); uploadDebug("detail", lines, summary, bmp) }
+        show(ResultStore.Result.Screen(info, null, chosenSpecies, levels = levels), viaActivity)
+    }
+
+    // ─── 디버그 업로드: 상단 상태바(6%)·트레이너 영역(하단 좌측 28%×22%) 가림 → 폭 720 축소 → JPEG 75 → 서버 (기기 토큰) ───
+    private fun uploadDebug(kind: String, lines: List<com.pogodoctor.core.OcrLine>, result: String, bmp: Bitmap) {
+        if (!prefs.isPaired) return
+        scope.launch(Dispatchers.IO) {
+            try {
+                val scale = minOf(1.0, 720.0 / bmp.width)
+                val w = (bmp.width * scale).toInt(); val h = (bmp.height * scale).toInt()
+                val small = Bitmap.createScaledBitmap(bmp, w, h, true).copy(Bitmap.Config.ARGB_8888, true)
+                val canvas = Canvas(small); val paint = Paint().apply { color = Color.BLACK }
+                canvas.drawRect(0f, 0f, w.toFloat(), h * 0.06f, paint)                       // 상태바(시계·알림)
+                canvas.drawRect(0f, h * 0.78f, w * 0.28f, h.toFloat(), paint)               // 평가 화면 트레이너 아바타·이름 영역
+                val out = java.io.ByteArrayOutputStream(); small.compress(Bitmap.CompressFormat.JPEG, 75, out)
+                val b64 = Base64.encodeToString(out.toByteArray(), Base64.NO_WRAP)
+                Api(prefs).uploadDebug(kind, lines.map { it.text }, result, b64)
+            } catch (e: Exception) { DebugLog.add(this@CaptureService, "upload-error", emptyList(), kind, e.toString()) }
+        }
     }
 
     private fun show(result: ResultStore.Result, viaActivity: Boolean) {
@@ -267,7 +307,7 @@ class CaptureService : Service() {
                     try {
                         withContext(Dispatchers.IO) { Api(prefs).savePokemon(row) }
                         toast(if (status == "keep") "보관에 저장했습니다 — 웹 내 목록에 표시됩니다" else "박사행으로 저장했습니다")
-                        hideCard(); lastDetail = null; lastAppraisal = null; chosenSpecies = null; ResultStore.current = null
+                        hideCard(); lastDetail = null; lastAppraisal = null; lastStars = null; lastLevels = null; chosenSpecies = null; ResultStore.current = null
                     } catch (e: Exception) {
                         DebugLog.add(this@CaptureService, "save-error", emptyList(), row.toString(), e.toString())
                         toast("저장 실패: ${e.message}")

@@ -53,6 +53,21 @@ class Api(private val prefs: Prefs) {
         catch (e: ApiException) { if (e.status == 401) prefs.deviceToken = null; throw e }
     }
 
+    // 앱 → 웹 로그인 코드 (계정 복구). 8자리·10분·1회용
+    fun webLoginCode(): JSONObject {
+        val token = prefs.deviceToken ?: throw ApiException(401, "기기 연결 필요")
+        try { return request("POST", "/api/device/web-code", JSONObject(), token) }
+        catch (e: ApiException) { if (e.status == 401) prefs.deviceToken = null; throw e }
+    }
+
+    // 디버그 캡처 업로드 (이미지는 상태바 가림·축소된 JPEG base64, 없으면 null)
+    fun uploadDebug(kind: String, ocr: List<String>, result: String, imageBase64: String?): JSONObject {
+        val token = prefs.deviceToken ?: throw ApiException(401, "기기 연결 필요")
+        val body = JSONObject().put("kind", kind).put("ocr", org.json.JSONArray(ocr)).put("result", result)
+        if (imageBase64 != null) body.put("imageBase64", imageBase64)
+        return request("POST", "/api/device/debug", body, token, timeoutMs = 40000)
+    }
+
     fun savePokemon(row: JSONObject): JSONObject {
         val token = prefs.deviceToken ?: throw ApiException(401, "기기 연결 필요")
         try { return request("POST", "/api/device/pokemon", row, token) }

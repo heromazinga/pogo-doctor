@@ -11,7 +11,34 @@ export async function getAccountState() {
   if (!sb) return { configured: false, user: null, email: null, anonymous: true };
   const { data: { session } } = await sb.auth.getSession();
   const user = session?.user || null;
-  return { configured: true, user, email: user?.email || null, anonymous: !user || user.is_anonymous === true || !user.email };
+  // 앱 코드 로그인이 만든 내부용 주소(…@app-login.pogo-doctor.invalid)는 사용자 이메일이 아니므로 "익명(앱 연결 계정)" 으로 취급
+  const internal = isInternalEmail(user?.email);
+  return { configured: true, user, email: internal ? null : user?.email || null, anonymous: !user || user.is_anonymous === true || !user.email || internal, appLinked: internal };
+}
+export const isInternalEmail = (e) => /@app-login\.pogo-doctor\.invalid$/i.test(String(e || ""));
+
+// ── C. 앱 코드로 로그인 (계정 복구): 앱 "웹 로그인 코드" → POST /api/auth/web-login → 세션 ──
+// 로그인 전 익명 목록 스냅샷은 호출측이 snapshotAnonymousRows() 로 미리 받아 두고, 로그인 후 mergeRowsIntoCurrent 로 합친다
+export async function loginWithAppCode(code) {
+  const sb = getSupabase();
+  if (!sb) return { error: "미설정" };
+  let res, data;
+  try {
+    res = await fetch("/api/auth/web-login", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ code }) });
+    data = await res.json();
+  } catch { return { error: "네트워크 오류" }; }
+  if (!res.ok || data.error) return { error: data?.error || `HTTP ${res.status}` };
+  if (data.method === "magiclink") {
+    const { data: v, error } = await sb.auth.verifyOtp({ token_hash: data.tokenHash, type: "magiclink" });
+    if (error) return { error: `세션 생성 실패: ${friendly(error.message)}` };
+    return { error: null, user: v?.user || null };
+  }
+  if (data.method === "session") {
+    const { data: v, error } = await sb.auth.setSession({ access_token: data.accessToken, refresh_token: data.refreshToken });
+    if (error) return { error: `세션 설정 실패: ${error.message}` };
+    return { error: null, user: v?.user || null };
+  }
+  return { error: "알 수 없는 응답" };
 }
 
 const friendly = (msg) => {
