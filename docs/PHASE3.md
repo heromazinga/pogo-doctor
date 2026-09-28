@@ -38,6 +38,7 @@
   3. 앱 → `POST /api/device/pokemon` (`Authorization: Bearer 토큰`) → 서버가 토큰으로 user_id 를 결정하고 `my_pokemon` 에 insert (`source='overlay'`). 요청 본문의 user_id 는 무시. 필드 검증 필수
   4. 웹 설정에 연결된 기기 목록 + 해제 버튼
 - 토큰·코드 원문은 로그에 남기지 않는다.
+- 전제: **단일 사용자 서비스**. 교환 실패 시 활성 코드 전체의 `attempts` 를 올리는 방식(코드를 특정할 수 없어도 무차별 대입을 막기 위함)은 이 전제에서만 수용한다. 다중 사용자로 확장하면 사용자별 카운터로 바꿔야 한다.
 - Supabase 휴면 방지: Vercel Cron(하루 1회) → `GET /api/keep-alive` (`Authorization: Bearer CRON_SECRET`) → DB 가벼운 조회 1건.
 - 완료 기준: 코드 발급→교환→curl 로 저장→웹 목록 표시 / 해제 후 401 / 만료·재사용 코드 거부 / 다른 사용자 목록에 안 보임(RLS)
 
