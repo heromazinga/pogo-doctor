@@ -25,6 +25,13 @@
             </intent-filter>
         </activity>
 
+        <!-- 4-0: 앱 내 웹 화면 (WebView, 우리 도메인만) -->
+        <activity
+            android:name=".WebActivity"
+            android:exported="false"
+            android:configChanges="orientation|screenSize|keyboardHidden"
+            android:label="포고박사" />
+
         <!-- 결과 화면: 반투명 대화상자, 별도 task, 최근 앱 제외 (포켓몬GO 위에 표시, 닫으면 복귀) -->
         <activity
             android:name=".ResultActivity"

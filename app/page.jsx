@@ -212,6 +212,22 @@ export default function Home() {
   useEffect(() => {
     (async () => {
       if (!supabaseConfigured) { setSessionNotice("서버 저장 미설정 (Supabase 환경변수 없음) · 목록 기능 비활성화"); return; }
+      // 4-0 앱 내 웹 화면 자동 로그인: 앱이 URL 해시(#applogin=<코드>&uid=<user_id>)로 1회용 코드를 넘긴다.
+      // 해시는 서버로 전송되지 않으며 즉시 URL 에서 지운다. 이미 같은 user_id 세션이면 코드를 쓰지 않는다.
+      try {
+        const h = new URLSearchParams((window.location.hash || "").replace(/^#/, ""));
+        const code = h.get("applogin"), uid = h.get("uid");
+        if (code) {
+          window.history.replaceState(null, "", window.location.pathname + window.location.search);
+          const cur = await getAccountState();
+          if (!(uid && cur.user?.id === uid)) {
+            const snap = await snapshotAnonymousRows();
+            const { error, user } = await loginWithAppCode(code);
+            if (error) setSessionNotice(`앱 자동 로그인 실패: ${error}`);
+            else if (snap?.rows?.length > 0 && user?.id !== snap.userId) { setAppMerge(snap); setAppLoginInfo(`앱 계정으로 로그인했습니다. 이 화면의 익명 목록 ${snap.rows.length}건을 합칠까요?`); setShowDevices(true); }
+          }
+        }
+      } catch (e) { setSessionNotice(`앱 자동 로그인 오류: ${e.message}`); }
       const s = await ensureAnonymousSession();
       if (!s) { setSessionNotice("서버 저장 연결 실패 · 목록 기능 비활성화"); return; }
       setSession(s);

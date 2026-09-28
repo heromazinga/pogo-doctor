@@ -204,6 +204,14 @@ Vercel 에서는 환경변수 `POGO_DISABLE_SOURCES` 를 Preview 환경에 잠�
 ### 검증 (이 환경, 모의 PostgREST)
 코드 발급 → 소문자·공백 섞인 입력으로 교환 성공 → 같은 코드 재사용 400 → `user_id` 위조 본문 저장 시 서버 결정 계정으로 `source='overlay'` 저장 → 검증 실패 400 → 토큰 없음/해제 후 401 → 만료 코드 400 → 실패 5회 누적 코드 400 → IP 제한 429 → keep-alive 비밀 없음 401/정상 200. 로그에 코드·토큰 원문 0건. RLS 는 실제 Supabase 에서 확인 필요.
 
+## 4-0: 웹 화면을 수집기 앱에 통합 (WebView + 자동 로그인)
+
+- 앱 첫 화면 "🌐 포고박사 열기" → `WebActivity`(WebView)가 `serverUrl` 웹앱을 연다. 세션은 WebView 저장소(localStorage)에 남아 앱 재시작 후에도 유지된다.
+- **자동 로그인**: 앱이 기기 토큰으로 `POST /api/device/web-code`(응답에 `userId` 포함) → URL 해시 `#applogin=<코드>&uid=<user_id>` 로 웹을 연다. 웹(`app/page.jsx` 부트스트랩)은 해시를 즉시 URL 에서 지우고, 현재 세션이 같은 `user_id` 면 코드를 쓰지 않으며, 다르면 `/api/auth/web-login` 으로 교환(3-1c 흐름). 해시는 서버로 전송되지 않고 코드는 화면에 표시되지 않는다. 익명 목록이 있으면 병합 질문(📱 기기 연결 패널).
+- **WebView 보안**: 우리 도메인(serverUrl 호스트, https)만 WebView 에서 열고 그 외 링크는 시스템 브라우저(`ACTION_VIEW`). `addJavascriptInterface` 없음(기기 토큰 원문은 WebView 로 넘기지 않음), 파일·콘텐츠 접근 비활성, 혼합 콘텐츠 차단, 위치 비활성. 뒤로가기는 WebView 히스토리 우선. User-Agent 에 `PogoDoctorApp/<버전>` 접미사.
+- 미사용 웹 코드는 발급 시 지우지 않는다(PC 용으로 받은 코드가 앱 웹 화면 열기로 무효화되지 않도록). 발급 제한 IP 당 10분 30회.
+- PC 브라우저는 계속 사용 가능(앱 → 웹 로그인 코드). "홈 화면에 추가" 는 앱 화면에 안내만.
+
 ## 3-1c: 앱 → 웹 로그인 코드 · 평가/상세 병합 · 막대 재보정 · 디버그 캡처 업로드 · 강화 비용
 
 ### 사용자가 해야 하는 설정
