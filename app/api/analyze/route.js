@@ -385,7 +385,7 @@ PvP 메타 포켓몬이면 PvP 기준으로, PvE 메타면 PvE 기준으로 IV�
       console.log("[analyze] user message:\n" + userMessage);
     }
 
-    let lastError = "";
+    const errors = []; // 모델별 실패 사유 (전부 실패 시 한 번에 보여준다)
 
     for (const model of getModels()) {
       try {
@@ -408,7 +408,7 @@ PvP 메타 포켓몬이면 PvP 기준으로, PvE 메타면 PvE 기준으로 IV�
 
         if (!res.ok) {
           const errData = await res.json().catch(() => ({}));
-          lastError = `${model}: ${errData?.error?.message || res.statusText}`;
+          errors.push(`${model}: ${errData?.error?.message || res.statusText} (HTTP ${res.status})`);
           continue;
         }
 
@@ -463,11 +463,12 @@ PvP 메타 포켓몬이면 PvP 기준으로, PvE 메타면 PvE 기준으로 IV�
           },
         });
       } catch (e) {
-        lastError = `${model}: ${e.message}`;
+        errors.push(`${model}: ${e.message}`);
       }
     }
 
-    return NextResponse.json({ error: `Gemini 오류: ${lastError}` }, { status: 500 });
+    console.error("[analyze] 모든 Gemini 모델 실패: " + errors.join(" | "));
+    return NextResponse.json({ error: `Gemini 오류: ${errors.join(" / ")}` }, { status: 500 });
   } catch (e) {
     return NextResponse.json({ error: `서버 오류: ${e.message}` }, { status: 500 });
   }
