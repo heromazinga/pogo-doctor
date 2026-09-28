@@ -99,7 +99,7 @@ export function counterCandidates(pokemonList, target, limit = 8, moveStats = {}
     if (!p?.types?.length || !p.baseAttack) continue;
     if (!COUNTER_FORMS.has(p.form)) continue;
     if (p.id === target.id && p.form === target.form) continue;
-    if (p.released !== true) continue; // 출시 확인된 포켓몬만 (PvPoke released)
+    if (p.released === false) continue; // 미출시(PvPoke released:false 또는 자리표시 기술뿐) 제외. null 은 "출시 미확인"으로 포함
     // 검증된 기술만 (미검증 제외)
     const fastAll = [...(p.fast || []), ...(p.eliteFast || []), ...(p.signatureFast || [])];
     const chargedAll = [...(p.charged || []), ...(p.eliteCharged || []), ...(p.signatureCharged || [])];
@@ -125,6 +125,7 @@ export function counterCandidates(pokemonList, target, limit = 8, moveStats = {}
       baseAttack: p.baseAttack, attackType: best.type, mult: Number(best.mult.toFixed(2)), stab: best.stab,
       fastMove: best.fast, chargedMove: best.charged, dps: Number(best.dps.toFixed(1)),
       score: Math.round(best.score), incoming: Number(incoming.toFixed(2)),
+      releasedUnknown: p.released !== true,
     });
   }
   scored.sort((a, b) => b.score - a.score || b.baseAttack - a.baseAttack);

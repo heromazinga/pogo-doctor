@@ -571,6 +571,14 @@ function markStale(meta) {
   meta.stale = ageDays >= staleDays();
 }
 
+// 미출시 포켓몬의 자리표시 기술: SPLASH(빠른) / STRUGGLE(차징) 만 있으면 미출시로 본다
+const PLACEHOLDER_MOVES = new Set(["splash", "struggle"]);
+function isPlaceholderOnly(fastM, chM) {
+  const all = [...fastM.regular, ...fastM.elite, ...fastM.signature, ...fastM.unverified, ...fastM.unverifiedElite,
+    ...chM.regular, ...chM.elite, ...chM.signature, ...chM.unverified, ...chM.unverifiedElite];
+  return all.length > 0 && all.every((k) => PLACEHOLDER_MOVES.has(k));
+}
+
 function crossValidate(loaded /* {sourceKey: {meta, parsed}} */) {
   for (const k of SOURCE_ORDER) markStale(loaded[k]?.meta);
   let usable = SOURCE_ORDER.filter((k) => loaded[k]?.parsed && !loaded[k].meta.stale);
@@ -710,8 +718,8 @@ function crossValidate(loaded /* {sourceKey: {meta, parsed}} */) {
       unverifiedFast: fastM.unverified.map(moveDisplay), unverifiedCharged: chM.unverified.map(moveDisplay),
       // 한정기(미검증): 1개 소스만 보고했고 그 소스가 한정기/전용기로 표시 (예: PvPoke 만 가진 Roar of Time)
       unverifiedEliteFast: fastM.unverifiedElite.map(moveDisplay), unverifiedEliteCharged: chM.unverifiedElite.map(moveDisplay),
-      // 출시 여부 (PvPoke released). 판단 근거가 없으면 null
-      released: releasedRec ? releasedRec.rec.released : null,
+      // 출시 여부: PvPoke released 가 있으면 그 값. 없으면 기술이 자리표시(Splash/Struggle)뿐인 경우만 false, 그 외 null(출시 미확인)
+      released: releasedRec ? releasedRec.rec.released : (isPlaceholderOnly(fastM, chM) ? false : null),
       sources: recs.map((x) => x.src),
     });
   }
