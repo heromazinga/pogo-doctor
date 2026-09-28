@@ -113,6 +113,15 @@ class MainActivity : ComponentActivity() {
 
             Card(Modifier.fillMaxWidth()) {
                 Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text("🌐 포고박사 (내 목록 · 팀 추천)", fontSize = 16.sp)
+                    Text(if (paired) "앱 계정으로 자동 로그인됩니다. 브라우저를 따로 쓰지 않아도 됩니다." else "기기 연결 후에는 앱 계정으로 자동 로그인됩니다. 연결 전에는 익명으로 열립니다.", fontSize = 12.sp, color = Color(0xFF8899AA))
+                    Button(onClick = { startActivity(Intent(this@MainActivity, WebActivity::class.java)) }) { Text("포고박사 열기") }
+                    Text("PC 등 다른 기기의 브라우저에서는 아래 \"웹 로그인 코드\" 로 같은 계정에 들어갈 수 있고, 브라우저 메뉴의 \"홈 화면에 추가\" 로 앱처럼 쓸 수 있습니다.", fontSize = 11.sp, color = Color(0xFF576574))
+                }
+            }
+
+            Card(Modifier.fillMaxWidth()) {
+                Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Text(if (paired) "✅ 기기 연결됨 (${prefs.deviceName})" else "🔗 기기 연결 필요", fontSize = 16.sp)
                     Text("웹 포고박사 상태줄의 \"📱 기기 연결\" → 코드 발급 → 아래에 입력 (10분 안에)", fontSize = 12.sp, color = Color(0xFF8899AA))
                     if (!paired) {
