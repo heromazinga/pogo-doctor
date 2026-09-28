@@ -84,6 +84,14 @@ class MainActivity : ComponentActivity() {
         val mpm = getSystemService(Context.MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
         projectionLauncher.launch(mpm.createScreenCaptureIntent())
     }
+    // Android 13+: 시스템 대화상자로 타일 추가 요청 (그 이하는 사용자가 빠른 설정 편집에서 직접 추가)
+    private fun requestAddTile() {
+        if (Build.VERSION.SDK_INT < 33) return
+        val sbm = getSystemService(android.app.StatusBarManager::class.java)
+        sbm.requestAddTileService(android.content.ComponentName(this, CaptureTileService::class.java), "포고박사 캡처", android.graphics.drawable.Icon.createWithResource(this, R.drawable.ic_notif), mainExecutor) { r ->
+            status = when (r) { android.app.StatusBarManager.TILE_ADD_REQUEST_RESULT_TILE_ADDED -> "타일이 추가되었습니다"; android.app.StatusBarManager.TILE_ADD_REQUEST_RESULT_TILE_ALREADY_ADDED -> "이미 추가된 타일입니다"; else -> "타일 추가 안 됨 (코드 $r) — 빠른 설정 편집에서 직접 추가" }
+        }
+    }
     private fun stopCapture() { startService(Intent(this, CaptureService::class.java).setAction(CaptureService.ACTION_STOP)); running = false; status = "중지됨" }
 
     @Composable
@@ -92,6 +100,7 @@ class MainActivity : ComponentActivity() {
         var server by remember { mutableStateOf(prefs.serverUrl) }
         var deviceName by remember { mutableStateOf(prefs.deviceName) }
         var debug by remember { mutableStateOf(prefs.debugMode) }
+        var delayMs by remember { mutableStateOf(prefs.captureDelayMs.toString()) }
         var busy by remember { mutableStateOf(false) }
         var log by remember { mutableStateOf("") }
         val scroll = rememberScrollState()
@@ -128,10 +137,21 @@ class MainActivity : ComponentActivity() {
             Card(Modifier.fillMaxWidth()) {
                 Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Text(if (running) "🟢 오버레이 실행 중" else "⚪ 오버레이 꺼짐", fontSize = 16.sp)
-                    Text("1) 다른 앱 위에 표시 허용 → 2) 화면 캡처 허용 → 3) 포켓몬GO 에서 포켓몬 상세 화면을 열고 ⚡ 버튼. 평가(감정) 화면에서 한 번 더 누르면 개체값을 확정합니다. 연결 전에도 분석은 되고 저장만 막힙니다.", fontSize = 12.sp, color = Color(0xFF8899AA))
+                    Text("1) 다른 앱 위에 표시 허용 → 2) 화면 캡처 허용 → 3) 포켓몬GO 상세 화면에서 캡처(아래 타일 안내). 평가(감정) 화면에서 한 번 더 캡처하면 개체값을 확정합니다. 연결 전에도 분석은 되고 저장만 막힙니다.", fontSize = 12.sp, color = Color(0xFF8899AA))
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         Button(enabled = !running, onClick = { startCapture() }) { Text("오버레이 시작") }
                         OutlinedButton(enabled = running, onClick = { stopCapture() }) { Text("중지") }
+                    }
+                }
+            }
+
+            Card(Modifier.fillMaxWidth()) {
+                Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text("📱 포켓몬GO 위에서는 빠른 설정 타일을 쓰세요", fontSize = 16.sp)
+                    Text("포켓몬GO 는 실행 중 다른 앱의 떠 있는 창을 숨깁니다(Android 12+). 그래서 ⚡ 버튼과 결과 카드는 포켓몬GO 위에서 보이지 않습니다. 대신 화면 위에서 아래로 쓸어내린 빠른 설정의 \"포고박사 캡처\" 타일(또는 알림의 \"캡처\" 버튼)을 누르면 알림창이 닫히고 ${prefs.captureDelayMs}ms 뒤 1장을 캡처해 결과를 반투명 창으로 보여줍니다.", fontSize = 12.sp, color = Color(0xFF8899AA))
+                    Text("타일 추가: 빠른 설정 패널 펼치기 → 연필(편집) 또는 ⋮ → 타일 편집 → \"포고박사 캡처\" 를 끌어다 놓기. 타일은 오버레이가 실행 중일 때만 켜집니다.", fontSize = 12.sp, color = Color(0xFF8899AA))
+                    if (Build.VERSION.SDK_INT >= 33) {
+                        OutlinedButton(onClick = { requestAddTile() }) { Text("타일 추가 요청 (Android 13+)") }
                     }
                 }
             }
@@ -145,6 +165,10 @@ class MainActivity : ComponentActivity() {
                         OutlinedButton(enabled = !busy, onClick = { busy = true; lifecycleScope.launch { try { val d = withContext(Dispatchers.IO) { repo.refresh(api, force = true) }; status = "데이터 갱신: 종 ${d.species.size} · 기술명 ${d.allMoveNamesKr.size} (${d.generatedAt ?: "시각 미상"})" } catch (e: Exception) { status = "데이터 갱신 실패: ${e.message}" }; busy = false } }) { Text("데이터 갱신") }
                     }
                     Text("캐시: " + (repo.loadCached()?.let { "종 ${it.species.size}" } ?: "없음"), fontSize = 12.sp, color = Color(0xFF8899AA))
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        OutlinedTextField(value = delayMs, onValueChange = { delayMs = it.filter { ch -> ch.isDigit() } }, label = { Text("타일 캡처 지연(ms, 100~5000)") }, modifier = Modifier.weight(1f))
+                        OutlinedButton(modifier = Modifier.padding(top = 8.dp), onClick = { prefs.captureDelayMs = delayMs.toIntOrNull() ?: 800; delayMs = prefs.captureDelayMs.toString(); status = "캡처 지연 ${prefs.captureDelayMs}ms 저장" }) { Text("저장") }
+                    }
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         Text("디버그 모드 (인식 텍스트·결과를 기기에 기록)", fontSize = 13.sp, modifier = Modifier.padding(top = 12.dp))
                         Switch(checked = debug, onCheckedChange = { debug = it; prefs.debugMode = it })

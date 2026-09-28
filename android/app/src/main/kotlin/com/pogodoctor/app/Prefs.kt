@@ -31,6 +31,11 @@ class Prefs(ctx: Context) {
         get() = plain.getString("device_name", android.os.Build.MODEL ?: "Android")!!
         set(v) = plain.edit().putString("device_name", v).apply()
 
+    // 빠른 설정 타일·알림 "캡처" 후 실제 캡처까지 지연(ms): 알림창·트램펄린이 닫힐 시간
+    var captureDelayMs: Int
+        get() = plain.getInt("capture_delay_ms", 800).coerceIn(100, 5000)
+        set(v) = plain.edit().putInt("capture_delay_ms", v.coerceIn(100, 5000)).apply()
+
     var debugMode: Boolean
         get() = plain.getBoolean("debug", false)
         set(v) = plain.edit().putBoolean("debug", v).apply()
