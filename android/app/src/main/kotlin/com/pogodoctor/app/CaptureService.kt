@@ -35,6 +35,7 @@ import android.graphics.Paint
 import android.util.Base64
 import android.os.BatteryManager
 import com.pogodoctor.core.IvCalc
+import com.pogodoctor.core.ScanGate
 import com.pogodoctor.core.Appraisal
 import com.pogodoctor.core.BarReader
 import com.pogodoctor.core.Merge
@@ -167,7 +168,7 @@ class CaptureService : Service() {
     private var scanStartedAt = 0L
     private fun startScan() {
         val session = ScanSession(); session.metrics.batteryStart = batteryPct()
-        scan = session; scanning = true; scanStartedAt = System.currentTimeMillis()
+        scan = session; scanning = true; scanStartedAt = System.currentTimeMillis(); gate = ScanGate(prefs.scanStableMs.toLong())
         hideCard(); bubble?.text = "📷"
         if (prefs.scanStrip) showStrip()   // 상단 띠는 기본 끔(설정에서 켜기). 결과는 알림 한 줄
         queue.start(scope)
@@ -210,17 +211,17 @@ class CaptureService : Service() {
             handler.postDelayed(this, prefs.scanIntervalMs.toLong())
         }
     }
-    // 픽셀 기반 평가 화면 판별: 하단 막대 영역(0.62H~0.86H)에 막대 픽셀(채움/빈칸) 30px 이상인 행이 3줄 이상 → 평가 화면일 가능성. OCR 전 값싼 필터
-    private fun looksLikeAppraisal(bmp: Bitmap): Boolean {
-        val px = BarReader.PixelSource { x, y -> bmp.getPixel(x, y) }
-        val xs = (bmp.width * 0.05).toInt(); val xe = (bmp.width * 0.6).toInt()
-        var rows = 0
-        var y = (bmp.height * 0.62).toInt()
-        while (y < bmp.height * 0.86) { if (BarReader.readRow(px, y, xs, xe).value != null) { rows++; if (rows >= 3) return true }; y += 6 }
-        return false
+    // 4-B3 게이트: 막대 3개 판독값 + 이름 줄 해시 서명이 직전 확정과 다르고 scanStableMs(400) 동안 동일하면 분석
+    private var gate: ScanGate? = null
+    private var parserCache: Pair<String?, ScreenParser>? = null
+    private fun parserFor(data: DataRepo.Data): ScreenParser {
+        val c = parserCache
+        if (c != null && c.first == data.generatedAt) return c.second
+        return ScreenParser(data.species, data.allMoveNamesKr).also { parserCache = data.generatedAt to it }
     }
     private fun scanFrame() {
         val session = scan ?: return
+        val g = gate ?: ScanGate(prefs.scanStableMs.toLong()).also { gate = it }
         scanBusy = true
         scope.launch {
             try {
@@ -229,53 +230,70 @@ class CaptureService : Service() {
                 if (t0 - scanStartedAt < 1500) return@launch
                 val bmp = captureOnce() ?: return@launch
                 val t1 = System.currentTimeMillis()
-                val fp = withContext(Dispatchers.Default) { ScanSession.fingerprint(bmp) }
+                val band = session.nameBand ?: ScanSession.defaultBand(bmp.width, bmp.height)
+                val sig = withContext(Dispatchers.Default) { ScanSession.signature(bmp, band) }
                 val t2 = System.currentTimeMillis()
                 session.metrics.frames++; session.metrics.captureMs += t1 - t0; session.metrics.fpMs += t2 - t1
-                if (!session.shouldAnalyze(fp, t2, prefs.scanStableMs.toLong())) return@launch
+                val d = g.offer(sig, t2)
+                when (d.reason) {
+                    ScanGate.Reason.NOT_APPRAISAL -> { session.metrics.gateNotAppraisal++; return@launch }
+                    ScanGate.Reason.UNSTABLE -> {
+                        session.metrics.gateUnstable++
+                        // 서명이 2초 이상 계속 바뀌면(게이트 장기 대기) 디버그 모드에서 5초에 1장 업로드 (세션 최대 20장)
+                        if (prefs.debugMode && g.waitingTooLong(t2, 2000) && t2 - session.lastWaitUploadAt > 5000 && session.metrics.debugUploads < 20) {
+                            session.lastWaitUploadAt = t2; session.metrics.debugUploads++
+                            uploadDebug("scan-wait", emptyList(), "게이트 대기 ≥2s · 서명 막대 ${sig.atk}/${sig.def}/${sig.sta} 이름해시 ${sig.nameHash}", bmp)
+                        }
+                        return@launch
+                    }
+                    ScanGate.Reason.SAME_AS_CONFIRMED -> { session.metrics.gateSame++; return@launch }
+                    ScanGate.Reason.OPEN -> { session.metrics.gateOpen++ }
+                }
                 if (averageBrightness(bmp) <= BLACK_THRESHOLD) { session.lastLine = "⛔ 캡처 차단(검은 화면)"; refreshScanLine(); return@launch }
-                val isApp = withContext(Dispatchers.Default) { looksLikeAppraisal(bmp) }
-                session.metrics.prefilterMs += System.currentTimeMillis() - t2
-                if (!isApp) { session.metrics.prefiltered++; session.lastAnalyzedFp = fp; return@launch } // 평가 화면 아님(알림창·상세 화면 등) → OCR 생략
-                session.lastAnalyzedFp = fp
-                scanAnalyze(session, bmp)
+                g.confirm(sig)   // 성공·실패 무관, 같은 서명으로 다시 열리지 않음(새 막대값·이름이면 다시 열림)
+                scanAnalyze(session, bmp, sig)
             } catch (e: Exception) {
                 DebugLog.add(this@CaptureService, "scan-error", emptyList(), "", e.toString())
             } finally { scanBusy = false }
         }
     }
-    private suspend fun scanAnalyze(session: ScanSession, bmp: Bitmap) {
+    private fun scanFail(session: ScanSession, why: String, lines: List<com.pogodoctor.core.OcrLine>, bmp: Bitmap, detail: String) {
+        session.lastLine = why; refreshScanLine()
+        if (prefs.debugMode && session.metrics.debugUploads < 20) { session.metrics.debugUploads++; uploadDebug("scan-fail", lines, "$why · $detail", bmp) }
+    }
+    private suspend fun scanAnalyze(session: ScanSession, bmp: Bitmap, sig: ScanGate.Signature) {
         val data = repo.loadCached() ?: return
         val t0 = System.currentTimeMillis()
         val lines = Ocr.recognize(bmp)
         val t1 = System.currentTimeMillis()
-        val parser = ScreenParser(data.species, data.allMoveNamesKr)
+        val parser = parserFor(data)
         var info = parser.parse(lines)
         val t2 = System.currentTimeMillis()
         session.metrics.analyses++; session.metrics.ocrMs += t1 - t0; session.metrics.parseMs += t2 - t1
-        if (info.kind != ScreenInfo.Kind.APPRAISAL) { session.lastLine = "평가 화면(막대 3개)이 아닙니다"; refreshScanLine(); return }
+        if (info.kind != ScreenInfo.Kind.APPRAISAL) { session.metrics.failNotAppraisal++; scanFail(session, "평가 화면(막대 3개)이 아닙니다", lines, bmp, "OCR 라벨 없음"); return }
         val labels = lines.filter { ScreenParser.isLabelLine(it) }
         val reading = withContext(Dispatchers.Default) { BarReader.readAppraisal({ x, y -> if (x in 0 until bmp.width && y in 0 until bmp.height) bmp.getPixel(x, y) else 0 }, bmp.width, bmp.height, labels) }
         val t3 = System.currentTimeMillis()
-        session.metrics.barMs += t3 - t2   // 막대 픽셀 판독만 (파싱은 parseMs 로 분리 — 이전 측정은 파싱 시간이 섞여 OCR 과 같은 값이 찍혔음)
+        session.metrics.barMs += t3 - t2
         val ap = reading.appraisal
         val apA = ap.atk; val apD = ap.def; val apS = ap.sta   // 다른 모듈의 public 프로퍼티는 스마트 캐스트 불가 → 지역 val
-        if (apA == null || apD == null || apS == null) { session.lastLine = "막대 판독 대기(애니메이션)"; refreshScanLine(); session.lastAnalyzedFp = null; return }
-        // 막대 안정: 직전 분석과 같은 값이어야 기록 (채움 애니메이션 종료 확인). 다르면 다음 프레임에서 재확인
-        if (session.lastBars != ap) { session.lastBars = ap; session.lastAnalyzedFp = null; return }
+        if (apA == null || apD == null || apS == null) { session.metrics.failNotAppraisal++; scanFail(session, "막대 판독 실패", lines, bmp, reading.detail); return }
         info = parser.parse(lines, ap)
         session.metrics.parseMs += System.currentTimeMillis() - t3
+        // 이름 줄 띠 학습: 인식된 이름 줄의 박스(위아래 여유 4px)를 다음 프레임 서명에 사용
+        info.nameRaw?.let { raw -> lines.firstOrNull { it.text.trim() == raw }?.let { l -> if (l.height in 10..200) session.nameBand = intArrayOf(l.top - 4, l.bottom + 4, maxOf(0, l.left - 8), l.right + 8) } }
         val sp = info.species
-        if (sp == null) { session.lastLine = "종 미인식(${info.nameRaw ?: "?"}) · 후보 ${info.speciesCandidates.map { it.nameKr }}"; refreshScanLine(); return }
+        if (sp == null) { session.metrics.failNoSpecies++; scanFail(session, "종 미인식(${info.nameRaw ?: "?"}) · 후보 ${info.speciesCandidates.map { it.nameKr }}", lines, bmp, "막대 ${reading.detail}"); return }
         val cp = info.cp
         // CP 가 배너에 가려진 프레임도 막대+HP 로 레벨 범위 기록("CP 미확인"). 같은 개체를 이후 CP 까지 읽으면 서버가 그 기록을 갱신한다
-        if (cp == null) session.metrics.skippedNoCp++
+        if (cp == null) { session.metrics.skippedNoCp++; session.metrics.failNoCp++ }
         val key = ScanSession.scanKey(sp, cp, info.hp, ap, false)
-        if (session.isDuplicate(key)) { session.metrics.duplicates++; session.lastLine = "같은 개체(이미 기록)"; refreshScanLine(); return }
+        if (session.isDuplicate(key)) { session.metrics.duplicates++; session.metrics.failDuplicate++; session.lastLine = "같은 개체(이미 기록)"; refreshScanLine(); return }
         // CP/HP 로 레벨 교차 확인: 막대 개체값과 성립하는 후보가 없으면 "재확인 필요"
         val base = IvCalc.Base(sp.atk, sp.def, sp.sta)
         var cands: List<IvCalc.Candidate> = if (cp != null) IvCalc.filterByAppraisal(IvCalc.candidates(base, cp, info.hp), apA, apD, apS) else emptyList()
         val recheck = cp != null && cands.isEmpty()
+        if (recheck) session.metrics.failMismatch++
         if (cands.isEmpty()) cands = IvCalc.candidatesWithoutCp(base, info.hp, ap)
         val pct = Math.round((apA + apD + apS) * 100.0 / 45)
         val body = session.body(sp, info, ap, cands, reading.stars, recheck)
@@ -285,7 +303,10 @@ class CaptureService : Service() {
         vibrateShort()
         session.lastLine = "방금 ${sp.nameKr} ${pct}%${if (cp == null) " (CP 미확인)" else " CP$cp"}${if (recheck) " ⚠️재확인" else ""}"
         refreshScanLine()
-        if (prefs.debugMode) { DebugLog.add(this, "scan-item", lines.map { it.text }, "$key 막대 ${reading.detail} 후보 ${cands.size} 재확인=$recheck"); uploadDebug("scan", lines, "$key · 막대 ${reading.detail}", bmp) }
+        if (prefs.debugMode) {
+            DebugLog.add(this, "scan-item", lines.map { it.text }, "$key 막대 ${reading.detail} 서명 ${sig.atk}/${sig.def}/${sig.sta} 후보 ${cands.size} 재확인=$recheck")
+            if (recheck && session.metrics.debugUploads < 20) { session.metrics.debugUploads++; uploadDebug("scan-fail", lines, "막대-CP 모순 $key · ${reading.detail}", bmp) }
+        }
     }
     // 작은 띠 오버레이: 터치 통과(FLAG_NOT_TOUCHABLE), 불투명도 0.8 (Android 12 untrusted touch 규칙). 포켓몬GO 가 숨기면 알림만 보인다
     private fun showStrip() {

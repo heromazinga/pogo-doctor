@@ -17,6 +17,7 @@ class ScanQueue(private val ctx: Context, private val prefs: Prefs) {
     data class Stats(val pending: Int, val sent: Int, val failed: Int, val lastError: String?)
 
     private val file = File(ctx.filesDir, "scan-queue.jsonl")
+    private val rejectedFile = File(ctx.filesDir, "scan-rejected.jsonl")   // 4xx 거부 항목 최근 50건 (확인용, 재전송 안 함)
     private val lock = Any()
     private val entries = ArrayList<Entry>()
     @Volatile var sent = 0; private set
@@ -70,7 +71,7 @@ class ScanQueue(private val ctx: Context, private val prefs: Prefs) {
                 } catch (e: Api.ApiException) {
                     // 4xx(검증 실패 등)는 재시도해도 같으므로 버린다. 401 은 토큰 문제 → 중단
                     if (e.status == 401) { lastError = "기기 토큰 무효"; break }
-                    if (e.status in 400..499 && e.status != 429) { synchronized(lock) { entries.remove(head) }; persist(); lastError = "거부됨(${e.status}): ${e.message}"; failedAttempts++; onChange?.invoke(); continue }
+                    if (e.status in 400..499 && e.status != 429) { synchronized(lock) { entries.remove(head) }; persist(); logRejected(head, e); lastError = "거부됨(${e.status}): ${e.message}"; failedAttempts++; onChange?.invoke(); continue }
                     head.attempts++; failedAttempts++; lastError = e.message; persist(); onChange?.invoke()
                     delay(backoff); backoff = minOf(60000L, backoff * 2)
                 } catch (e: Exception) {
@@ -81,4 +82,17 @@ class ScanQueue(private val ctx: Context, private val prefs: Prefs) {
         }
     }
     fun stop() { worker?.cancel(); worker = null }
+
+    private fun logRejected(e: Entry, ex: Api.ApiException) {
+        synchronized(lock) {
+            runCatching {
+                val lines = (if (rejectedFile.exists()) rejectedFile.readLines().filter { it.isNotBlank() } else emptyList()).takeLast(49)
+                val rec = JSONObject().put("at", System.currentTimeMillis()).put("kind", e.kind).put("status", ex.status).put("error", ex.message).put("body", e.body).toString()
+                rejectedFile.writeText((lines + rec).joinToString("\n") + "\n")
+            }
+        }
+    }
+    fun rejectedCount(): Int = synchronized(lock) { if (rejectedFile.exists()) rejectedFile.readLines().count { it.isNotBlank() } else 0 }
+    fun rejectedText(): String = synchronized(lock) { if (rejectedFile.exists()) rejectedFile.readLines().filter { it.isNotBlank() }.takeLast(50).joinToString("\n") else "" }
+    fun clearRejected() { synchronized(lock) { rejectedFile.delete() } }
 }

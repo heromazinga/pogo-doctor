@@ -36,6 +36,7 @@ data class Appraisal(val atk: Int?, val def: Int?, val sta: Int?)
 class ScreenParser(private val species: List<SpeciesRef>, private val allMoveNamesKr: Collection<String>) {
     private val speciesByName: Map<String, SpeciesRef> = species.associateBy { Fuzzy.normalize(it.nameKr) }
     private val speciesNames: List<String> = species.map { it.nameKr }.distinct()
+    private val nameIndex = NameIndex(speciesNames)   // 4-B3: 자모 색인으로 후보를 줄여 편집 거리 계산 (파싱 543ms → 수십 ms 목표)
 
     companion object {
         val CP_RE = Regex("(?:CP|cp|Cp|cP|ＣＰ)\\s*([0-9]{1,5})")
@@ -102,14 +103,13 @@ class ScreenParser(private val species: List<SpeciesRef>, private val allMoveNam
         var bestName: Fuzzy.Match? = null; var nameRaw: String? = null
         val ranked = ArrayList<Pair<SpeciesRef, Double>>()
         for (l in nameCands) {
-            val m = Fuzzy.best(l.text, speciesNames, 0.0) ?: continue
+            val m = nameIndex.best(l.text, 0.0) ?: continue
             if (bestName == null || m.score > bestName!!.score) { bestName = m; nameRaw = l.text.trim() }
         }
         // 종 보정: 이름 유사도 상위 후보(≥0.4) 중 CP/HP(·막대)와 성립하는 종만 남긴다
         if (nameRaw != null) {
             val q = nameRaw!!
-            for (sp in species) { val sc = Fuzzy.similarity(q, sp.nameKr); if (sc >= 0.4) ranked.add(sp to sc) }
-            ranked.sortByDescending { it.second }
+            for (m in nameIndex.rank(q, 0.4, 8)) speciesByName[Fuzzy.normalize(m.value)]?.let { ranked.add(it to m.score) }
         }
         val top = ranked.take(8)
         val consistent = if (cp != null) top.filter { IvCalc.consistent(IvCalc.Base(it.first.atk, it.first.def, it.first.sta), cp, hp, appraisalBars) } else top
@@ -138,6 +138,7 @@ class ScreenParser(private val species: List<SpeciesRef>, private val allMoveNam
             }
         }
         if (bestName != null && bestName!!.score < 0.6 && sp == null) warnings.add("이름 인식 불확실: \"$nameRaw\" (유사 ${bestName!!.value} ${(bestName!!.score * 100).toInt()}%) — 닉네임이면 종을 직접 선택")
+        else if (bestName == null && nameCands.isNotEmpty()) { nameRaw = nameCands.first().text.trim(); warnings.add("이름 인식 불확실: \"$nameRaw\" (유사한 종 이름 없음) — 닉네임이면 종을 직접 선택") }
 
         // 기술: 종의 기술 목록 우선, 없으면 전체 기술명. HP 줄 아래에서 찾는다 (평가 화면에서는 가려져 미인식이 정상)
         val movePool = sp?.moveNamesKr?.takeIf { it.isNotEmpty() } ?: allMoveNamesKr

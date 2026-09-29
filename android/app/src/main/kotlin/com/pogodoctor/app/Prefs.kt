@@ -47,7 +47,7 @@ class Prefs(ctx: Context) {
         set(v) = plain.edit().putInt("scan_interval_ms", v.coerceIn(250, 2000)).apply()
     // 연속 스캔 안정 대기(ms): 화면 지문이 이 시간 이상 같아야 분석 (넘기는 도중·애니메이션 프레임 제외)
     var scanStableMs: Int
-        get() = plain.getInt("scan_stable_ms", 500).coerceIn(200, 3000)
+        get() = plain.getInt("scan_stable_ms", 400).coerceIn(200, 3000)
         set(v) = plain.edit().putInt("scan_stable_ms", v.coerceIn(200, 3000)).apply()
     var scanVibrate: Boolean
         get() = plain.getBoolean("scan_vibrate", true)

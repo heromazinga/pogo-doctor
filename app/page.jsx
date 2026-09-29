@@ -1922,9 +1922,12 @@ export default function Home() {
             {scanSessions.length > 0 && (
               <details style={{ marginBottom: 10 }}>
                 <summary style={{ fontSize: 11, color: "#8899aa", cursor: "pointer" }}>📈 세션 측정값 ({scanSessions.length})</summary>
-                {scanSessions.map((ss) => { const m = ss.metrics || {}; const a = m.avgMs || {}; return (
+                {scanSessions.map((ss) => { const m = ss.metrics || {}; const a = m.avgMs || {}; const g = m.gate; const f = m.fail; return (
                   <div key={ss.session_id} style={{ fontSize: 10, color: "#8899aa", padding: "4px 0", borderBottom: "1px solid #1e2a44" }}>
-                    <b style={{ color: "#c8d6e5" }}>{ss.session_id}</b> · {m.minutes}분 · 프레임 {m.frames}(평가 아님 {m.prefiltered ?? "-"}) · 분석 {m.analyses} · 기록 {m.recorded} (중복 {m.duplicates}, CP 미확인 {m.noCp}) · 평균 ms 캡처 {a.capture} 지문 {a.fingerprint} 판별 {a.prefilter ?? "-"} OCR {a.ocr} 파싱 {a.parse ?? "-"} 막대 {a.bars} · 전송 {m.queue?.sent}/대기 {m.queue?.pending} · 배터리 {m.battery?.start}%→{m.battery?.end}%
+                    <b style={{ color: "#c8d6e5" }}>{ss.session_id}</b> · {m.minutes}분 · 프레임 {m.frames} · 분석 {m.analyses} · 기록 {m.recorded} (중복 {m.duplicates}, CP 미확인 {m.noCp})
+                    {g && <> · 게이트 미개방: 불안정 {g.unstable} / 직전과 동일 {g.same} / 평가 화면 아님 {g.notAppraisal} (열림 {g.open})</>}
+                    {f && <> · 분석 실패: 평가 아님 {f.notAppraisal} / 종 미확정 {f.noSpecies} / CP 없음 {f.noCp} / 막대-CP 모순 {f.mismatch} / 중복 {f.duplicate}</>}
+                    {" "}· 평균 ms 캡처 {a.capture} 서명 {a.fingerprint} OCR {a.ocr} 파싱 {a.parse ?? "-"} 막대 {a.bars} · 전송 {m.queue?.sent}/대기 {m.queue?.pending} · 배터리 {m.battery?.start}%→{m.battery?.end}%{m.debugUploads ? ` · 디버그 업로드 ${m.debugUploads}` : ""}
                   </div>
                 ); })}
               </details>
