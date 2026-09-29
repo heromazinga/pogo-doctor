@@ -13,6 +13,8 @@ import { ivCandidates, ivPercent, calcHP } from "./ivCalc.js";
 import { matchEvents } from "./eventTargets.js";
 
 const TIER_ORDER = { main: 3, hold: 2, transfer: 1, need_appraisal: 0 };
+// 기준값 조회: ctx.rulesOverride 로 일부 상수를 덮어쓸 수 있다 (수정 전후 분포 비교용 /api/verdict/stats)
+const rule = (ctx, k) => (ctx?.rulesOverride && ctx.rulesOverride[k] != null ? ctx.rulesOverride[k] : RULES[k]);
 const better = (a, b) => (TIER_ORDER[a] >= TIER_ORDER[b] ? a : b);
 
 // ─── 리그 스탯곱 순위 (종·리그·레벨 상한별 4096 조합, 메모) ───
@@ -105,8 +107,11 @@ function evaluateCandidate(p, cand, input, ctx, rankings, { forEvolve = false } 
     const top = sp.rank <= RULES.RAID_TOP_RANK && sp.pct >= RULES.RAID_TOP_SCORE_PCT;
     const mid = sp.rank <= RULES.RAID_MID_RANK && sp.pct >= RULES.RAID_MID_SCORE_PCT;
     if (!top && !mid) continue;
+    // 4-B6: 공격 IV 하한 (레이드 대미지는 공격에 비례). 미만이면 태그 없음, 주력은 별도 하한
+    const minAtk = rule(ctx, "RAID_MIN_ATK_IV"), mainMinAtk = rule(ctx, "RAID_MAIN_MIN_ATK_IV");
+    if (cand.atk < minAtk) continue;
     const indiv = indivRankBy(sameSpecies, p, (r) => ({ primary: Number.isInteger(r.atk_iv) ? r.atk_iv : -1, level: rowLevel(r, p) }), { primary: cand.atk, level: cand.level });
-    const tier = top && indiv <= RULES.RAID_MAIN_INDIV_RANK ? "main" : "hold";
+    const tier = top && indiv <= RULES.RAID_MAIN_INDIV_RANK && cand.atk >= mainMinAtk ? "main" : "hold";
     const kr = TYPE_NAMES_KR[t];
     const notes = [];
     let myScore = null;

@@ -58,3 +58,24 @@ class Phase4b5Test {
         assertTrue(IvCalc.candidatesWithoutCp(base, 161, Appraisal(15, 14, 0)).isEmpty())
     }
 }
+
+class Phase4b6Test {
+    @Test fun game_tag_chips_from_ocr_text() {
+        val lines = listOf(OcrLine("CP 2081", 0, 60, 100, 100), OcrLine("디안시", 0, 700, 100, 740), OcrLine("불꽃 레이드", 40, 820, 200, 850), OcrLine("슈퍼리그 · 교환용", 40, 860, 300, 890),
+            OcrLine("HP 102 / 102", 0, 780, 100, 810), OcrLine("공격", 0, 1120, 80, 1140), OcrLine("내맘대로태그", 40, 900, 200, 930))
+        assertEquals(listOf("불꽃 레이드", "슈퍼리그", "교환용"), GameTags.detect(lines))
+        assertEquals(listOf("불꽃 레이드", "슈퍼리그", "교환용", "내맘대로태그"), GameTags.detect(lines, listOf("내맘대로태그")))
+        assertTrue(GameTags.detect(listOf(OcrLine("공격", 0, 0, 10, 10), OcrLine("HP 10/10", 0, 0, 10, 10))).isEmpty())
+        assertEquals(listOf("불꽃 레이드"), GameTags.detect(listOf(OcrLine("불꽃  레이드", 0, 0, 10, 10))), "공백 차이 무시")
+    }
+
+    @Test fun search_builder_loose_mode_reports_overlap_and_strict_splits() {
+        val t = { id: String, sp: Int, hp: Int -> SearchBuilder.Item(id, sp, hp, null, false) }
+        val targets = listOf(t("a", 700, 154), t("b", 381, 118))
+        val population = targets + listOf(t("x", 700, 118), t("y", 700, 118))
+        val loose = SearchBuilder.buildGroups(targets, population, strict = false)
+        assertEquals(1, loose.groups.size); assertEquals(2, loose.groups[0].overlap); assertEquals(0, loose.skipped.size)
+        val strict = SearchBuilder.buildGroups(targets, population, strict = true)
+        assertEquals(2, strict.groups.size); assertTrue(strict.groups.all { it.overlap == 0 })
+    }
+}

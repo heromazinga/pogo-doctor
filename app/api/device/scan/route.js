@@ -1,6 +1,6 @@
 import { NextResponse, after } from "next/server";
 import { getServiceClient } from "../../../lib/supabaseServer";
-import { rateLimit, clientIp, validDate } from "../../../lib/deviceAuth";
+import { rateLimit, clientIp, validDate, validTags } from "../../../lib/deviceAuth";
 import { userFromDeviceToken } from "../../../lib/deviceServer";
 import { scanKey } from "../../../lib/pokemonMatch";
 import { buildVerdictContext } from "../../../lib/verdictContext";
@@ -31,6 +31,7 @@ export async function POST(req) {
   if (b.level != null && !(typeof b.level === "number" && b.level >= 1 && b.level <= 51)) errors.push("level");
   if (!optInt(b.stars, 0, 3)) errors.push("stars");
   if (b.caught_on != null && !validDate(b.caught_on)) errors.push("caught_on");
+  if (b.game_tags != null && !validTags(b.game_tags)) errors.push("game_tags 는 1~24자 문자열 최대 8개");
   if (errors.length) return NextResponse.json({ error: "필드 검증 실패", details: errors }, { status: 400 });
 
   const item = {
@@ -38,6 +39,7 @@ export async function POST(req) {
     species_id: b.species_id, form: (b.form || "Normal").trim() || "Normal", name_kr: b.name_kr.trim().slice(0, 60),
     cp: b.cp ?? null, hp: b.hp ?? null, atk_iv: anyIv ? b.atk_iv : null, def_iv: anyIv ? b.def_iv : null, sta_iv: anyIv ? b.sta_iv : null,
     level: b.level ?? null, stars: b.stars ?? null, is_shadow: Boolean(b.is_shadow), caught_on: b.caught_on || null, recheck: Boolean(b.recheck), dismissed: false,
+    game_tags: Array.isArray(b.game_tags) ? b.game_tags.map((t) => String(t).trim()).filter(Boolean).slice(0, 8) : [],
   };
   item.scan_key = scanKey(item);
   // 4-B2: 응답은 insert/매칭만(목표 300ms 이하). 판정은 응답 후 after() 에서 계산해 verdict 컬럼에 채운다(웹 조회 시 비어 있으면 그때 계산).

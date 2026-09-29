@@ -112,6 +112,8 @@ class ScanSession(val id: String = newId()) {
         stars?.let { b.put("stars", it) }
         info.caughtOn?.let { b.put("caught_on", it) }
         b.put("recheck", recheck)
+        // 4-B6: 화면에서 읽은 게임 태그 칩(알려진 태그 이름과 일치하는 OCR 줄). 있으면 서버가 박사행·검색 묶음에서 제외한다
+        if (info.gameTags.isNotEmpty()) b.put("game_tags", JSONArray(info.gameTags.take(8)))
         if (cands.isNotEmpty()) { val arr = JSONArray(); for (c in cands.take(100)) arr.put(JSONObject().put("level", c.level).put("atk", c.atk).put("def", c.def).put("sta", c.sta)); b.put("ivCandidates", arr) }
         return b
     }

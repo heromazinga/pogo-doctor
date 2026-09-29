@@ -26,6 +26,7 @@ data class ScreenInfo(
     val speciesCandidates: List<SpeciesRef> = emptyList(), // CP/HP 와 성립하는 종 후보(여러 개면 사용자 선택)
     val caughtOn: String? = null, // 포획 날짜(YYYY-MM-DD, 기기 내 판독). 장소는 보관하지 않는다
     val cpTruncated: Boolean = false,
+    val gameTags: List<String> = emptyList(), // 4-B6: 화면의 게임 태그 칩 이름(알려진 태그 문자열과 일치하는 OCR 줄)
 ) {
     enum class Kind { DETAIL, APPRAISAL, UNKNOWN }
 }
@@ -97,7 +98,8 @@ class ScreenParser(private val species: List<SpeciesRef>, private val allMoveNam
         // 이름: CP 줄 아래 ~ HP 줄 위의 한글 줄 중 종 이름과 가장 유사한 것 (라벨·포획 줄 제외)
         val cpLine = lines.firstOrNull { CP_RE.containsMatchIn(fixDigits(it.text)) }
         val hpLine = lines.firstOrNull { HP_RE.containsMatchIn(fixDigits(it.text)) || HP_RE2.containsMatchIn(fixDigits(it.text)) }
-        fun nameLike(l: OcrLine): Boolean { val t = l.text.trim(); return t.length in 2..12 && t.any { it in '가'..'힣' } && NOISE.none { t.contains(it) } && !isLabelLine(l) && !isCaughtLine(l) && !CP_RE.containsMatchIn(t) && !HP_RE2.containsMatchIn(t) }
+        val tagLines = GameTags.detect(lines).toSet()
+        fun nameLike(l: OcrLine): Boolean { val t = l.text.trim(); return t.length in 2..12 && t.any { it in '가'..'힣' } && NOISE.none { t.contains(it) } && !isLabelLine(l) && !isCaughtLine(l) && !CP_RE.containsMatchIn(t) && !HP_RE2.containsMatchIn(t) && GameTags.detect(listOf(l)).isEmpty() }
         val nameCands = lines.filter { l -> nameLike(l) && (cpLine == null || l.centerY > cpLine.centerY) && (hpLine == null || l.centerY < hpLine.centerY) }
             .ifEmpty { lines.filter { nameLike(it) } }
         var bestName: Fuzzy.Match? = null; var nameRaw: String? = null
@@ -161,6 +163,6 @@ class ScreenParser(private val species: List<SpeciesRef>, private val allMoveNam
         }
         if (cp == null && !cpTruncated) warnings.add("CP 를 찾지 못했습니다")
         if (hp == null) warnings.add("HP 를 찾지 못했습니다 (개체값 후보가 넓어집니다)")
-        return ScreenInfo(kind, cp, hp, nameRaw, sp, bestName?.score ?: 0.0, moves, appraisalBars, warnings, candidates, parseCaughtOn(lines), cpTruncated)
+        return ScreenInfo(kind, cp, hp, nameRaw, sp, bestName?.score ?: 0.0, moves, appraisalBars, warnings, candidates, parseCaughtOn(lines), cpTruncated, GameTags.detect(lines))
     }
 }

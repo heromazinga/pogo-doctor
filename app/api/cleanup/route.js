@@ -3,7 +3,7 @@ import { getServiceClient } from "../../lib/supabaseServer";
 import { rateLimit, clientIp } from "../../lib/deviceAuth";
 import { resolveUser, buildVerdictContext } from "../../lib/verdictContext";
 import { fillMissingVerdicts } from "../../lib/scanVerdict";
-import { buildCleanup, DEFAULT_MAX_LEN } from "../../lib/searchBuilder";
+import { buildCleanup, DEFAULT_MAX_LEN, EXPECTED_LIMIT_NOTE } from "../../lib/searchBuilder";
 import { computeVerdict, inputFromRow } from "../../lib/verdict";
 import { isLegendaryClass } from "../../lib/speciesRankings";
 import { findPokemon } from "../../lib/pokemonData";
@@ -27,17 +27,18 @@ export async function GET(req) {
   const legendaryOf = (r) => { const p = findPokemon(ctx.dataset, { id: r.species_id, form: r.form || "Normal" }); return p ? isLegendaryClass(p) : false; };
   // 대상: 스캔 항목(판정 있음) + 내 목록(판정은 여기서 계산; 박사행은 status=transfer 또는 판정 transfer)
   const scanTargets = items.map((it) => ({ id: `scan:${it.id}`, species_id: it.species_id, hp: it.hp, cp: it.cp, cpVerified: it.cp != null && !it.recheck, is_shadow: Boolean(it.is_shadow), form: it.form || "Normal",
-    verdict: it.verdict || {}, recheck: Boolean(it.recheck) || it.verdict?.tier === "need_appraisal", legendary: legendaryOf(it), name_kr: it.name_kr }));
+    verdict: it.verdict || {}, recheck: Boolean(it.recheck) || it.verdict?.tier === "need_appraisal", legendary: legendaryOf(it), name_kr: it.name_kr, game_tags: it.game_tags || [] }));
   const rowTargets = rows.map((r) => {
     let v = null; try { v = computeVerdict(inputFromRow(r, ctx.storageMode), ctx); } catch { v = null; }
     const verdict = r.status === "transfer" ? { tier: "transfer", recommendedTags: [], collect: v?.collect || [] } : (v ? { tier: v.tier, recommendedTags: r.tags?.length ? r.tags : v.recommendedTags, collect: v.collect } : {});
     return { id: `row:${r.id}`, species_id: r.species_id, hp: r.hp, cp: r.cp, cpVerified: r.cp != null, is_shadow: Boolean(r.is_shadow), form: r.form || "Normal",
-      verdict, recheck: v ? !v.confident : true, is_shiny: Boolean(r.is_shiny), is_lucky: Boolean(r.is_lucky), legendary: legendaryOf(r), name_kr: r.name_kr };
+      verdict, recheck: v ? !v.confident : true, is_shiny: Boolean(r.is_shiny), is_lucky: Boolean(r.is_lucky), legendary: legendaryOf(r), name_kr: r.name_kr, game_tags: r.game_tags || [] };
   });
   const all = [...scanTargets, ...rowTargets];
   const categories = buildCleanup(all, all, { maxLen });
   const names = Object.fromEntries(all.map((x) => [x.id, x.name_kr]));
-  return NextResponse.json({ categories, names, population: all.length, maxLen, at: new Date().toISOString() });
+  const gameTagged = all.filter((x) => (x.game_tags || []).length).length;
+  return NextResponse.json({ categories, names, population: all.length, gameTagged, maxLen, note: EXPECTED_LIMIT_NOTE, at: new Date().toISOString() });
 }
 
 export async function POST(req) {

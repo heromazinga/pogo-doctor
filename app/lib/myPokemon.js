@@ -5,10 +5,10 @@ import { getSupabase } from "./supabaseClient";
 export const STATUS_LABELS = { keep: "보관", transfer: "박사에게 보낼 예정" };
 export const PURPOSE_LABELS = { raid: "레이드", great: "슈퍼리그", ultra: "하이퍼리그", master: "마스터리그" };
 
-const COLUMNS = "id,species_id,form,name_kr,cp,atk_iv,def_iv,sta_iv,level,fast_move,charged_moves,is_shadow,is_purified,is_shiny,is_lucky,status,purposes,tags,hp,caught_on,source,memo,created_at,updated_at";
+const COLUMNS = "id,species_id,form,name_kr,cp,atk_iv,def_iv,sta_iv,level,fast_move,charged_moves,is_shadow,is_purified,is_shiny,is_lucky,status,purposes,tags,hp,caught_on,game_tags,source,memo,created_at,updated_at";
 // 마이그레이션 0004(tags/hp/caught_on) 미적용 DB 호환: 컬럼 오류면 구 컬럼으로 재시도
-const COLUMNS_LEGACY = COLUMNS.replace("tags,hp,caught_on,", "");
-const NEW_COLS = ["tags", "hp", "caught_on"];
+const COLUMNS_LEGACY = COLUMNS.replace("tags,hp,caught_on,game_tags,", "");
+const NEW_COLS = ["tags", "hp", "caught_on", "game_tags"];
 const isColumnError = (e) => /column|schema cache/i.test(String(e?.message || ""));
 const stripNew = (row) => { const r = { ...row }; for (const k of NEW_COLS) delete r[k]; return r; };
 export let schemaLegacy = false;

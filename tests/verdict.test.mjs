@@ -133,11 +133,26 @@ test("전설 5/7/3 (용도 없음) → 박사행 아님(보류) + 💎 교환용
   assert.equal(tagOf(v, TAG.gym), undefined, "전설은 체육관 방어 태그 없음");
 });
 
-test("전설 상위종(뮤츠) 5/7/3 → 에스퍼 레이드(종족 우선) + 💎 보관 권장, 마스터리그는 % 미달", () => {
+test("전설 상위종(뮤츠) 5/7/3 → 공격 IV 하한 미달로 레이드 태그 없음(4-B6), 보류 + 💎 교환용, 마스터리그는 % 미달", () => {
   const v = computeVerdict({ species_id: 150, ivs: { atk: 5, def: 7, sta: 3 }, level: 30 }, ctx());
-  assert.equal(tagOf(v, TAG.raid("에스퍼")).tier, "main");
+  assert.equal(tagOf(v, TAG.raid("에스퍼")), undefined);
   assert.equal(tagOf(v, TAG.master), undefined);
-  assert.ok(v.collect.some((c) => c.reason.includes("보관 권장")));
+  assert.equal(v.tier, "hold");
+  assert.ok(v.collect.some((c) => c.reason.startsWith("교환용")));
+  const v2 = computeVerdict({ species_id: 150, ivs: { atk: 12, def: 7, sta: 3 }, level: 30 }, ctx());
+  assert.equal(tagOf(v2, TAG.raid("에스퍼")).tier, "main");
+});
+
+test("4-B6 레이드 공격 IV 하한: 0/15/15 → 레이드 태그 없음, 10~11 → 보류(주력 불가), 12+ → 주력. 섀도도 동일. 기준 덮어쓰기(rulesOverride)", () => {
+  const none = computeVerdict({ species_id: 815, ivs: { atk: 0, def: 15, sta: 15 }, level: 40 }, ctx());
+  assert.equal(tagOf(none, TAG.raid("불꽃")), undefined, "저승갓숭 사례: 공격 0 은 레이드 묶음에 들어가면 안 됨");
+  assert.equal(tagOf(computeVerdict({ species_id: 815, ivs: { atk: 9, def: 15, sta: 15 }, level: 40 }, ctx()), TAG.raid("불꽃")), undefined);
+  assert.equal(tagOf(computeVerdict({ species_id: 815, ivs: { atk: 11, def: 15, sta: 15 }, level: 40 }, ctx()), TAG.raid("불꽃")).tier, "hold");
+  assert.equal(tagOf(computeVerdict({ species_id: 815, ivs: { atk: 12, def: 15, sta: 15 }, level: 40 }, ctx()), TAG.raid("불꽃")).tier, "main");
+  assert.equal(tagOf(computeVerdict({ species_id: 815, ivs: { atk: 11, def: 15, sta: 15 }, level: 40, is_shadow: true }, ctx()), TAG.raid("불꽃")).tier, "hold");
+  assert.equal(RULES.RAID_MIN_ATK_IV, 10); assert.equal(RULES.RAID_MAIN_MIN_ATK_IV, 12);
+  const before = computeVerdict({ species_id: 815, ivs: { atk: 0, def: 15, sta: 15 }, level: 40 }, ctx({ rulesOverride: { RAID_MIN_ATK_IV: 0, RAID_MAIN_MIN_ATK_IV: 0 } }));
+  assert.equal(tagOf(before, TAG.raid("불꽃")).tier, "main", "수정 전 기준 재현");
 });
 
 test("마스터리그: 뮤츠 96% → 주력, 93% → 보류", () => {

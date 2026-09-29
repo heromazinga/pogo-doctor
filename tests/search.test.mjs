@@ -61,3 +61,19 @@ test("분류: 박사행은 recheck·💎·이로치·럭키·전설 제외, 태�
   const all = buildCleanup(items, items);
   assert.equal(all[0].category, "transfer"); assert.ok(all.some((x) => x.category === "tag:불꽃 레이드"));
 });
+
+test("4-B6 strict=false(태그): 충돌이 있어도 묶음 생성 + overlap 표기, strict(박사행)는 쪼갬", () => {
+  const targets = [t("a", 700, 154), t("b", 381, 118)];
+  const population = [...targets, t("x", 700, 118), t("y", 700, 118)];
+  const loose = buildGroups(targets, population, { strict: false });
+  assert.equal(loose.groups.length, 1); assert.equal(loose.groups[0].overlap, 2, "다른 개체 최대 2마리 포함 가능"); assert.equal(loose.skipped.length, 0);
+  const strict = buildGroups(targets, population, { strict: true });
+  assert.equal(strict.groups.length, 2); assert.ok(strict.groups.every((g) => g.overlap === 0));
+  const c = buildCleanup([{ id: "a", species_id: 700, hp: 154, verdict: { tier: "main", recommendedTags: ["페어리 레이드"] } }, { id: "x", species_id: 700, hp: 154, verdict: { tier: "transfer", recommendedTags: [] } }], []);
+  assert.equal(c.find((x) => x.category.startsWith("tag:")).strict, false); assert.equal(c.find((x) => x.category === "transfer").strict, true);
+});
+
+test("4-B6 게임 태그가 있는 개체는 박사행 대상 제외", () => {
+  const c = classify([{ id: "1", species_id: 1, hp: 10, verdict: { tier: "transfer" }, game_tags: ["슈퍼리그"] }, { id: "2", species_id: 1, hp: 11, verdict: { tier: "transfer" }, game_tags: [] }]);
+  assert.deepEqual(c.transfer.map((x) => x.id), ["2"]);
+});

@@ -8,6 +8,8 @@ export const RULES = {
   RAID_TOP_SCORE_PCT: 75,   // 4-A2: 상위종 = 순위 조건 AND 점수 ≥ 그 타입 1위(전설 포함 전체 1위) 점수의 75%
   RAID_MID_SCORE_PCT: 65,   // 중위종 = 순위 ≤30 AND ≥65% (공격수가 적은 타입에서 약한 종이 순위만으로 들어오는 것 방지)
   RAID_MAIN_INDIV_RANK: 6,  // 내 목록 같은 종·같은 용도 안에서 공격 스탯 순위 ≤ 6 → 주력 (상위종일 때)
+  RAID_MIN_ATK_IV: 10,      // 4-B6: 공격 IV 미만이면 레이드 태그 없음 (실측: 저승갓숭 공격 0 이 격투 레이드 묶음에 포함됨)
+  RAID_MAIN_MIN_ATK_IV: 12, // 4-B6: 주력 등급의 최소 공격 IV (섀도도 같은 기준)
   RAID_BOSS: { baseAttack: 250, baseDefense: 200, baseStamina: 220 }, // 중립 보스 가정(타입 없음, L40·15/15/15)
   RAID_MEMBER_LEVEL: 40,    // 종족 순위 산출 시 개체 가정: L40, 15/15/15
 

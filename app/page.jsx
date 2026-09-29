@@ -18,7 +18,7 @@ const EMAIL_LINK_ENABLED = process.env.NEXT_PUBLIC_ENABLE_EMAIL_LINK === "true";
 // my_pokemon 행 → 화면/AI 용 항목 (판정은 저장하지 않으므로 없음)
 function toEntry(r) {
   const ivs = [r.atk_iv, r.def_iv, r.sta_iv];
-  const raw = { id: r.id, species_id: r.species_id, form: r.form, name_kr: r.name_kr, cp: r.cp, atk_iv: r.atk_iv, def_iv: r.def_iv, sta_iv: r.sta_iv, level: r.level, fast_move: r.fast_move, charged_moves: r.charged_moves || [], is_shadow: !!r.is_shadow, is_purified: !!r.is_purified, is_shiny: !!r.is_shiny, is_lucky: !!r.is_lucky, status: r.status, purposes: r.purposes || [], tags: r.tags || [], hp: r.hp ?? null, caught_on: r.caught_on || null, source: r.source, memo: r.memo, created_at: r.created_at, updated_at: r.updated_at };
+  const raw = { id: r.id, species_id: r.species_id, form: r.form, name_kr: r.name_kr, cp: r.cp, atk_iv: r.atk_iv, def_iv: r.def_iv, sta_iv: r.sta_iv, level: r.level, fast_move: r.fast_move, charged_moves: r.charged_moves || [], is_shadow: !!r.is_shadow, is_purified: !!r.is_purified, is_shiny: !!r.is_shiny, is_lucky: !!r.is_lucky, status: r.status, purposes: r.purposes || [], tags: r.tags || [], hp: r.hp ?? null, caught_on: r.caught_on || null, game_tags: r.game_tags || [], source: r.source, memo: r.memo, created_at: r.created_at, updated_at: r.updated_at };
   const hasIv = ivs.every((v) => Number.isInteger(v));
   return {
     id: r.id, pokemonId: r.species_id, form: r.form || "Normal",
@@ -1859,6 +1859,7 @@ export default function Home() {
                           <span style={{ ...s.tagBadge, color: item.status === "transfer" ? "#ff6b6b" : "#4ecdc4" }}>{STATUS_LABELS[item.status] || item.status}</span>
                           {(item.purposes || []).map((p) => <span key={p} style={{ ...s.tagBadge, color: "#a890f0" }}>{PURPOSE_LABELS[p] || p}</span>)}
                           {(item.tags || []).map((t) => <span key={"t" + t} style={{ ...s.tagBadge, color: "#4ecdc4", border: "1px solid rgba(78,205,196,0.3)" }}>🏷 {t}</span>)}
+                          {(item.raw.game_tags || []).length > 0 && <span style={{ ...s.tagBadge, color: "#ffd93d", border: "1px solid rgba(255,217,61,0.3)" }} title={item.raw.game_tags.join(", ")}>🎮 게임 태그 있음</span>}
                           {item.source === "import" && <span style={{ ...s.tagBadge, color: "#8899aa" }}>가져옴</span>}
                           {item.memo && <span style={{ ...s.tagBadge, color: "#ffd93d" }}>📝 {item.memo}</span>}
                         </div>
@@ -1947,8 +1948,9 @@ export default function Home() {
               </div>
             </div>
             <div style={{ fontSize: 11, color: "#8899aa", lineHeight: 1.6, marginBottom: 10 }}>
-              판정 결과를 포켓몬GO <b>검색어</b>로 만듭니다. 게임을 대신 조작하지 않습니다 — 검색창에 붙여넣고, <b style={{ color: "#ffd93d" }}>결과 수가 "예상 N마리"와 같을 때만</b> 전체 선택 → 박사에게 보내기/태그. 형식 <code>도감번호,…&hp…,…</code>(한국어판 확인: & 절마다 , 는 OR). 다른 개체가 섞일 수 있는 묶음은 쪼개거나 만들지 않습니다. 박사행은 되돌릴 수 없습니다.
+              판정 결과를 포켓몬GO <b>검색어</b>로 만듭니다. 게임을 대신 조작하지 않습니다 — 검색창에 붙여넣고, <b style={{ color: "#ffd93d" }}>결과 수가 "예상 N마리"와 같을 때만</b> 전체 선택 → 박사에게 보내기/태그. 형식 <code>도감번호,…&hp…,…</code>(한국어판 확인: & 절마다 , 는 OR). 박사행 묶음은 다른 개체가 섞일 수 있으면 쪼개거나 만들지 않고, 태그 묶음은 만들되 "다른 개체 최대 n마리 포함 가능"을 표시합니다. 게임 태그가 이미 달린 개체는 박사행에서 제외합니다. 박사행은 되돌릴 수 없습니다.
             </div>
+            <div style={{ ...s.sourceNotice, marginBottom: 10 }}>⚠️ {cleanup?.note || "예상 수는 앱이 아는 개체(스캔 기록 + 내 목록) 기준입니다. 앱이 모르는 같은 종·HP 개체가 게임에 있으면 결과가 더 나옵니다 — 게임 결과 수가 예상과 다르면 보내지 마세요."}</div>
             {cleanupError && <div style={s.error}>{cleanupError}</div>}
             {cleanupBusy && !cleanup && <div style={{ fontSize: 12, color: "#8899aa" }}>계산 중…</div>}
             {cleanup && cleanup.categories.length === 0 && <div style={{ fontSize: 12, color: "#576574", padding: "8px 0" }}>정리할 대상이 없습니다 (스캔 기록·내 목록의 판정 기준)</div>}
@@ -1957,7 +1959,7 @@ export default function Home() {
                 <div style={{ fontSize: 13, fontWeight: 700, color: cat.category === "transfer" ? "#ff6b6b" : cat.category === "collect" ? "#a890f0" : "#4ecdc4" }}>{cat.label} — 대상 {cat.count}마리 · 묶음 {cat.groups.length}{cat.skipped.length ? ` · 제외 ${cat.skipped.length}` : ""}</div>
                 {cat.groups.map((g, i) => (
                   <div key={g.query} style={{ ...s.collItem, flexDirection: "column", alignItems: "stretch", marginTop: 6, opacity: cleanupDone[g.query] ? 0.5 : 1 }}>
-                    <div style={{ fontSize: 11, color: "#8899aa" }}>묶음 {i + 1}/{cat.groups.length} · <b style={{ color: "#ffd93d" }}>예상 {g.expected}마리</b>{g.withCp ? " · CP 조건 포함" : ""} · {g.targetIds.map((id) => cleanup.names[id]).filter(Boolean).slice(0, 8).join(", ")}{g.targetIds.length > 8 ? " …" : ""}</div>
+                    <div style={{ fontSize: 11, color: "#8899aa" }}>묶음 {i + 1}/{cat.groups.length} · <b style={{ color: "#ffd93d" }}>예상 {g.expected}마리</b>{g.withCp ? " · CP 조건 포함" : ""}{g.overlap > 0 ? <span style={{ color: "#ff6b6b" }}> · ⚠️ 다른 개체 최대 {g.overlap}마리 포함 가능</span> : ""} · {g.targetIds.map((id) => cleanup.names[id]).filter(Boolean).slice(0, 8).join(", ")}{g.targetIds.length > 8 ? " …" : ""}</div>
                     <code style={{ fontSize: 12, color: "#e0e0e0", wordBreak: "break-all", marginTop: 4, userSelect: "all" }}>{g.query}</code>
                     <div style={{ display: "flex", gap: 6, marginTop: 6 }}>
                       <button onClick={() => copyQuery(g)} style={{ ...s.chip, fontSize: 11, flex: 1 }}>{copied === g.query ? "복사됨 ✓" : "📋 복사"}</button>
@@ -1969,7 +1971,7 @@ export default function Home() {
                 {cat.skipped.length > 0 && <div style={{ fontSize: 10, color: "#576574", marginTop: 4 }}>제외: {cat.skipped.map((x) => `${cleanup.names[x.id] || x.id}(${x.reason})`).join(", ")}</div>}
               </div>
             ))}
-            {cleanup && <div style={{ fontSize: 9, color: "#576574" }}>알려진 개체 {cleanup.population} (스캔 기록 + 내 목록) 기준으로 교차곱 충돌 검사 · 검색어 길이 상한 {cleanup.maxLen}자 · {fmtStamp(cleanup.at)}</div>}
+            {cleanup && <div style={{ fontSize: 9, color: "#576574" }}>알려진 개체 {cleanup.population} (스캔 기록 + 내 목록, 게임 태그 있음 {cleanup.gameTagged ?? 0}) 기준으로 교차곱 충돌 검사 · 검색어 길이 상한 {cleanup.maxLen}자 · {fmtStamp(cleanup.at)}</div>}
           </div>
         </div>
       )}
@@ -2014,7 +2016,7 @@ export default function Home() {
                   <img src={`https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/${it.species_id}.png`} alt="" style={{ width: 36, height: 36, imageRendering: "pixelated" }} />
                   <div style={{ flex: 1, minWidth: 0 }}>
                     <div style={{ fontSize: 13, fontWeight: 700, color: "#e0e0e0" }}>{it.is_shadow ? "👤" : ""}{it.name_kr}{it.form && it.form !== "Normal" ? ` (${it.form})` : ""} <span style={{ fontSize: 10, opacity: 0.5 }}>{fmtStamp(it.created_at)} · {it.session_id}</span></div>
-                    <div style={{ fontSize: 11, color: "#8899aa" }}>CP{it.cp || "?"} HP{it.hp || "?"} {Number.isInteger(it.atk_iv) ? `${it.atk_iv}/${it.def_iv}/${it.sta_iv} (${Math.round(((it.atk_iv + it.def_iv + it.sta_iv) / 45) * 100)}%)` : "개체값 미확정"}{it.level ? ` L${it.level}` : ""}{it.stars != null ? ` ★${it.stars}` : ""}{it.cp == null ? " · CP 미확인(레벨 범위)" : ""}{it.recheck ? " · ⚠️ 재확인 필요(CP/HP·막대 불일치)" : ""}</div>
+                    <div style={{ fontSize: 11, color: "#8899aa" }}>CP{it.cp || "?"} HP{it.hp || "?"} {Number.isInteger(it.atk_iv) ? `${it.atk_iv}/${it.def_iv}/${it.sta_iv} (${Math.round(((it.atk_iv + it.def_iv + it.sta_iv) / 45) * 100)}%)` : "개체값 미확정"}{it.level ? ` L${it.level}` : ""}{it.stars != null ? ` ★${it.stars}` : ""}{it.cp == null ? " · CP 미확인(레벨 범위)" : ""}{it.recheck ? " · ⚠️ 재확인 필요(CP/HP·막대 불일치)" : ""}{(it.game_tags || []).length ? ` · 🏷 게임 태그 있음(${it.game_tags.join(", ")})` : ""}</div>
                     {it.verdict ? <div style={{ fontSize: 11, color: TIER_COLORS[it.verdict.tier] || "#8899aa", marginTop: 2 }}>{it.verdict.summary}{it.verdict.event ? ` · ${it.verdict.event}` : ""}</div> : <div style={{ fontSize: 10, color: "#576574", marginTop: 2 }}>판정 계산 중 — 🔄 로 새로고침</div>}
                   </div>
                 </div>

@@ -64,7 +64,7 @@ export async function POST(req) {
         species_id: it.species_id, form: it.form || "Normal", name_kr: it.name_kr, cp: it.cp, hp: it.hp,
         atk_iv: it.atk_iv, def_iv: it.def_iv, sta_iv: it.sta_iv, level: it.level != null ? Number(it.level) : null,
         fast_move: null, charged_moves: [], is_shadow: Boolean(it.is_shadow), is_purified: false, is_shiny: false, is_lucky: false,
-        status, purposes: status === "keep" ? (v.purposes || []) : [], tags, caught_on: it.caught_on, memo: "연속 스캔", source: "overlay",
+        status, purposes: status === "keep" ? (v.purposes || []) : [], tags, caught_on: it.caught_on, game_tags: it.game_tags || [], memo: "연속 스캔", source: "overlay",
       };
       const r = await upsertMyPokemon(sb, user.userId, row);
       if (r.error) { results.push({ id: it.id, error: r.error }); continue; }

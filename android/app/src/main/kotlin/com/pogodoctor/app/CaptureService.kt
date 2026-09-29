@@ -150,19 +150,19 @@ class CaptureService : Service() {
         val capture = PendingIntent.getActivity(this, 3, Intent(this, TrampolineActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK), flags)
         val scanToggle = PendingIntent.getActivity(this, 4, Intent(this, TrampolineActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK).putExtra(TrampolineActivity.EXTRA_ACTION, "scan"), flags)
         val copyTransfer = PendingIntent.getActivity(this, 5, Intent(this, TrampolineActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK).putExtra(TrampolineActivity.EXTRA_ACTION, "copy_transfer"), flags)
-        val copyTag = PendingIntent.getActivity(this, 6, Intent(this, TrampolineActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK).putExtra(TrampolineActivity.EXTRA_ACTION, "copy_tag"), flags)
+        val copyTag = PendingIntent.getActivity(this, 6, Intent(this, TrampolineActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK).putExtra(TrampolineActivity.EXTRA_ACTION, "choose_tag"), flags)
         val icon = Icon.createWithResource(this, R.drawable.ic_notif)
         val title = if (scanning) "연속 스캔 중 — 평가 화면을 넘기세요" else getString(R.string.notif_title)
         val b = Notification.Builder(this, CHANNEL)
             .setSmallIcon(R.drawable.ic_notif).setContentTitle(title).setContentText(text ?: (if (scanning) scanLine else getString(R.string.notif_text)))
             .setStyle(Notification.BigTextStyle().bigText(text ?: (if (scanning) scanLine else getString(R.string.notif_text))))
             .setContentIntent(open).setOnlyAlertOnce(true).setOngoing(true)
-        // 알림 액션은 3개까지 표시된다. 스캔 중·스캔 기록이 있으면 4-B5 정리 복사 액션(박사행/태그 검색어)을 넣는다
+        // 알림 액션은 3개까지 표시된다. 스캔 중·스캔 기록이 있으면 정리 액션(4-B5 박사행 복사 / 4-B6 태그 선택 목록)을 넣는다
         val cleanupMode = scanning || (scan == null && hadScanRecords)
         if (cleanupMode) {
             b.addAction(Notification.Action.Builder(icon, if (scanning) "스캔 중지" else "연속 스캔", scanToggle).build())
             b.addAction(Notification.Action.Builder(icon, "박사행 복사", copyTransfer).build())
-            b.addAction(Notification.Action.Builder(icon, "태그 복사", copyTag).build())
+            b.addAction(Notification.Action.Builder(icon, "태그 선택", copyTag).build())
         } else {
             b.addAction(Notification.Action.Builder(icon, "캡처", capture).build())
             b.addAction(Notification.Action.Builder(icon, "연속 스캔", scanToggle).build())
