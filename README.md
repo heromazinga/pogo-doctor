@@ -217,9 +217,10 @@ Vercel 에서는 환경변수 `POGO_DISABLE_SOURCES` 를 Preview 환경에 잠�
 검증 통과(PR #39): 신뢰 기록 467 + 구기록 139 숨김, population 470, 리그 태그 63→21, 진화 후보 단일(68), 박사행 278/15묶음.
 
 1. **숨김 기준 변경**: "최신 세션 이전" → **신뢰 아닌 기록(app_version < 0.1.38 또는 null)만** 숨김(`/api/scan POST action=dismiss_untrusted`, 활성 기록을 페이지네이션으로 읽어 200건씩 dismissed). 섀도/정화 모드 세션 뒤에 누르면 전체 스캔 기록까지 숨겨지던 문제 해소. 버튼 "구버전 앱 기록 숨김", 복구는 그대로(`dismissed_reason='before_session'`).
-2. **보관함 설정 초기 저장 경합**: `page.jsx` 가 `useState("normal")` 상태로 첫 `/api/verdict/batch` 에 `storageMode:"normal"` 을 보내 `user_settings`(relaxed) 를 덮어썼다. 수정: 초기값 null → localStorage 값이 있으면 그것, 없으면 **본문에 storageMode 를 넣지 않고** 서버 저장값(`meta.storageMode`)을 받아 상태에 반영. 사용자가 버튼을 누를 때만 전송·저장. 단일 판정(`/api/verdict`)도 동일.
+2. **보관함 설정 초기 저장 경합**: `page.jsx` 가 `useState("normal")` 상태로 첫 `/api/verdict/batch` 에 `storageMode:"normal"` 을 보내 `user_settings`(relaxed) 를 덮어썼다. 수정: 초기값 null, **본문에 storageMode 를 넣지 않고** 서버 저장값(`meta.storageMode`)을 받아 상태에 반영(아래 5). 사용자가 버튼을 누를 때만 전송·저장. 단일 판정(`/api/verdict`)도 동일.
 3. **찌르꼬 0/15/14 박사행 — 현행 유지**: PvPoke 순위 파일(2026-09-29 조회) 찌르호크 **슈퍼 710위/1146, 하이퍼 507위/844, 마스터 없음** → 리그 후보 조건(≤300) 밖이라 규칙대로 박사행. (참고: 찌르버드 슈퍼 646위, 찌르꼬 없음.)
-4. **판정 재계산 청크**(`fillMissingVerdicts`): 한 요청에 최대 100건·15초(`FILL_CHUNK`, `FILL_BUDGET_MS`), 나머지는 응답 `pending` 으로 알리고 다음 조회가 이어서 처리(첫 `/api/scan` 27.6s → 함수 시간 제한 위험). 웹 스캔 기록·🧹 패널에 "⏳ 판정 갱신 중 — n건 남음" 표시. 정리 도우미는 남은 항목을 저장된(옛 규칙) 판정으로 묶고 안내한다.
+4. **판정 재계산 청크**(`fillMissingVerdicts`): 한 요청에 최대 100건·15초(`FILL_CHUNK`, `FILL_BUDGET_MS`), 나머지는 응답 `pending` 으로 알리고 다음 조회가 이어서 처리(첫 `/api/scan` 27.6s → 함수 시간 제한 위험). 웹 스캔 기록·🧹 패널에 "⏳ 판정 갱신 중 — n건 남음" 표시. **pending > 0 이면 박사행 묶음 잠금**(`categories[transfer].locked`, `lockReason`): 웹은 복사·보냄 처리 버튼을 숨기고 "재계산 중 N건 — 잠시 후 다시 열기", 앱 `CleanupCopier` 도 응답 `pending` 을 보고 박사행 복사를 차단(태그 선택 목록에 안내). 태그·수집 묶음은 표시 유지(되돌릴 수 있음).
+5. **보관함 설정 서버 값 우선**: 페이지 로드 시 본문 없이 `/api/verdict/batch` 를 보내 `meta.storageMode`(서버 저장값)로 상태·localStorage 캐시를 갱신. localStorage 는 서버 응답 전 표시용 캐시일 뿐 서버로 보내지 않는다. 서버 저장은 사용자가 보관함 버튼을 눌렀을 때만.
 
 ## 4-D: 전체 스캔(470마리) 실DB 결과 반영 — 조회 상한 제거 · 신뢰 기록 우선 · 리그 후보 축소 · 진화 후보 단일 태그 · 스캔 모드
 

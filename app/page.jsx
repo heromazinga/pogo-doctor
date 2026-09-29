@@ -91,8 +91,9 @@ export default function Home() {
   const [verdictLoading, setVerdictLoading] = useState(false);
   const [collTierFilter, setCollTierFilter] = useState("all");
   const [collTagFilter, setCollTagFilter] = useState("all");
-  // 4-D2: 초기값 null — localStorage 값이 없으면 storageMode 를 보내지 않고 서버 저장값(meta.storageMode)을 받아 쓴다 (첫 요청이 user_settings 를 normal 로 덮어쓰던 경합 방지)
+  // 4-D2: storageMode = 서버 저장값(또는 사용자가 방금 고른 값)만. null 이면 요청 본문에 넣지 않는다 → 첫 요청이 user_settings 를 normal 로 덮어쓰던 경합 방지
   const [storageMode, setStorageMode] = useState(null);
+  const [storageModeCache, setStorageModeCache] = useState(null); // localStorage 캐시(표시용, 서버 응답으로 갱신)
   const [analysisVerdict, setAnalysisVerdict] = useState(null); // 분석 화면 판정 { verdict, meta } | { error }
   const [inApp, setInApp] = useState(false); // 앱 내 WebView(UA PogoDoctorApp): 코드 발급·앱 코드 로그인·이메일 UI 숨김
   // 4-B: 스캔 기록 패널, 저장 시 기존 항목 갱신 안내
@@ -220,7 +221,8 @@ export default function Home() {
   };
 
   // ─── 4-A 판정: 내 목록 일괄 (POST /api/verdict/batch) ───
-  const loadVerdicts = async (mode = storageMode) => {
+  // mode 는 사용자가 버튼으로 고른 값일 때만 넘긴다(서버 저장). 그 외에는 본문 없이 보내고 서버 저장값(meta.storageMode)을 받아 상태·캐시에 반영
+  const loadVerdicts = async (mode = null) => {
     if (!session) return;
     setVerdictLoading(true);
     try {
@@ -228,12 +230,14 @@ export default function Home() {
       const data = await res.json();
       if (!res.ok) { setCollError(`판정 실패: ${data.error || res.status}`); return; }
       setVerdicts(data.verdicts || {}); setVerdictMeta({ ...data.meta, ms: data.ms, count: data.count });
-      if (!mode && data.meta?.storageMode && RULES.STORAGE_HOLD_LIMIT[data.meta.storageMode] !== undefined) setStorageMode(data.meta.storageMode); // 서버 저장값 반영
+      const sm = data.meta?.storageMode;
+      if (sm && RULES.STORAGE_HOLD_LIMIT[sm] !== undefined) { setStorageMode(sm); setStorageModeCache(sm); try { localStorage.setItem("pogo-storage-mode", sm); } catch {} }
     } catch (e) { setCollError(`판정 요청 오류: ${e.message}`); }
     finally { setVerdictLoading(false); }
   };
-  const changeStorageMode = (m) => { setStorageMode(m); try { localStorage.setItem("pogo-storage-mode", m); } catch {} loadVerdicts(m); };
-  useEffect(() => { try { const m = localStorage.getItem("pogo-storage-mode"); if (m && RULES.STORAGE_HOLD_LIMIT[m] !== undefined) setStorageMode(m); } catch {} try { setInApp(/PogoDoctorApp/.test(navigator.userAgent)); } catch {} }, []);
+  const changeStorageMode = (m) => { setStorageMode(m); setStorageModeCache(m); try { localStorage.setItem("pogo-storage-mode", m); } catch {} loadVerdicts(m); };
+  // 4-D2: 서버 값 우선 — localStorage 는 서버 응답 전 표시용 캐시. 서버 저장은 사용자가 버튼을 눌렀을 때(changeStorageMode)만
+  useEffect(() => { try { const m = localStorage.getItem("pogo-storage-mode"); if (m && RULES.STORAGE_HOLD_LIMIT[m] !== undefined) setStorageModeCache(m); } catch {} try { setInApp(/PogoDoctorApp/.test(navigator.userAgent)); } catch {} }, []);
   useEffect(() => { if (showCollection && session) loadVerdicts(); }, [showCollection, session, collection.length]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // 분석 화면 판정 (POST /api/verdict) — Gemini 는 코멘트만
@@ -1374,7 +1378,7 @@ export default function Home() {
                     {v.tags.map((t) => <div key={"r" + t.name} style={{ fontSize: 10, color: "#8899aa", marginTop: 3 }}>· {t.name}: {t.reason}</div>)}
                     {v.event && <div style={{ fontSize: 11, color: "#ffd93d", marginTop: 4 }}>{v.event.note}</div>}
                     {v.warnings?.length > 0 && <div style={{ fontSize: 10, color: "#ffd93d", marginTop: 4 }}>⚠️ {v.warnings.join(" · ")}</div>}
-                    <div style={{ fontSize: 9, color: "#576574", marginTop: 6 }}>결정적 계산(AI 미사용) · 보관함 {STORAGE_MODE_LABELS[storageMode || analysisVerdict.meta?.storageMode] || "서버 설정"} · 내 목록 {analysisVerdict.meta?.myRows ?? 0}마리 비교{analysisVerdict.meta?.authenticated ? "" : " (로그인 없음)"} · 기준값 README "판정 기준"</div>
+                    <div style={{ fontSize: 9, color: "#576574", marginTop: 6 }}>결정적 계산(AI 미사용) · 보관함 {STORAGE_MODE_LABELS[storageMode || analysisVerdict.meta?.storageMode || storageModeCache] || "서버 설정"} · 내 목록 {analysisVerdict.meta?.myRows ?? 0}마리 비교{analysisVerdict.meta?.authenticated ? "" : " (로그인 없음)"} · 기준값 README "판정 기준"</div>
                   </>
                 ); })()}
               </div>
@@ -1798,7 +1802,7 @@ export default function Home() {
             <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap", marginBottom: 10, fontSize: 11, color: "#8899aa" }}>
               <span>📦 보관함 여유</span>
               {Object.entries(STORAGE_MODE_LABELS).map(([k, label]) => (
-                <button key={k} onClick={() => changeStorageMode(k)} style={storageMode === k ? s.chipActive : s.chip}>{label}</button>
+                <button key={k} onClick={() => changeStorageMode(k)} style={(storageMode || storageModeCache) === k ? s.chipActive : s.chip}>{label}</button>
               ))}
               <span style={{ marginLeft: "auto", fontSize: 10, color: "#576574" }}>
                 {verdictLoading ? "판정 계산 중…" : verdictMeta ? `판정 ${verdictMeta.count}건 ${verdictMeta.ms}ms · PvPoke ${verdictMeta.pvpoke?.leagues?.length || 0}/3 리그 · 이벤트 대상 ${verdictMeta.events?.targets ?? 0}` : ""}
@@ -1973,7 +1977,9 @@ export default function Home() {
             {cleanup && cleanup.categories.map((cat) => (
               <div key={cat.category} style={{ marginBottom: 14 }}>
                 <div style={{ fontSize: 13, fontWeight: 700, color: cat.category === "transfer" ? "#ff6b6b" : cat.category === "collect" ? "#a890f0" : "#4ecdc4" }}>{cat.label}{cat.fixed ? " — 이로치·배경·XXL 은 게임 검색어로" : ` — 대상 ${cat.count}마리 · 묶음 ${cat.groups.length}${cat.skipped.length ? ` · 제외 ${cat.skipped.length}` : ""}`}{cat.protect ? " · 🛡 보호 조건 포함" : ""}</div>
-                {cat.groups.map((g, i) => (
+                {/* 4-D2: 재계산 중이면 박사행 묶음 잠금(복사·보냄 처리 불가) */}
+                {cat.locked && <div style={{ ...s.sourceNotice, marginTop: 6 }}>🔒 {cat.lockReason} — 박사행은 되돌릴 수 없어 옛 규칙 판정으로는 묶음을 열지 않습니다. 🔄 로 갱신을 이어가세요.</div>}
+                {!cat.locked && cat.groups.map((g, i) => (
                   <div key={g.query} style={{ ...s.collItem, flexDirection: "column", alignItems: "stretch", marginTop: 6, opacity: cleanupDone[g.query] ? 0.5 : 1 }}>
                     <div style={{ fontSize: 11, color: "#8899aa" }}>{cat.fixed ? <b style={{ color: "#a890f0" }}>{g.label}</b> : <>묶음 {i + 1}/{cat.groups.length} · <b style={{ color: "#ffd93d" }}>{cat.protect ? `게임 결과 ≤ 예상 ${g.expected}마리` : `예상 ${g.expected}마리`}</b></>}{g.withCp ? " · CP 조건 포함" : ""}{g.overlap > 0 ? <span style={{ color: "#ff6b6b" }}> · ⚠️ 다른 개체 최대 {g.overlap}마리 포함 가능</span> : ""}{cat.fixed ? " · 예상 수 없음(앱이 모르는 정보 — 게임 결과를 보고 태그)" : ` · ${g.targetIds.map((id) => cleanup.names[id]).filter(Boolean).slice(0, 8).join(", ")}${g.targetIds.length > 8 ? " …" : ""}`}</div>
                     <code style={{ fontSize: 12, color: "#e0e0e0", wordBreak: "break-all", marginTop: 4, userSelect: "all" }}>{g.query}</code>

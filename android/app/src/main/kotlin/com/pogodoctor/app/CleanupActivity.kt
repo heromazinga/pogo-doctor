@@ -58,7 +58,8 @@ class CleanupActivity : Activity() {
             if (g.names.isNotBlank()) text("   ${g.names}", 10f, 0xFF8899AA.toInt())
         }
         val tr = CleanupCopier.transferCount()
-        if (tr > 0) Button(this).apply {
+        if (CleanupCopier.pending > 0) text("🔒 판정 재계산 중 ${CleanupCopier.pending}건 — 박사행 복사는 잠시 후 다시", 11f, 0xFFFFD93D.toInt())
+        else if (tr > 0) Button(this).apply {
             text = "❌ 박사행 ${CleanupCopier.transferIdx + 1}/$tr 복사 (되돌릴 수 없음 · 🛡 보호 조건 포함 → 결과 ≤ 예상)"; textSize = 13f; setAllCaps(false); gravity = Gravity.START or Gravity.CENTER_VERTICAL
             setOnClickListener { CleanupCopier.copyNextTransfer(this@CleanupActivity); startService(Intent(this@CleanupActivity, CaptureService::class.java).setAction(CaptureService.ACTION_REFRESH_NOTIF)); finish() }
             root.addView(this)

@@ -45,6 +45,8 @@ export async function GET(req) {
   });
   const all = [...scanTargets, ...rowTargets];
   const categories = buildCleanup(all, all, { maxLen });
+  // 4-D2: 판정 재계산이 남아 있으면(pending) 박사행 묶음은 잠금 — 되돌릴 수 없으므로 옛 규칙 판정으로 보내지 않게. 태그·수집은 유지(되돌릴 수 있음)
+  for (const cat of categories) if (cat.category === "transfer" && fill.pending > 0) { cat.locked = true; cat.lockReason = `판정 재계산 중 ${fill.pending}건 — 잠시 후 다시 열기`; }
   const names = Object.fromEntries(all.map((x) => [x.id, x.name_kr]));
   const gameTagged = all.filter((x) => (x.game_tags || []).length).length;
   return NextResponse.json({ categories, names, population: all.length, scans: items.length, truncated, filled: fill.filled, pending: fill.pending, gameTagged, maxLen, protect: PROTECT_SUFFIX, note: EXPECTED_LIMIT_NOTE, protectNote: PROTECT_NOTE, backfill: backfill ? { ran: backfill.ran, superseded: backfill.superseded, conflicts: backfill.conflicts, suspects: backfill.suspects, version: backfill.version } : null, at: new Date().toISOString() });
