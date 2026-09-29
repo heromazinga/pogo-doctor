@@ -70,14 +70,14 @@ class ScanSession(val id: String = newId()) {
                        var captureMs: Long = 0, var fpMs: Long = 0, var prefilterMs: Long = 0, var ocrMs: Long = 0, var parseMs: Long = 0, var barMs: Long = 0,
                        // 4-B3 게이트 미개방 사유 / 분석 실패 사유
                        var gateUnstable: Int = 0, var gateSame: Int = 0, var gateNotAppraisal: Int = 0, var gateOpen: Int = 0,
-                       var failNotAppraisal: Int = 0, var failNoSpecies: Int = 0, var failNoCp: Int = 0, var failMismatch: Int = 0, var failDuplicate: Int = 0, var debugUploads: Int = 0,
+                       var failNotAppraisal: Int = 0, var failNoSpecies: Int = 0, var failNoCp: Int = 0, var failMismatch: Int = 0, var failDuplicate: Int = 0, var debugUploads: Int = 0, var cpRejected: Int = 0,
                        var queueSent: Int = 0, var queuePending: Int = 0, var queueFailed: Int = 0,
                        val startedAt: Long = System.currentTimeMillis(), var batteryStart: Int = -1, var batteryEnd: Int = -1) {
         val minutes: Double get() = (System.currentTimeMillis() - startedAt) / 60000.0
         fun report(): String {
             val a = maxOf(1, analyses); val f = maxOf(1, frames)
             return "세션 ${"%.1f".format(minutes)}분 · 프레임 $frames · 게이트(불안정 $gateUnstable/동일 $gateSame/평가 아님 $gateNotAppraisal/열림 $gateOpen) · 분석 $analyses · 기록 $recorded · " +
-                "실패(평가 아님 $failNotAppraisal/종 미확정 $failNoSpecies/CP 없음 $failNoCp/막대-CP 모순 $failMismatch/중복 $failDuplicate) · " +
+                "실패(평가 아님 $failNotAppraisal/종 미확정 $failNoSpecies/CP 없음 $failNoCp(검증 탈락 $cpRejected)/막대-HP 모순 $failMismatch/중복 $failDuplicate) · " +
                 "평균 ms: 캡처 ${captureMs / f} 서명 ${fpMs / f} OCR ${ocrMs / a} 파싱 ${parseMs / a} 막대 ${barMs / a} · " +
                 "전송 $queueSent/대기 $queuePending(실패 시도 $queueFailed) · 배터리 ${if (batteryStart >= 0) "$batteryStart% → $batteryEnd%" else "?"}"
         }
@@ -86,7 +86,7 @@ class ScanSession(val id: String = newId()) {
             .put("ocr", ocrMs / maxOf(1, analyses)).put("parse", parseMs / maxOf(1, analyses)).put("bars", barMs / maxOf(1, analyses)))
             .put("gate", JSONObject().put("unstable", gateUnstable).put("same", gateSame).put("notAppraisal", gateNotAppraisal).put("open", gateOpen))
             .put("fail", JSONObject().put("notAppraisal", failNotAppraisal).put("noSpecies", failNoSpecies).put("noCp", failNoCp).put("mismatch", failMismatch).put("duplicate", failDuplicate))
-            .put("debugUploads", debugUploads)
+            .put("debugUploads", debugUploads).put("cpRejected", cpRejected)
             .put("queue", JSONObject().put("sent", queueSent).put("pending", queuePending).put("failedAttempts", queueFailed))
             .put("battery", JSONObject().put("start", batteryStart).put("end", batteryEnd))
     }

@@ -10,9 +10,19 @@ class TrampolineActivity : Activity() {
     companion object { const val EXTRA_ACTION = "action" }
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        val extra = intent?.getStringExtra(EXTRA_ACTION)
+        if (extra == "copy_transfer" || extra == "copy_tag") {
+            // 4-B5: 알림 액션 → 정리 검색어 복사 (클립보드 쓰기는 포그라운드 액티비티에서). 서버 묶음 갱신 후 복사, 끝나면 종료
+            val prefs = Prefs(this)
+            Thread {
+                CleanupCopier.refresh(prefs)
+                runOnUiThread { CleanupCopier.copyNext(this, if (extra == "copy_transfer") "transfer" else "tag"); startService(Intent(this, CaptureService::class.java).setAction(CaptureService.ACTION_REFRESH_NOTIF)); finish(); overridePendingTransition(0, 0) }
+            }.start()
+            return
+        }
         if (CaptureService.running) {
             // 4-B: EXTRA_ACTION=scan 이면 연속 스캔 토글, 아니면 1장 지연 캡처
-            val action = if (intent?.getStringExtra(EXTRA_ACTION) == "scan") CaptureService.ACTION_SCAN_TOGGLE else CaptureService.ACTION_CAPTURE_DELAYED
+            val action = if (extra == "scan") CaptureService.ACTION_SCAN_TOGGLE else CaptureService.ACTION_CAPTURE_DELAYED
             startService(Intent(this, CaptureService::class.java).setAction(action))
         } else {
             startActivity(Intent(this, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))

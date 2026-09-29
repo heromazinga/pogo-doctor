@@ -101,6 +101,13 @@ export default function Home() {
   const [scanBusy, setScanBusy] = useState(false);
   const [scanError, setScanError] = useState(null);
   const [saveNotice, setSaveNotice] = useState(null);
+  // 4-B5 정리 도우미
+  const [showCleanup, setShowCleanup] = useState(false);
+  const [cleanup, setCleanup] = useState(null); // { categories, names, population }
+  const [cleanupBusy, setCleanupBusy] = useState(false);
+  const [cleanupError, setCleanupError] = useState(null);
+  const [cleanupDone, setCleanupDone] = useState({}); // query → true
+  const [copied, setCopied] = useState(null);
   const [editing, setEditing] = useState(null); // { id, status, purposes, memo }
   const [thinking, setThinking] = useState(false); // 첫 텍스트 도착 전(모델 thinking 구간)
   const [pendingReanalyze, setPendingReanalyze] = useState(false);
@@ -275,6 +282,34 @@ export default function Home() {
     } catch (e) { setScanError(e.message); } finally { setScanBusy(false); }
   };
   const openScans = async () => { setShowScans(true); await loadScans(); };
+  const loadCleanup = async () => {
+    if (!session) return;
+    setCleanupBusy(true); setCleanupError(null);
+    try {
+      const res = await fetch("/api/cleanup", { headers: { ...(await authHeader()) } });
+      const data = await res.json();
+      if (!res.ok) { setCleanupError(data.error || `HTTP ${res.status}`); return; }
+      setCleanup(data);
+    } catch (e) { setCleanupError(e.message); } finally { setCleanupBusy(false); }
+  };
+  const openCleanup = async () => { setShowCleanup(true); await loadCleanup(); };
+  const copyQuery = async (g) => {
+    try { await navigator.clipboard.writeText(g.query); setCopied(g.query); } catch { setCleanupError("클립보드 복사 실패 — 검색어를 직접 선택해 복사하세요"); }
+  };
+  const cleanupGroupDone = async (cat, g) => {
+    const isTransfer = cat.category === "transfer";
+    const rows = g.targetIds.filter((x) => x.startsWith("row:")).length;
+    const msg = isTransfer ? `이 묶음 ${g.expected}마리를 게임에서 박사에게 보냈습니까? 스캔 기록을 정리하고${rows ? ` 내 목록 ${rows}건을 삭제합니다` : ""}. 계속할까요?` : `이 묶음 ${g.expected}마리에 게임에서 태그를 달았습니까? 스캔 기록을 정리합니다(내 목록은 유지).`;
+    if (!window.confirm(msg)) return;
+    setCleanupBusy(true);
+    try {
+      const res = await fetch("/api/cleanup", { method: "POST", headers: { "Content-Type": "application/json", ...(await authHeader()) }, body: JSON.stringify({ action: "done", targetIds: g.targetIds, deleteRows: isTransfer }) });
+      const data = await res.json();
+      if (!res.ok) { setCleanupError(data.error || `HTTP ${res.status}`); return; }
+      setCleanupDone((d) => ({ ...d, [g.query]: true }));
+      if (isTransfer && rows) await reloadCollection();
+    } catch (e) { setCleanupError(e.message); } finally { setCleanupBusy(false); }
+  };
   // 박사행 후 정리: "보낼 예정" 항목 일괄 삭제 (확인 대화상자)
   const purgeTransferred = async () => {
     const targets = collection.filter((c) => c.status === "transfer");
@@ -1740,6 +1775,7 @@ export default function Home() {
               <h2 style={{ fontSize: 18, fontWeight: 800, color: "#e0e0e0" }}>📋 내 포켓몬 목록 ({collection.length})</h2>
               <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
                 <button onClick={openScans} style={{ background: "none", border: "1px solid #2a3a5c", borderRadius: 8, color: "#4ecdc4", fontSize: 11, padding: "4px 8px", cursor: "pointer", fontFamily: "'Outfit',sans-serif" }}>📷 스캔 기록</button>
+                <button onClick={openCleanup} style={{ background: "none", border: "1px solid #2a3a5c", borderRadius: 8, color: "#ffd93d", fontSize: 11, padding: "4px 8px", cursor: "pointer", fontFamily: "'Outfit',sans-serif" }}>🧹 정리 도우미</button>
                 {collection.length > 0 && (
                   <button onClick={exportCollection} style={{ background: "none", border: "1px solid #2a3a5c", borderRadius: 8, color: "#8899aa", fontSize: 11, padding: "4px 8px", cursor: "pointer", fontFamily: "'Outfit',sans-serif" }}>📤 내보내기</button>
                 )}
@@ -1895,6 +1931,45 @@ export default function Home() {
                 ))}
               </div>
             )}
+          </div>
+        </div>
+      )}
+
+      {/* ─── 4-B5 정리 도우미 Panel ─── */}
+      {showCleanup && (
+        <div style={s.collOverlay}>
+          <div style={s.collPanel}>
+            <div style={s.collHeader}>
+              <h2 style={{ fontSize: 18, fontWeight: 800, color: "#e0e0e0" }}>🧹 정리 도우미</h2>
+              <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                <button onClick={loadCleanup} disabled={cleanupBusy} style={{ ...s.chip, fontSize: 10 }}>🔄</button>
+                <button style={s.collClose} onClick={() => setShowCleanup(false)}>✕</button>
+              </div>
+            </div>
+            <div style={{ fontSize: 11, color: "#8899aa", lineHeight: 1.6, marginBottom: 10 }}>
+              판정 결과를 포켓몬GO <b>검색어</b>로 만듭니다. 게임을 대신 조작하지 않습니다 — 검색창에 붙여넣고, <b style={{ color: "#ffd93d" }}>결과 수가 "예상 N마리"와 같을 때만</b> 전체 선택 → 박사에게 보내기/태그. 형식 <code>도감번호,…&hp…,…</code>(한국어판 확인: & 절마다 , 는 OR). 다른 개체가 섞일 수 있는 묶음은 쪼개거나 만들지 않습니다. 박사행은 되돌릴 수 없습니다.
+            </div>
+            {cleanupError && <div style={s.error}>{cleanupError}</div>}
+            {cleanupBusy && !cleanup && <div style={{ fontSize: 12, color: "#8899aa" }}>계산 중…</div>}
+            {cleanup && cleanup.categories.length === 0 && <div style={{ fontSize: 12, color: "#576574", padding: "8px 0" }}>정리할 대상이 없습니다 (스캔 기록·내 목록의 판정 기준)</div>}
+            {cleanup && cleanup.categories.map((cat) => (
+              <div key={cat.category} style={{ marginBottom: 14 }}>
+                <div style={{ fontSize: 13, fontWeight: 700, color: cat.category === "transfer" ? "#ff6b6b" : cat.category === "collect" ? "#a890f0" : "#4ecdc4" }}>{cat.label} — 대상 {cat.count}마리 · 묶음 {cat.groups.length}{cat.skipped.length ? ` · 제외 ${cat.skipped.length}` : ""}</div>
+                {cat.groups.map((g, i) => (
+                  <div key={g.query} style={{ ...s.collItem, flexDirection: "column", alignItems: "stretch", marginTop: 6, opacity: cleanupDone[g.query] ? 0.5 : 1 }}>
+                    <div style={{ fontSize: 11, color: "#8899aa" }}>묶음 {i + 1}/{cat.groups.length} · <b style={{ color: "#ffd93d" }}>예상 {g.expected}마리</b>{g.withCp ? " · CP 조건 포함" : ""} · {g.targetIds.map((id) => cleanup.names[id]).filter(Boolean).slice(0, 8).join(", ")}{g.targetIds.length > 8 ? " …" : ""}</div>
+                    <code style={{ fontSize: 12, color: "#e0e0e0", wordBreak: "break-all", marginTop: 4, userSelect: "all" }}>{g.query}</code>
+                    <div style={{ display: "flex", gap: 6, marginTop: 6 }}>
+                      <button onClick={() => copyQuery(g)} style={{ ...s.chip, fontSize: 11, flex: 1 }}>{copied === g.query ? "복사됨 ✓" : "📋 복사"}</button>
+                      {!cleanupDone[g.query] && <button onClick={() => cleanupGroupDone(cat, g)} disabled={cleanupBusy} style={{ ...s.chip, fontSize: 11, color: cat.category === "transfer" ? "#ff6b6b" : "#4ecdc4" }}>{cat.category === "transfer" ? "보냄 처리 완료" : "완료(정리)"}</button>}
+                    </div>
+                    {copied === g.query && <div style={{ fontSize: 10, color: "#ffd93d", marginTop: 4 }}>⚠️ 게임 검색 결과가 정확히 {g.expected}마리일 때만 전체 선택하세요. 다르면 진행하지 마세요.</div>}
+                  </div>
+                ))}
+                {cat.skipped.length > 0 && <div style={{ fontSize: 10, color: "#576574", marginTop: 4 }}>제외: {cat.skipped.map((x) => `${cleanup.names[x.id] || x.id}(${x.reason})`).join(", ")}</div>}
+              </div>
+            ))}
+            {cleanup && <div style={{ fontSize: 9, color: "#576574" }}>알려진 개체 {cleanup.population} (스캔 기록 + 내 목록) 기준으로 교차곱 충돌 검사 · 검색어 길이 상한 {cleanup.maxLen}자 · {fmtStamp(cleanup.at)}</div>}
           </div>
         </div>
       )}

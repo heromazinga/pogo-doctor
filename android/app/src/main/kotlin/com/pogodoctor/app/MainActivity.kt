@@ -196,8 +196,21 @@ class MainActivity : ComponentActivity() {
 
             Card(Modifier.fillMaxWidth()) {
                 Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text("🧹 정리 도우미 (4-B5)", fontSize = 16.sp)
+                    Text("판정 결과를 포켓몬GO 검색어로 만들어 복사합니다(게임 조작 없음). 검색창에 붙여넣고 결과 수가 \"예상 N마리\"와 같을 때만 전체 선택 → 박사에게 보내기/태그. 박사행은 되돌릴 수 없으니 수가 다르면 진행하지 마세요. 스캔 중에는 알림의 \"박사행 복사\"/\"태그 복사\" 로도 됩니다.", fontSize = 12.sp, color = Color(0xFF8899AA))
+                    var cleanupStatus by remember { mutableStateOf(CleanupCopier.status()) }
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Button(enabled = paired && !busy, onClick = { busy = true; lifecycleScope.launch { withContext(Dispatchers.IO) { CleanupCopier.refresh(prefs, force = true) }; status = CleanupCopier.copyNext(this@MainActivity, "transfer"); cleanupStatus = CleanupCopier.status(); busy = false } }) { Text("박사행 검색어 복사") }
+                        OutlinedButton(enabled = paired && !busy, onClick = { busy = true; lifecycleScope.launch { withContext(Dispatchers.IO) { CleanupCopier.refresh(prefs) }; status = CleanupCopier.copyNext(this@MainActivity, "tag"); cleanupStatus = CleanupCopier.status(); busy = false } }) { Text("태그 검색어 복사") }
+                    }
+                    Text("묶음: $cleanupStatus · 자세한 목록·완료 처리는 웹 내 목록 → 🧹 정리 도우미", fontSize = 11.sp, color = Color(0xFF8899AA))
+                }
+            }
+
+            Card(Modifier.fillMaxWidth()) {
+                Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Text("📱 포켓몬GO 위에서는 빠른 설정 타일을 쓰세요", fontSize = 16.sp)
-                    Text("포켓몬GO 는 실행 중 다른 앱의 떠 있는 창을 숨깁니다(Android 12+). 그래서 ⚡ 버튼과 결과 카드는 포켓몬GO 위에서 보이지 않습니다. 대신 화면 위에서 아래로 쓸어내린 빠른 설정의 \"포고박사 캡처\" 타일(또는 알림의 \"캡처\" 버튼)을 누르면 알림창이 닫히고 ${prefs.captureDelayMs}ms 뒤 1장을 캡처해 결과를 반투명 창으로 보여줍니다.", fontSize = 12.sp, color = Color(0xFF8899AA))
+                    Text("삼성 게임 부스터가 켜져 있으면 포켓몬GO 위의 떠 있는 창(⚡ 버튼·결과 카드·띠)이 숨겨집니다(사용자 확인). 게임 부스터를 끄면 보입니다. 숨겨지는 경우 화면 위에서 아래로 쓸어내린 빠른 설정의 \"포고박사 캡처\" 타일(또는 알림의 \"캡처\" 버튼)을 누르면 알림창이 닫히고 ${prefs.captureDelayMs}ms 뒤 1장을 캡처해 결과를 반투명 창으로 보여줍니다.", fontSize = 12.sp, color = Color(0xFF8899AA))
                     Text("타일 추가: 빠른 설정 패널 펼치기 → 연필(편집) 또는 ⋮ → 타일 편집 → \"포고박사 캡처\" 를 끌어다 놓기. 타일은 오버레이가 실행 중일 때만 켜집니다.", fontSize = 12.sp, color = Color(0xFF8899AA))
                     if (Build.VERSION.SDK_INT >= 33) {
                         OutlinedButton(onClick = { requestAddTile() }) { Text("타일 추가 요청 (Android 13+)") }
@@ -234,14 +247,14 @@ class MainActivity : ComponentActivity() {
                     }
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         OutlinedTextField(value = debugMax, onValueChange = { debugMax = it.filter { ch -> ch.isDigit() } }, label = { Text("디버그 업로드 상한(세션당, 0~200)") }, modifier = Modifier.weight(1f))
-                        OutlinedButton(modifier = Modifier.padding(top = 8.dp), onClick = { prefs.scanDebugMax = debugMax.toIntOrNull() ?: 50; debugMax = prefs.scanDebugMax.toString(); status = "디버그 업로드 상한 ${prefs.scanDebugMax}장 저장" }) { Text("저장") }
+                        OutlinedButton(modifier = Modifier.padding(top = 8.dp), onClick = { prefs.scanDebugMax = debugMax.toIntOrNull() ?: 20; debugMax = prefs.scanDebugMax.toString(); status = "디버그 업로드 상한 ${prefs.scanDebugMax}장 저장" }) { Text("저장") }
                     }
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         Text("연속 스캔 기록 시 진동 (새 기록에만)", fontSize = 13.sp, modifier = Modifier.padding(top = 12.dp))
                         Switch(checked = scanVibrate, onCheckedChange = { scanVibrate = it; prefs.scanVibrate = it })
                     }
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Text("연속 스캔 상단 띠 표시 (포켓몬GO 위에서는 숨겨질 수 있음. 끄면 알림 한 줄만)", fontSize = 13.sp, modifier = Modifier.padding(top = 12.dp))
+                        Text("연속 스캔 상단 띠 표시 (삼성 게임 부스터를 끄면 포켓몬GO 위에서도 보임. 안 보이면 알림 한 줄만)", fontSize = 13.sp, modifier = Modifier.padding(top = 12.dp))
                         Switch(checked = scanStrip, onCheckedChange = { scanStrip = it; prefs.scanStrip = it })
                     }
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {

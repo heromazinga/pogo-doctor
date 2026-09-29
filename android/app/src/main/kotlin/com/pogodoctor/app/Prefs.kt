@@ -49,17 +49,21 @@ class Prefs(ctx: Context) {
     var scanStableMs: Int
         get() = plain.getInt("scan_stable_ms", 400).coerceIn(200, 3000)
         set(v) = plain.edit().putInt("scan_stable_ms", v.coerceIn(200, 3000)).apply()
-    // 디버그 모드 세션당 실패·대기 프레임 업로드 상한 (4-B4: 이번 테스트 기본 50, 검증 후 20 으로 복귀 예정)
+    // 디버그 모드 세션당 실패·대기 프레임 업로드 상한 (4-B5: 기본 20 복귀)
     var scanDebugMax: Int
-        get() = plain.getInt("scan_debug_max", 50).coerceIn(0, 200)
+        get() = plain.getInt("scan_debug_max", 20).coerceIn(0, 200)
         set(v) = plain.edit().putInt("scan_debug_max", v.coerceIn(0, 200)).apply()
     var scanVibrate: Boolean
         get() = plain.getBoolean("scan_vibrate", true)
         set(v) = plain.edit().putBoolean("scan_vibrate", v).apply()
-    // 연속 스캔 상단 띠 오버레이 (기본 끔: 포켓몬GO 위에서는 숨겨지므로 결과는 알림 한 줄)
+    // 연속 스캔 상단 띠 오버레이 (4-B5 기본 켬: 삼성 게임 부스터를 끄면 포켓몬GO 위에서도 보임(사용자 확인). 안 보이면 알림만)
     var scanStrip: Boolean
-        get() = plain.getBoolean("scan_strip", false)
+        get() = plain.getBoolean("scan_strip", true)
         set(v) = plain.edit().putBoolean("scan_strip", v).apply()
+    // 4-B5 정리 도우미 검색어 길이 상한 (한국어판 실제 상한은 확인 필요)
+    var cleanupMaxLen: Int
+        get() = plain.getInt("cleanup_max_len", 200).coerceIn(60, 400)
+        set(v) = plain.edit().putInt("cleanup_max_len", v.coerceIn(60, 400)).apply()
     var lastScanReport: String
         get() = plain.getString("last_scan_report", "")!!
         set(v) = plain.edit().putString("last_scan_report", v).apply()

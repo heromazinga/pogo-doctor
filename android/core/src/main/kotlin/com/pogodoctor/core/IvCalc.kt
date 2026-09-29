@@ -46,6 +46,14 @@ object IvCalc {
         return Cpm.levels().filter { it <= maxLevel && (hp == null || Cpm.hp(base.sta, s, it) == hp) }.map { Candidate(it, a, d, s) }
     }
 
+    // 4-B5 CP 검증: 막대 개체값 + HP 로 가능한 레벨에서 계산한 CP 와 일치할 때만 그 CP 를 돌려준다. 아니면 null (직전 개체 CP 이월·잘림 방지)
+    fun validateCp(base: Base, cp: Int?, hp: Int?, bars: Appraisal?): Int? {
+        if (cp == null) return null
+        val cands = candidatesWithoutCp(base, hp, bars)
+        if (cands.isEmpty()) return null
+        return if (cands.any { Cpm.cp(base.atk, base.def, base.sta, it.atk, it.def, it.sta, it.level) == cp }) cp else null
+    }
+
     // 종 후보가 CP/HP(및 막대)와 성립하는지: 후보가 하나라도 있으면 true
     fun consistent(base: Base, cp: Int?, hp: Int?, bars: Appraisal?): Boolean {
         if (cp == null) return true
