@@ -212,6 +212,20 @@ Vercel 에서는 환경변수 `POGO_DISABLE_SOURCES` 를 Preview 환경에 잠�
 - 미사용 웹 코드는 발급 시 지우지 않는다(PC 용으로 받은 코드가 앱 웹 화면 열기로 무효화되지 않도록). 발급 제한 IP 당 10분 30회.
 - PC 브라우저는 계속 사용 가능(앱 → 웹 로그인 코드). "홈 화면에 추가" 는 앱 화면에 안내만.
 
+## 4-C.2: 실DB 검증(142건) 반영 — 백필 · CP 검증 · 박사행 보호 조건 · 수집 태그 · 리그 후보 · 진화 후보 · 보관함 동기화 · 맥스배틀 안내
+
+검증 결과: 0008 적용, 스캔 조회 정상(139건 재계산), 추천 기술 한국어 정상, `&!#` 정상. 문제: superseded 0건(기존 중복 6쌍 잔존 — insert 시점에만 처리), 서버 storageMode 가 항상 normal.
+
+- **스캔 기록 백필**(`app/lib/scanBackfill.js`, 멱등): `/api/scan`·`/api/cleanup` 조회 시 `user_settings.scan_backfill_version` 이 현재 `RULES_VERSION` 과 다르면 1회 실행하고 저장. 같은 계열·폼·섀도·개체값 묶음에서 ① CP 미검증(없음·개체값/HP 와 불일치) 기록은 같은 HP 또는 같은 세션의 검증된 기록으로 대체, ② 검증된 기록끼리는 시간순으로 규칙 ③ 재생(최신 유지, 서로 다른 과거 후보 2개 이상이면 보류). 응답 `backfill: {ran, superseded, version}`, 웹 🧹 패널에 표시. 테스트 `tests/backfill.test.mjs`(사용자 사례 6쌍 유형).
+- **A. CP 자리수 누락 방지**: `/api/device/scan` 저장 전 `cpConsistentLevel`(종·개체값·HP 로 가능한 레벨의 CP 와 대조, 레벨 null 이어도 HP 로 역산)이 실패하면 CP 를 null 로 저장(응답 `cpRejected`). 예: 괴력몬 2634 → 263.
+- **B. 박사행 보호 조건 고정**(옵션 폐지): 박사행 검색어 끝에 항상 `&!#&!색이 다른&!반짝반짝&!xxl&!배경`(`PROTECT_SUFFIX`, 길이 상한 계산 포함). 안내·토스트 "게임 결과 ≤ 예상 N마리. 적으면 보호 대상이 빠진 것, 많으면 보내지 말 것". 한국어판 동작은 사용자 확인("색이 다른" 띄어쓰기 포함). 코스튬은 검색어가 없어 태그로 보호. `matches()` 부정 절: `!#`→game_tags 없음, `!색이 다른`→이로치 아님, `!반짝반짝`→럭키 아님, `!xxl`·`!배경`→앱이 모르는 정보(잡힌다고 봄). 웹·Kotlin 동일.
+- **C. "수집" 태그**(`TAG.collect`): 100%·0%·반짝반짝·오래 전 포획(교환 시 반짝반짝)이면 등급과 무관하게 `recommendedTags` 에 "수집" → 정리 도우미 `tag:수집` 묶음. 이로치·배경·XXL 은 게임 검색어 고정 묶음("색이 다른", "배경", "xxl", 예상 수 없음).
+- **D. 리그 후보**: 스탯곱 순위 ≤41(`LEAGUE_CANDIDATE_PRODUCT_RANK`, 상위 1%)이면 종 PvPoke 순위와 무관하게 보류("리그 후보" 표기, `metrics.candidate`). 사례: 찌르꼬 0/15/14 → 찌르호크 하이퍼 4위·슈퍼 115위.
+- **E. "진화 대기" → "진화 후보"**(`TAG.evolve`, `EVOLVE_PREFIX`): 필요 사탕 ≥200(`EVOLVE_CANDY_HOLD`)이면 등급 상한 보류. 사례: 잉어킹 15/12/11 사탕 400 → 보류.
+- **F. 보관함 설정 동기화**(마이그레이션 **0009** `user_settings`): 원인은 `buildVerdictContext` 가 요청 본문의 storageMode 만 쓰고 저장하지 않아 스캔 후계산·정리 도우미·stats 가 기본값(normal)을 쓴 것. 이제 `/api/verdict`·`/api/verdict/batch` 본문의 storageMode 를 `user_settings.storage_mode` 에 저장하고, 본문에 없는 경로는 저장값을 쓴다(`stats` 응답 `storageMode` 로 확인).
+- **G. 맥스배틀 종 안내**: 목록에 있는 종은 판정 대신 "🟡 보류: 맥스배틀 종 — 다이맥스 태그 권장"(`recommendedTags: ["다이맥스"]`, `dynamax: true`). **목록 출처 한계**: 이 환경에서 접근 가능한 공개 데이터(PokeMiners game master, PvPoke gamemaster, ScrapedDuck)에는 다이맥스 가능 종 필드가 없어 전체 목록을 확인하지 못함 → 현재는 snacknap.com/max-battles 의 **현재 맥스배틀 보스**(`app/lib/maxBattleSpecies.js`, `/api/max-battles` 와 같은 캐시) + 환경변수 `MAX_BATTLE_SPECIES_IDS`(쉼표 구분 도감 번호, 사용자 확인 종)만 사용. 두랄루돈이 현재 보스 목록에 없으면 안내되지 않는다(정보 부족 — 사용자 확인 필요).
+- `RULES_VERSION` 2026-09-29.4 → 조회 시 판정 재계산.
+
 ## 4-C: 추천 기술 표시 · 강화/진화 후 동일 개체 갱신 · 정리 도우미 `&!#` 옵션 (기술 스캔 취소)
 
 방침 변경(사용자 판단): 기술은 기술머신·이벤트로 바꾸므로 상세 화면 기술 캡처·OCR 은 **취소**. 기존 "최적 기술 가정" 판정 유지(`docs/PHASE4.md` 4-C 취소 표기).

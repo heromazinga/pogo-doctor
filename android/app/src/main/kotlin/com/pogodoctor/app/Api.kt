@@ -86,9 +86,9 @@ class Api(private val prefs: Prefs) {
     }
 
     // 4-B5 정리 도우미 묶음
-    fun cleanup(maxLen: Int, noTag: Boolean = false): JSONObject {
+    fun cleanup(maxLen: Int): JSONObject {
         val token = prefs.deviceToken ?: throw ApiException(401, "기기 연결 필요")
-        try { return request("GET", "/api/cleanup?maxLen=$maxLen${if (noTag) "&noTag=1" else ""}", null, token, timeoutMs = 20000) }
+        try { return request("GET", "/api/cleanup?maxLen=$maxLen", null, token, timeoutMs = 20000) }
         catch (e: ApiException) { if (e.status == 401) prefs.deviceToken = null; throw e }
     }
 

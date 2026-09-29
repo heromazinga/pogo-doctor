@@ -6,6 +6,8 @@ import { getEventTargets } from "./eventTargets.js";
 import { getUserFromRequest, getServiceClient } from "./supabaseServer.js";
 import { userFromDeviceToken } from "./deviceServer.js";
 import { RULES } from "./verdictRules.js";
+import { loadUserSettings, saveStorageMode } from "./userSettings.js";
+import { getMaxBattleSpecies } from "./maxBattleSpecies.js";
 
 export async function resolveUser(req) {
   const auth = req.headers.get("authorization") || "";
@@ -25,19 +27,24 @@ export async function loadMyRows(userId) {
   return data || [];
 }
 
+// 4-C.2 보관함 여유 동기화: 요청에 storageMode 가 오면 user_settings 에 저장(앱·웹 어디서 바꿔도 서버 판정에 반영), 없으면 저장값, 그것도 없으면 기본값.
+//   이전에는 본문 값만 써서 스캔 기록 후계산·정리 도우미·stats 가 항상 normal 이었다(실DB 검증에서 확인).
 export async function buildVerdictContext(req, { storageMode, myRows } = {}) {
-  const [dataset, leagueRankings, events] = await Promise.all([getPokemonDataset(), getLeagueRankings(), getEventTargets()]);
+  const [dataset, leagueRankings, events, maxBattleSpecies] = await Promise.all([getPokemonDataset(), getLeagueRankings(), getEventTargets(), getMaxBattleSpecies()]);
   const user = await resolveUser(req);
-  const rows = myRows || (user ? await loadMyRows(user.userId) : []);
-  const mode = storageMode && storageMode in RULES.STORAGE_HOLD_LIMIT ? storageMode : RULES.STORAGE_DEFAULT;
+  const sb = user ? getServiceClient() : null;
+  const [rows, settings] = await Promise.all([myRows || (user ? loadMyRows(user.userId) : []), user ? loadUserSettings(sb, user.userId) : null]);
+  let mode = storageMode && storageMode in RULES.STORAGE_HOLD_LIMIT ? storageMode : null;
+  if (mode && user && settings?.storage_mode !== mode) await saveStorageMode(sb, user.userId, mode);
+  if (!mode) mode = settings?.storage_mode in RULES.STORAGE_HOLD_LIMIT ? settings.storage_mode : RULES.STORAGE_DEFAULT;
   return {
-    ctx: { dataset, leagueRankings, eventTargets: events.targets || [], myRows: rows, storageMode: mode, now: Date.now() },
+    ctx: { dataset, leagueRankings, eventTargets: events.targets || [], myRows: rows, storageMode: mode, now: Date.now(), settings, maxBattleSpecies },
     user,
     meta: {
       dataset: { generatedAt: dataset.generatedAt || null, stale: Boolean(dataset.stale) },
       pvpoke: { fetchedAt: leagueRankings?.fetchedAt || null, errors: leagueRankings?.errors || {}, leagues: Object.keys(leagueRankings?.leagues || {}) },
       events: { fetchedAt: events.fetchedAt, error: events.error, targets: (events.targets || []).length },
-      myRows: rows.length, authenticated: Boolean(user), via: user?.via || null, storageMode: mode,
+      myRows: rows.length, authenticated: Boolean(user), via: user?.via || null, storageMode: mode, maxBattleSpecies: maxBattleSpecies.size,
     },
   };
 }

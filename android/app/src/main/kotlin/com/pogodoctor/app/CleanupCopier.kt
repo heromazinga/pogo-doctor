@@ -15,7 +15,7 @@ object CleanupCopier {
     const val LIMIT_NOTE = "예상 수는 앱이 아는 개체(스캔 기록 + 내 목록) 기준입니다. 앱이 모르는 같은 종·HP 개체가 게임에 있으면 결과가 더 나옵니다 — 게임 결과 수가 예상과 다르면 보내지 마세요."
     data class Group(val category: String, val label: String, val query: String, val expected: Int, val names: String, val overlap: Int = 0)
     // 카테고리 한 줄: "카테고리명 · 예상 N마리" (N = 묶음들의 예상 합). 태그 카테고리는 묶음이 여러 개일 수 있어 groups 로 보관
-    data class Category(val category: String, val label: String, val groups: List<Group>) { val expected: Int get() = groups.sumOf { it.expected } }
+    data class Category(val category: String, val label: String, val groups: List<Group>) { val expected: Int get() = if (groups.any { it.expected < 0 }) -1 else groups.sumOf { it.expected } }
     @Volatile private var transfer: List<Group> = emptyList()
     @Volatile private var tagCats: List<Category> = emptyList()
     @Volatile private var fetchedAt = 0L
@@ -23,7 +23,6 @@ object CleanupCopier {
     @Volatile var lastError: String? = null
     @Volatile var note: String = LIMIT_NOTE
     @Volatile var gameTagged: Int = 0
-    @Volatile var noTag: Boolean = false   // 4-C 서버가 박사행 검색어에 &!# 를 붙였는지
 
     fun status(): String = "박사행 ${if (transfer.isEmpty()) 0 else transferIdx + 1}/${transfer.size} · 태그 카테고리 ${tagCats.size}개" + (if (gameTagged > 0) " · 게임 태그 있음 $gameTagged 제외" else "")
     fun categories(): List<Category> = tagCats
@@ -33,8 +32,7 @@ object CleanupCopier {
     @Synchronized fun refresh(prefs: Prefs, force: Boolean = false): Boolean {
         if (!force && System.currentTimeMillis() - fetchedAt < 60_000 && (transfer.isNotEmpty() || tagCats.isNotEmpty())) return true
         return try {
-            val res = Api(prefs).cleanup(prefs.cleanupMaxLen, prefs.cleanupNoTag)
-            noTag = res.optBoolean("noTag", false)
+            val res = Api(prefs).cleanup(prefs.cleanupMaxLen)
             val names = res.optJSONObject("names") ?: JSONObject()
             val cats = res.optJSONArray("categories")
             val tr = ArrayList<Group>(); val tg = ArrayList<Category>()
@@ -45,9 +43,14 @@ object CleanupCopier {
                 for (j in 0 until gs.length()) {
                     val g = gs.getJSONObject(j)
                     val ids = g.optJSONArray("targetIds"); val nm = (0 until (ids?.length() ?: 0)).mapNotNull { names.optString(ids!!.optString(it), null) }.take(6).joinToString(", ")
-                    list.add(Group(category, label, g.optString("query"), g.optInt("expected"), nm, g.optInt("overlap", 0)))
+                    // expected 가 null(고정 검색어)이면 -1
+                    val expected = if (g.isNull("expected")) -1 else g.optInt("expected")
+                    val glabel = g.optString("label", "").ifBlank { label }
+                    list.add(Group(category, if (category == "collect") "💎 $glabel" else label, g.optString("query"), expected, nm, g.optInt("overlap", 0)))
                 }
-                if (category == "transfer") tr.addAll(list) else if (category.startsWith("tag:") && list.isNotEmpty()) tg.add(Category(category, label, list))
+                if (category == "transfer") tr.addAll(list)
+                else if (category.startsWith("tag:") && list.isNotEmpty()) tg.add(Category(category, label, list))
+                else if (category == "collect") for (g in list) tg.add(Category("collect:${g.query}", g.label, listOf(g)))
             }
             transfer = tr; tagCats = tg; fetchedAt = System.currentTimeMillis(); lastError = null
             note = res.optString("note", LIMIT_NOTE).ifBlank { LIMIT_NOTE }; gameTagged = res.optInt("gameTagged", 0)
@@ -64,8 +67,12 @@ object CleanupCopier {
 
     // 토스트 본문 형식: "[불꽃 레이드] 복사됨 · 예상 N마리 — 게임 결과 수가 같을 때만 전체 선택" (박사행: "[박사행 1/2] …")
     fun toastText(head: String, g: Group, withNote: Boolean): String {
-        // 4-C: &!# 옵션이 켜진 박사행 묶음은 "결과 ≤ 예상" (태그 달린 개체가 빠짐)
-        val sb = StringBuilder(if (noTag && g.category == "transfer") "[$head] 복사됨 · 게임 결과 ≤ 예상 ${g.expected}마리. 적으면 태그 달린 개체가 빠진 것 — 많으면 보내지 마세요" else "[$head] 복사됨 · 예상 ${g.expected}마리 — 게임 결과 수가 같을 때만 전체 선택")
+        // 4-C.2: 박사행 묶음은 보호 조건이 항상 붙어 "결과 ≤ 예상" (보호 대상이 빠짐). 고정 검색어(수집: 색이 다른/배경/xxl)는 예상 수 없음
+        val sb = StringBuilder(when {
+            g.expected < 0 -> "[$head] 복사됨 · 예상 수 없음(앱이 모르는 정보) — 게임 결과를 보고 태그"
+            g.category == "transfer" -> "[$head] 복사됨 · 게임 결과 ≤ 예상 ${g.expected}마리. 적으면 보호 대상이 빠진 것, 많으면 보내지 말 것"
+            else -> "[$head] 복사됨 · 예상 ${g.expected}마리 — 게임 결과 수가 같을 때만 전체 선택"
+        })
         if (g.overlap > 0) sb.append("\n⚠️ 다른 개체 최대 ${g.overlap}마리 포함 가능(태그는 덮어써도 됨)")
         if (g.names.isNotBlank()) sb.append("\n(${g.names})")
         if (withNote) sb.append("\n$note")

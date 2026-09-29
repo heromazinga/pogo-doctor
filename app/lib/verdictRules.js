@@ -3,7 +3,7 @@
 
 // 4-B6.2 판정 규칙 버전: 저장된 판정(scan_items.verdict.rulesVersion)이 이 값과 다르면 조회 시 다시 계산해 저장한다.
 // 기준값(RULES)이나 판정 로직을 바꿀 때 반드시 올린다 (실DB 검증: 규칙 변경이 정리 도우미에 반영되지 않던 결함).
-export const RULES_VERSION = "2026-09-29.3"; // 4-C: 판정에 추천 기술(moves) 저장
+export const RULES_VERSION = "2026-09-29.4"; // 4-C.2: 진화 후보(사탕 ≥200 보류), 리그 후보(스탯곱 ≤41), 수집 태그, 다이맥스 안내
 
 export const RULES = {
   // 종족 순위 (자동 산출) — 타입별 레이드: teamScore 의 DPS^0.775 × TDO^0.225, 그 타입 기술만 사용, 중립 보스 가정
@@ -31,6 +31,8 @@ export const RULES = {
   LEAGUE_MID_HOLD_PRODUCT_RANK: 200, // 4-B6.2: 중위종 ≤200 → 보류
   LEAGUE_HOLD_PRODUCT_RANK_TIGHT: 500,  // 보관함 "빠듯" 이면 기존 기준 유지
   LEAGUE_MID_HOLD_PRODUCT_RANK_TIGHT: 100,
+  LEAGUE_CANDIDATE_PRODUCT_RANK: 41, // 4-C.2: 스탯곱 순위 ≤41(상위 1%)이면 종 PvPoke 순위와 무관하게 보류(리그 후보). 사례: 찌르꼬 0/15/14
+  EVOLVE_CANDY_HOLD: 200,            // 4-C.2: 진화 후보의 필요 사탕 ≥200 이면 등급 상한 보류. 사례: 잉어킹 사탕 400
   MASTER_TOP_RANK: 50,
   MASTER_MAIN_PCT: 96,      // 전체 % ≥ 96 → 주력
   MASTER_HOLD_PCT: 91,      // 91~95 → 보류
@@ -59,8 +61,11 @@ export const TAG = {
   great: "슈퍼리그",
   ultra: "하이퍼리그",
   master: "마스터리그",
-  evolve: (finalKr) => `진화 대기(→${finalKr})`,
+  evolve: (finalKr) => `진화 후보(→${finalKr})`, // 4-C.2: "진화 대기" → "진화 후보"
+  collect: "수집",                                 // 4-C.2: 100%·0%·반짝반짝·오래 전 포획(교환 시 반짝반짝)
+  dynamax: "다이맥스",                              // 4-C.2: 맥스배틀 종 → 판정 대신 태그 권장 안내
 };
+export const EVOLVE_PREFIX = "진화 후보";
 
 export const TIER_LABEL = { main: "✅ 주력", hold: "🟡 보류", transfer: "❌ 박사행", need_appraisal: "❔ 평가 화면 캡처 필요" };
 

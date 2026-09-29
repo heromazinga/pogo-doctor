@@ -48,7 +48,8 @@ const dataset = {
     sp(4, "Charmander", "파이리", ["fire"], 116, 93, 118, ["Ember"], ["Flamethrower"], { evolutions: [{ id: 5, form: "Normal", candies: 25 }] }),
     sp(5, "Charmeleon", "리자드", ["fire"], 158, 126, 151, ["Ember"], ["Flamethrower"], { evolutions: [{ id: 6, form: "Normal", candies: 100 }] }),
     sp(184, "Azumarill", "마릴리", ["water", "fairy"], 112, 152, 225, ["Bubble"], ["Hydro Pump"]),
-    sp(129, "Magikarp", "잉어킹", ["water"], 29, 85, 85, [], []),
+    sp(129, "Magikarp", "잉어킹", ["water"], 29, 85, 85, [], [], { evolutions: [{ id: 130, form: "Normal", candies: 400 }] }),
+    sp(130, "Gyarados", "갸라도스", ["water", "flying"], 237, 186, 216, ["Bubble"], ["Hydro Pump"]),
     sp(150, "Mewtwo", "뮤츠", ["psychic"], 300, 182, 214, ["Confusion"], ["Psystrike"], { pokemonClass: "legendary" }),
     sp(999, "Weakmon", "약한몬", ["normal"], 50, 50, 50, [], [], { pokemonClass: "legendary" }),
     // 4-A2: 타입 1위 대비 비율 검증용. 노말 1위 폴리곤Z, 비행 1위 레쿠쟈(전설), 페어리는 님피아뿐
@@ -143,9 +144,12 @@ test("현재 CP 가 리그 상한 초과면 해당 리그 불가", () => {
   assert.ok(!v.recommendedTags.includes(TAG.great));
 });
 
-test("약한 종 15/15/15 → 박사행 + 💎 수집 추천(100%)", () => {
+test("약한 종 15/15/15 → 💎 수집 추천(100%) (4-C.2: 잉어킹은 진화 후보(→갸라도스) 사탕 400 → 보류, 진화 없는 약한 종은 박사행)", () => {
   const v = computeVerdict({ species_id: 129, ivs: { atk: 15, def: 15, sta: 15 }, level: 10 }, ctx());
-  assert.equal(v.tier, "transfer");
+  assert.equal(v.tier, "hold"); assert.equal(tagOf(v, TAG.evolve("갸라도스"))?.tier, "hold");
+  assert.ok(v.recommendedTags.includes(TAG.collect));
+  const w = computeVerdict({ species_id: 129, ivs: { atk: 15, def: 15, sta: 15 }, level: 10 }, ctx({ dataset: { ...dataset, pokemon: dataset.pokemon.map((p) => (p.id === 129 ? { ...p, evolutions: [] } : p)) } }));
+  assert.equal(w.tier, "transfer");
   assert.ok(v.collect.some((c) => c.reason === "개체값 100%"));
   assert.ok(v.summary.includes("💎"));
 });
@@ -220,6 +224,48 @@ test("4-B6.2 판정 최신화: 저장된 판정의 rulesVersion 이 다르면 �
   assert.equal(items[1].verdict.rulesVersion, RULES_VERSION);
   assert.equal(items[2].verdict.rulesVersion, RULES_VERSION);
   assert.ok(isStaleVerdict(undefined) && isStaleVerdict({ error: true }) && isStaleVerdict({ rulesVersion: "x" }) && !isStaleVerdict({ rulesVersion: RULES_VERSION }));
+});
+
+test("4-C.2 E 진화 후보: 이름 '진화 후보(→X)', 필요 사탕 ≥200(잉어킹 400)이면 등급 상한 보류, 125(파이리)는 주력 유지", () => {
+  assert.equal(TAG.evolve("갸라도스"), "진화 후보(→갸라도스)");
+  const karp = computeVerdict({ species_id: 129, ivs: { atk: 15, def: 12, sta: 11 }, level: 20 }, ctx());
+  const t = tagOf(karp, TAG.evolve("갸라도스"));
+  assert.ok(t, karp.tags.map((x) => x.name).join());
+  assert.equal(t.tier, "hold"); assert.ok(t.reason.includes("사탕 200개 이상 → 보류"), t.reason);
+  assert.equal(karp.tier, "hold", "잉어킹 15/12/11 사탕 400 → 현재 주력이 아니라 보류");
+  assert.equal(tagOf(computeVerdict({ species_id: 4, ivs: { atk: 15, def: 15, sta: 15 }, level: 20 }, ctx()), TAG.evolve("리자몽")).tier, "main");
+  assert.equal(RULES.EVOLVE_CANDY_HOLD, 200);
+});
+
+test("4-C.2 D 리그 후보: 스탯곱 순위 ≤41 이면 PvPoke 200위 밖 종도 보류, 순위 파일에 없는 종·스탯곱 순위 밖 개체는 태그 없음", () => {
+  const p = dataset.pokemon.find((x) => x.id === 700); // 님피아: 슈퍼 300위(200위 밖)로 주입
+  const great = new Map([...leagueRankings.leagues.great, ["sylveon", { rank: 300, score: 60, name: "Sylveon" }]]);
+  const lr = { ...leagueRankings, leagues: { ...leagueRankings.leagues, great } };
+  const table = leagueProductTable(p, 1500, 50);
+  const best = [...table.rank.entries()].find(([, v]) => v.rank === 1)[0].split(",").map(Number);
+  const v = computeVerdict({ species_id: 700, ivs: { atk: best[0], def: best[1], sta: best[2] }, level: 15 }, ctx({ leagueRankings: lr }));
+  const t = tagOf(v, TAG.great);
+  assert.ok(t, v.tags.map((x) => x.name).join()); assert.equal(t.tier, "hold"); assert.equal(t.metrics.candidate, true); assert.ok(t.reason.includes("리그 후보") && t.reason.includes("200위 밖"), t.reason);
+  const worst = [...table.rank.entries()].find(([, v]) => v.rank === 3000)[0].split(",").map(Number);
+  assert.equal(tagOf(computeVerdict({ species_id: 700, ivs: { atk: worst[0], def: worst[1], sta: worst[2] }, level: 15 }, ctx({ leagueRankings: lr })), TAG.great), undefined, "스탯곱 3000위 → 없음");
+  assert.equal(tagOf(computeVerdict({ species_id: 700, ivs: { atk: best[0], def: best[1], sta: best[2] }, level: 15 }, ctx()), TAG.great), undefined, "순위 파일에 없는 종 → 없음");
+  assert.equal(RULES.LEAGUE_CANDIDATE_PRODUCT_RANK, 41);
+});
+
+test("4-C.2 C 수집 태그: 100%·0%·반짝반짝·오래 전 포획 → recommendedTags 에 '수집'(등급 무관), 이로치만으로는 아님", () => {
+  assert.ok(computeVerdict({ species_id: 999, ivs: { atk: 15, def: 15, sta: 15 }, level: 20 }, ctx()).recommendedTags.includes(TAG.collect), "100%");
+  assert.ok(computeVerdict({ species_id: 999, ivs: { atk: 0, def: 0, sta: 0 }, level: 20 }, ctx()).recommendedTags.includes(TAG.collect), "0%");
+  assert.ok(computeVerdict({ species_id: 999, ivs: { atk: 5, def: 5, sta: 5 }, level: 20, is_lucky: true }, ctx()).recommendedTags.includes(TAG.collect), "반짝반짝");
+  assert.ok(computeVerdict({ species_id: 999, ivs: { atk: 5, def: 5, sta: 5 }, level: 20, caught_on: "2017-03-01" }, ctx()).recommendedTags.includes(TAG.collect), "오래 전 포획");
+  assert.ok(!computeVerdict({ species_id: 999, ivs: { atk: 5, def: 5, sta: 5 }, level: 20, is_shiny: true }, ctx()).recommendedTags.includes(TAG.collect), "이로치는 게임 검색어(색이 다른)로");
+  assert.ok(!computeVerdict({ species_id: 999, ivs: { atk: 5, def: 5, sta: 5 }, level: 20 }, ctx()).recommendedTags.includes(TAG.collect));
+});
+
+test("4-C.2 G 맥스배틀 종: 판정 대신 '다이맥스' 태그 권장 안내(보류), 목록에 없으면 일반 판정", () => {
+  const v = computeVerdict({ species_id: 815, ivs: { atk: 15, def: 14, sta: 14 }, level: 40 }, ctx({ maxBattleSpecies: new Set([815]) }));
+  assert.equal(v.dynamax, true); assert.equal(v.tier, "hold"); assert.deepEqual(v.recommendedTags, [TAG.dynamax]); assert.ok(v.summary.includes("다이맥스"), v.summary);
+  const v0 = computeVerdict({ species_id: 815, ivs: { atk: 15, def: 14, sta: 14 }, level: 40 }, ctx({ maxBattleSpecies: new Set([1]) }));
+  assert.equal(v0.dynamax, false); assert.equal(v0.tier, "main");
 });
 
 test("마스터리그: 뮤츠 96% → 주력, 93% → 보류", () => {

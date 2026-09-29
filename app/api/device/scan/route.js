@@ -4,6 +4,8 @@ import { rateLimit, clientIp, validDate, validTags } from "../../../lib/deviceAu
 import { userFromDeviceToken } from "../../../lib/deviceServer";
 import { scanKey, findSuperseded } from "../../../lib/pokemonMatch";
 import { getFamilyOf } from "../../../lib/savePokemonServer";
+import { getPokemonDataset, findPokemon } from "../../../lib/pokemonData";
+import { cpConsistentLevel } from "../../../lib/ivCalc";
 import { buildVerdictContext } from "../../../lib/verdictContext";
 import { verdictForItem } from "../../../lib/scanVerdict";
 
@@ -42,6 +44,15 @@ export async function POST(req) {
     level: b.level ?? null, stars: b.stars ?? null, is_shadow: Boolean(b.is_shadow), caught_on: b.caught_on || null, recheck: Boolean(b.recheck), dismissed: false,
     game_tags: Array.isArray(b.game_tags) ? b.game_tags.map((t) => String(t).trim()).filter(Boolean).slice(0, 8) : [],
   };
+  // 4-C.2 A. CP 자리수 누락 방지: 종·개체값·HP 로 가능한 레벨의 CP 와 맞지 않으면 CP 를 null 로 저장 (예: 괴력몬 2634 → 263 오판독)
+  let cpRejected = null;
+  if (item.cp != null && anyIv) {
+    try {
+      const dataset = await getPokemonDataset();
+      const p = findPokemon(dataset, { id: item.species_id, form: item.form });
+      if (p && cpConsistentLevel({ atk: p.baseAttack, def: p.baseDefense, sta: p.baseStamina }, item.cp, item.hp, { atk: item.atk_iv, def: item.def_iv, sta: item.sta_iv }) == null) { cpRejected = item.cp; item.cp = null; }
+    } catch (e) { console.warn(`[scan] CP 검증 건너뜀: ${e.message}`); }
+  }
   item.scan_key = scanKey(item);
   // 4-B2: 응답은 insert/매칭만(목표 300ms 이하). 판정은 응답 후 after() 에서 계산해 verdict 컬럼에 채운다(웹 조회 시 비어 있으면 그때 계산).
   item.verdict = null;
@@ -86,7 +97,7 @@ export async function POST(req) {
       console.log(`[scan] verdict after-response ${Date.now() - t0}ms ${data.id}`);
     } catch (e) { console.warn(`[scan] 판정 후계산 실패: ${e.message}`); }
   });
-  return NextResponse.json({ item: data, duplicate: Boolean(existing) && !cpFilled, cpFilled, superseded, ms: Date.now() - started });
+  return NextResponse.json({ item: data, duplicate: Boolean(existing) && !cpFilled, cpFilled, superseded, cpRejected, ms: Date.now() - started });
 }
 
 // 앱 → 세션 스캔 기록 조회 (?session=… 없으면 최근 200)

@@ -49,7 +49,7 @@ class CleanupActivity : Activity() {
         else if (cats.isEmpty()) text("태그를 붙일 대상이 없습니다", 12f, 0xFFC8D6E5.toInt())
         for (cat in cats) for ((gi, g) in cat.groups.withIndex()) {
             val head = cat.label + (if (cat.groups.size > 1) " ${gi + 1}/${cat.groups.size}" else "")
-            val line = "$head · 예상 ${g.expected}마리" + (if (g.overlap > 0) " ⚠️ 다른 개체 최대 ${g.overlap}마리 포함 가능" else "")
+            val line = "$head · " + (if (g.expected < 0) "예상 수 없음(게임 검색어)" else "예상 ${g.expected}마리") + (if (g.overlap > 0) " ⚠️ 다른 개체 최대 ${g.overlap}마리 포함 가능" else "")
             Button(this).apply {
                 text = line; textSize = 13f; setAllCaps(false); gravity = Gravity.START or Gravity.CENTER_VERTICAL
                 setOnClickListener { CleanupCopier.copyTag(this@CleanupActivity, cat, gi); startService(Intent(this@CleanupActivity, CaptureService::class.java).setAction(CaptureService.ACTION_REFRESH_NOTIF)); finish() }
@@ -59,7 +59,7 @@ class CleanupActivity : Activity() {
         }
         val tr = CleanupCopier.transferCount()
         if (tr > 0) Button(this).apply {
-            text = "❌ 박사행 ${CleanupCopier.transferIdx + 1}/$tr 복사 (되돌릴 수 없음 · 결과 수가 같을 때만)"; textSize = 13f; setAllCaps(false); gravity = Gravity.START or Gravity.CENTER_VERTICAL
+            text = "❌ 박사행 ${CleanupCopier.transferIdx + 1}/$tr 복사 (되돌릴 수 없음 · 🛡 보호 조건 포함 → 결과 ≤ 예상)"; textSize = 13f; setAllCaps(false); gravity = Gravity.START or Gravity.CENTER_VERTICAL
             setOnClickListener { CleanupCopier.copyNextTransfer(this@CleanupActivity); startService(Intent(this@CleanupActivity, CaptureService::class.java).setAction(CaptureService.ACTION_REFRESH_NOTIF)); finish() }
             root.addView(this)
         }

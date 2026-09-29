@@ -7,19 +7,26 @@
 export const DEFAULT_MAX_LEN = 200;
 // 예상 수 한계 안내 (박사행 토스트·🧹 패널·앱 목록에 상시 표기)
 export const EXPECTED_LIMIT_NOTE = "예상 수는 앱이 아는 개체(스캔 기록 + 내 목록) 기준입니다. 앱이 모르는 같은 종·HP 개체가 게임에 있으면 결과가 더 나옵니다 — 게임 결과 수가 예상과 다르면 보내지 마세요.";
-// 4-C "&!#"(태그 없는 개체만) 옵션을 켰을 때의 안내: 태그 달린 개체는 검색에서 빠지므로 결과는 예상 이하
-export const NO_TAG_NOTE = "박사행 검색어에 &!#(태그 없는 개체만)이 붙어 있습니다. 게임 결과 ≤ 예상 N마리 — 적으면 태그 달린 개체가 빠진 것입니다. 앱이 모르는 같은 종·HP 개체가 있으면 더 나올 수 있으니 예상보다 많으면 보내지 마세요. (한국어판 !# 동작 확인 필요)";
+// 4-C.2 박사행 보호 조건 안내: 보호 대상(태그·이로치·반짝반짝·XXL·배경)은 검색에서 빠지므로 결과는 예상 이하
+export const PROTECT_NOTE = "박사행 검색어에는 보호 조건(&!#&!색이 다른&!반짝반짝&!xxl&!배경)이 항상 붙습니다. 게임 결과 ≤ 예상 N마리 — 적으면 보호 대상이 빠진 것, 많으면 보내지 마세요(앱이 모르는 같은 종·HP 개체). 코스튬은 검색어가 없으니 태그로 보호하세요.";
 
 const key = (x) => `${x.species_id}|${x.hp ?? ""}|${x.cp ?? ""}|${x.is_shadow ? 1 : 0}`;
 
 // 검색식이 개체 x 를 잡는가 (도감번호 OR, hp OR, cp 범위 OR 로 판단. 폼·섀도는 검색식에 넣지 않으므로 잡힌다고 본다)
-// 4-C: "!#" 절(게임 검색: 태그 없는 개체만)은 game_tags 가 비어 있을 때 잡힌다고 본다 (한국어판 동작은 사용자 확인 필요, 기본 끔)
+// 4-C.2 박사행 보호 조건(항상 적용): 태그 없음·이로치 아님·반짝반짝 아님·XXL 아님·배경 없음. 검색어 길이 계산에 포함.
+//   한국어판 동작은 사용자 확인("색이 다른" 띄어쓰기 포함). 코스튬은 검색어가 없어 사용자가 태그로 보호한다.
+export const PROTECT_CLAUSES = ["!#", "!색이 다른", "!반짝반짝", "!xxl", "!배경"];
+export const PROTECT_SUFFIX = "&" + PROTECT_CLAUSES.join("&");
 export const NO_TAG_CLAUSE = "!#";
+// 검색어가 개체 x 를 잡는가. 부정 절: !# → game_tags 없음, !색이 다른 → 이로치 아님, !반짝반짝 → 럭키 아님, !xxl·!배경 → 앱이 모르는 정보(잡힌다고 봄)
 export function matches(query, x) {
   const parts = query.split("&");
   return parts.every((clause) => clause.split(",").some((term) => {
     const t = term.trim();
     if (t === NO_TAG_CLAUSE) return !(x.game_tags || []).length;
+    if (t === "!색이 다른") return !x.is_shiny;
+    if (t === "!반짝반짝") return !x.is_lucky;
+    if (t === "!xxl" || t === "!배경") return true;
     if (/^\d+$/.test(t)) return String(x.species_id) === t;
     if (/^hp\d+$/.test(t)) return x.hp != null && `hp${x.hp}` === t;
     const m = t.match(/^cp(\d+)(?:-(\d+))?$/);
@@ -39,7 +46,8 @@ export function buildQuery(members, { withCp = false } = {}) {
 // targets: [{id, species_id, hp, cp, cpVerified, is_shadow, form}], population: 알려진 전체 개체(대상 포함)
 // 반환 { groups: [{query, expected, targetIds, withCp}], skipped: [{id, reason}] }
 // strict=false(태그용): 충돌이 있어도 묶음을 만들고 overlap(알려진 비대상 중 잡히는 최대 수)을 표기. strict=true(박사행): 충돌 묶음은 쪼개고 구분 불가 대상은 제외
-export function buildGroups(targets, population, { maxLen = DEFAULT_MAX_LEN, strict = true } = {}) {
+// suffix(4-C.2): 묶음 검색어 끝에 붙는 고정 절(박사행 보호 조건). 길이 상한 계산에 포함
+export function buildGroups(targets, population, { maxLen = DEFAULT_MAX_LEN, strict = true, suffix = "" } = {}) {
   const targetIds = new Set(targets.map((t) => t.id));
   const usable = [], skipped = [];
   for (const t of targets) {
@@ -54,11 +62,11 @@ export function buildGroups(targets, population, { maxLen = DEFAULT_MAX_LEN, str
   const overlapOf = (members, withCp) => { const q = buildQuery(members, { withCp }); return nonTargets.filter((p) => matches(q, p)).length; };
   const safe = (members, withCp) => {
     if (withCp && members.some((m) => m.cp == null || !m.cpVerified)) return false;
-    const q = buildQuery(members, { withCp });
+    const q = buildQuery(members, { withCp }) + suffix;
     if (q.length > maxLen) return false;
     return !nonTargets.some((p) => matches(q, p));
   };
-  const fits = (members) => buildQuery(members, { withCp: false }).length <= maxLen;
+  const fits = (members) => (buildQuery(members, { withCp: false }) + suffix).length <= maxLen;
   for (const list of buckets.values()) {
     const sorted = [...list].sort((a, b) => a.species_id - b.species_id || (a.hp ?? 0) - (b.hp ?? 0));
     let cur = [];
@@ -66,7 +74,7 @@ export function buildGroups(targets, population, { maxLen = DEFAULT_MAX_LEN, str
       if (!cur.length) return;
       const withCp = !safe(cur, false) && safe(cur, true);
       const overlap = strict ? 0 : overlapOf(cur, withCp);
-      groups.push({ query: buildQuery(cur, { withCp }), expected: cur.length, targetIds: cur.map((m) => m.id), withCp, overlap });
+      groups.push({ query: buildQuery(cur, { withCp }) + suffix, expected: cur.length, targetIds: cur.map((m) => m.id), withCp, overlap });
       cur = [];
     };
     for (const t of sorted) {
@@ -87,28 +95,38 @@ export function buildGroups(targets, population, { maxLen = DEFAULT_MAX_LEN, str
 }
 
 // 판정 결과로 대상 분류. items: [{id, species_id, hp, cp, cpVerified, is_shadow, form, verdict:{tier, recommendedTags, collect}, recheck, is_shiny, is_lucky, legendary}]
+// 4-C.2: "수집" 태그(recommendedTags 에 "수집": 100%·0%·반짝반짝·오래 전 포획)는 등급과 무관하게 태그 묶음으로. 이로치·배경·XXL 은 게임 검색어(고정 묶음)
+export const COLLECT_TAG = "수집";
+export const COLLECT_FIXED_QUERIES = [
+  { query: "색이 다른", label: "이로치(색이 다른)" },
+  { query: "배경", label: "배경 있음" },
+  { query: "xxl", label: "XXL" },
+];
 export function classify(items) {
   const transfer = [], tags = new Map(), collect = [];
   for (const it of items) {
     const v = it.verdict || {};
+    const rec = v.recommendedTags || [];
     if (Array.isArray(v.collect) && v.collect.length) collect.push(it);
     // 4-B6: 게임 태그가 이미 달린 개체는 박사행 대상에서 제외 (사용자가 용도를 정해 둔 것)
     if (v.tier === "transfer" && !it.recheck && !(v.collect || []).length && !it.is_shiny && !it.is_lucky && !it.legendary && !(it.game_tags || []).length) transfer.push(it);
-    if (v.tier === "main" || v.tier === "hold") for (const tg of v.recommendedTags || []) { if (!tags.has(tg)) tags.set(tg, []); tags.get(tg).push(it); }
+    for (const tg of rec) {
+      if (tg !== COLLECT_TAG && v.tier !== "main" && v.tier !== "hold") continue;
+      if (!tags.has(tg)) tags.set(tg, []); tags.get(tg).push(it);
+    }
   }
   return { transfer, tags, collect };
 }
 
-// 전체 결과: [{category:"transfer"|"tag:불꽃 레이드"|"collect", label, groups, skipped}]
-// opts.noTag(4-C, 기본 false): 박사행 검색어 끝에 "&!#"(태그 없는 개체만)을 붙인다. 켜면 게임 결과 ≤ 예상 N마리(적으면 태그 달린 개체가 빠진 것)
+// 전체 결과: [{category:"transfer"|"tag:불꽃 레이드"|"collect", label, groups, skipped, protect?}]
+// 박사행 묶음에는 보호 조건(PROTECT_SUFFIX)이 항상 붙는다 → 게임 결과 ≤ 예상 N마리(적으면 보호 대상이 빠진 것, 많으면 보내지 말 것)
 export function buildCleanup(items, population, opts = {}) {
-  const { noTag = false, ...gopts } = opts;
   const c = classify(items);
   const out = [];
-  const add = (category, label, list, strict) => { if (!list.length) return; const r = buildGroups(list, population, { ...gopts, strict }); out.push({ category, label, count: list.length, strict, ...r }); };
-  add("transfer", "❌ 박사행", c.transfer, true);
-  if (noTag) for (const cat of out) if (cat.category === "transfer") { cat.noTag = true; for (const g of cat.groups) g.query = `${g.query}&${NO_TAG_CLAUSE}`; }
+  const add = (category, label, list, strict, suffix = "") => { if (!list.length) return; const r = buildGroups(list, population, { ...opts, strict, suffix }); out.push({ category, label, count: list.length, strict, protect: Boolean(suffix), ...r }); };
+  add("transfer", "❌ 박사행", c.transfer, true, PROTECT_SUFFIX);
   for (const [tg, list] of [...c.tags.entries()].sort((a, b) => b[1].length - a[1].length)) add(`tag:${tg}`, `🏷 ${tg}`, list, false);
-  add("collect", "💎 수집 추천(보관)", c.collect, false);
+  // 수집: 앱이 아는 개체(100%·0%·반짝반짝·오래 전 포획)는 위 "tag:수집" 묶음, 이로치·배경·XXL 은 게임 검색어(예상 수 없음 — 앱이 모르는 정보)
+  out.push({ category: "collect", label: "💎 수집(게임 검색어)", count: 0, strict: false, fixed: true, groups: COLLECT_FIXED_QUERIES.map((q) => ({ query: q.query, label: q.label, expected: null, targetIds: [], withCp: false, overlap: 0 })), skipped: [] });
   return out;
 }

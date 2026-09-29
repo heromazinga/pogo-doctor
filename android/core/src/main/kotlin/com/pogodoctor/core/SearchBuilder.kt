@@ -4,20 +4,25 @@ package com.pogodoctor.core
 // 형식: "{도감번호 OR}&{hp OR}[&cp OR]" (CNF: & 절마다 , 는 OR). 알려진 전체 개체에서 대상 외 개체가 잡히면 묶음을 쪼갠다.
 object SearchBuilder {
     const val DEFAULT_MAX_LEN = 200
-    data class Item(val id: String, val speciesId: Int, val hp: Int?, val cp: Int?, val cpVerified: Boolean, val isShadow: Boolean = false, val form: String = "Normal", val gameTags: List<String> = emptyList())
+    data class Item(val id: String, val speciesId: Int, val hp: Int?, val cp: Int?, val cpVerified: Boolean, val isShadow: Boolean = false, val form: String = "Normal", val gameTags: List<String> = emptyList(), val isShiny: Boolean = false, val isLucky: Boolean = false)
     data class Group(val query: String, val expected: Int, val targetIds: List<String>, val withCp: Boolean, val overlap: Int = 0)
     data class Skipped(val id: String, val reason: String)
     data class Result(val groups: List<Group>, val skipped: List<Skipped>)
 
-    // 4-C: 박사행 검색어에 붙이는 "태그 없는 개체만" 절 (한국어판 동작은 사용자 확인 필요, 기본 끔)
+    // 4-C.2 박사행 보호 조건(항상 적용, 웹 searchBuilder.js PROTECT_SUFFIX 와 동일): 태그·이로치·반짝반짝·XXL·배경 제외. 길이 계산에 포함
+    val PROTECT_CLAUSES = listOf("!#", "!색이 다른", "!반짝반짝", "!xxl", "!배경")
+    val PROTECT_SUFFIX = "&" + PROTECT_CLAUSES.joinToString("&")
     const val NO_TAG_CLAUSE = "!#"
-    fun withNoTag(query: String) = "$query&$NO_TAG_CLAUSE"
+    fun withProtect(query: String) = query + PROTECT_SUFFIX
 
     fun matches(query: String, x: Item): Boolean = query.split("&").all { clause ->
         clause.split(",").any { term ->
             val t = term.trim()
             when {
                 t == NO_TAG_CLAUSE -> x.gameTags.isEmpty()
+                t == "!색이 다른" -> !x.isShiny
+                t == "!반짝반짝" -> !x.isLucky
+                t == "!xxl" || t == "!배경" -> true
                 t.matches(Regex("\\d+")) -> x.speciesId.toString() == t
                 t.matches(Regex("hp\\d+")) -> x.hp != null && "hp${x.hp}" == t
                 else -> Regex("cp(\\d+)(?:-(\\d+))?").matchEntire(t)?.let { m -> val cp = x.cp ?: return@let false; val lo = m.groupValues[1].toInt(); val hi = m.groupValues[2].ifEmpty { m.groupValues[1] }.toInt(); cp in lo..hi } ?: false
@@ -34,7 +39,8 @@ object SearchBuilder {
     }
 
     // strict=true(박사행): 충돌 묶음은 쪼개고 구분 불가 대상은 제외. strict=false(태그): 길이 상한만 지키고 overlap(잡히는 비대상 수)을 표기
-    fun buildGroups(targets: List<Item>, population: List<Item>, maxLen: Int = DEFAULT_MAX_LEN, strict: Boolean = true): Result {
+    // suffix(4-C.2): 묶음 검색어 끝에 붙는 고정 절(박사행 보호 조건). 길이 상한 계산에 포함
+    fun buildGroups(targets: List<Item>, population: List<Item>, maxLen: Int = DEFAULT_MAX_LEN, strict: Boolean = true, suffix: String = ""): Result {
         val targetIds = targets.map { it.id }.toSet()
         val skipped = ArrayList<Skipped>()
         val usable = targets.filter { if (it.hp == null) { skipped.add(Skipped(it.id, "HP 없음")); false } else true }
@@ -42,18 +48,18 @@ object SearchBuilder {
         val groups = ArrayList<Group>()
         fun safe(members: List<Item>, withCp: Boolean): Boolean {
             if (withCp && members.any { it.cp == null || !it.cpVerified }) return false
-            val q = buildQuery(members, withCp)
+            val q = buildQuery(members, withCp) + suffix
             if (q.length > maxLen) return false
             return nonTargets.none { matches(q, it) }
         }
-        fun overlapOf(members: List<Item>, withCp: Boolean) = nonTargets.count { matches(buildQuery(members, withCp), it) }
+        fun overlapOf(members: List<Item>, withCp: Boolean) = nonTargets.count { matches(buildQuery(members, withCp) + suffix, it) }
         for (list in usable.groupBy { "${if (it.isShadow) 1 else 0}|${it.form}" }.values) {
             val sorted = list.sortedWith(compareBy({ it.speciesId }, { it.hp ?: 0 }))
             var cur = ArrayList<Item>()
             fun flush() {
                 if (cur.isEmpty()) return
                 val withCp = !safe(cur, false) && safe(cur, true)
-                groups.add(Group(buildQuery(cur, withCp), cur.size, cur.map { it.id }, withCp, if (strict) 0 else overlapOf(cur, withCp)))
+                groups.add(Group(buildQuery(cur, withCp) + suffix, cur.size, cur.map { it.id }, withCp, if (strict) 0 else overlapOf(cur, withCp)))
                 cur = ArrayList()
             }
             for (t in sorted) {
@@ -63,7 +69,7 @@ object SearchBuilder {
                     if (cur.isEmpty() || safe(next, false) || safe(next, true)) cur = ArrayList(next) else { flush(); cur = arrayListOf(t) }
                 } else {
                     val next = cur + t
-                    if (cur.isEmpty() || buildQuery(next, false).length <= maxLen) cur = ArrayList(next) else { flush(); cur = arrayListOf(t) }
+                    if (cur.isEmpty() || (buildQuery(next, false) + suffix).length <= maxLen) cur = ArrayList(next) else { flush(); cur = arrayListOf(t) }
                 }
             }
             flush()

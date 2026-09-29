@@ -107,7 +107,6 @@ export default function Home() {
   const [cleanupBusy, setCleanupBusy] = useState(false);
   const [cleanupError, setCleanupError] = useState(null);
   const [cleanupDone, setCleanupDone] = useState({}); // query → true
-  const [cleanupNoTag, setCleanupNoTag] = useState(false); // 4-C: 박사행 검색어에 &!#(태그 없는 개체만). 기본 끔(한국어판 동작 확인 필요)
   const [copied, setCopied] = useState(null);
   const [editing, setEditing] = useState(null); // { id, status, purposes, memo }
   const [thinking, setThinking] = useState(false); // 첫 텍스트 도착 전(모델 thinking 구간)
@@ -283,11 +282,11 @@ export default function Home() {
     } catch (e) { setScanError(e.message); } finally { setScanBusy(false); }
   };
   const openScans = async () => { setShowScans(true); await loadScans(); };
-  const loadCleanup = async (noTag = cleanupNoTag) => {
+  const loadCleanup = async () => {
     if (!session) return;
     setCleanupBusy(true); setCleanupError(null);
     try {
-      const res = await fetch(`/api/cleanup${noTag ? "?noTag=1" : ""}`, { headers: { ...(await authHeader()) } });
+      const res = await fetch("/api/cleanup", { headers: { ...(await authHeader()) } });
       const data = await res.json();
       if (!res.ok) { setCleanupError(data.error || `HTTP ${res.status}`); return; }
       setCleanup(data);
@@ -1960,25 +1959,23 @@ export default function Home() {
               판정 결과를 포켓몬GO <b>검색어</b>로 만듭니다. 게임을 대신 조작하지 않습니다 — 검색창에 붙여넣고, <b style={{ color: "#ffd93d" }}>결과 수가 "예상 N마리"와 같을 때만</b> 전체 선택 → 박사에게 보내기/태그. 형식 <code>도감번호,…&hp…,…</code>(한국어판 확인: & 절마다 , 는 OR). 박사행 묶음은 다른 개체가 섞일 수 있으면 쪼개거나 만들지 않고, 태그 묶음은 만들되 "다른 개체 최대 n마리 포함 가능"을 표시합니다. 게임 태그가 이미 달린 개체는 박사행에서 제외합니다. 박사행은 되돌릴 수 없습니다.
             </div>
             <div style={{ ...s.sourceNotice, marginBottom: 10 }}>⚠️ {cleanup?.note || "예상 수는 앱이 아는 개체(스캔 기록 + 내 목록) 기준입니다. 앱이 모르는 같은 종·HP 개체가 게임에 있으면 결과가 더 나옵니다 — 게임 결과 수가 예상과 다르면 보내지 마세요."}</div>
-            <label style={{ display: "flex", gap: 6, alignItems: "flex-start", fontSize: 11, color: "#8899aa", marginBottom: 10, cursor: "pointer" }}>
-              <input type="checkbox" checked={cleanupNoTag} disabled={cleanupBusy} onChange={(e) => { setCleanupNoTag(e.target.checked); loadCleanup(e.target.checked); }} />
-              <span>박사행 검색어에 <code>&!#</code>(태그 없는 개체만) 추가 — 켜면 게임 태그가 달린 개체가 검색에서 빠지므로 <b>결과 ≤ 예상</b>. 평가 화면에는 태그가 보이지 않아 칩 판독 대신 이 방식을 씁니다. 한국어판 <code>!#</code> 동작은 확인 필요(기본 끔).</span>
-            </label>
+            {cleanup?.protectNote && <div style={{ ...s.sourceNotice, marginBottom: 10 }}>🛡 {cleanup.protectNote}</div>}
+            {cleanup?.backfill?.ran && <div style={{ fontSize: 10, color: "#4ecdc4", marginBottom: 8 }}>🧹 스캔 기록 정리 1회 실행: 강화·진화로 대체된 과거 기록 {cleanup.backfill.superseded}건 (규칙 {cleanup.backfill.version})</div>}
             {cleanupError && <div style={s.error}>{cleanupError}</div>}
             {cleanupBusy && !cleanup && <div style={{ fontSize: 12, color: "#8899aa" }}>계산 중…</div>}
             {cleanup && cleanup.categories.length === 0 && <div style={{ fontSize: 12, color: "#576574", padding: "8px 0" }}>정리할 대상이 없습니다 (스캔 기록·내 목록의 판정 기준)</div>}
             {cleanup && cleanup.categories.map((cat) => (
               <div key={cat.category} style={{ marginBottom: 14 }}>
-                <div style={{ fontSize: 13, fontWeight: 700, color: cat.category === "transfer" ? "#ff6b6b" : cat.category === "collect" ? "#a890f0" : "#4ecdc4" }}>{cat.label} — 대상 {cat.count}마리 · 묶음 {cat.groups.length}{cat.skipped.length ? ` · 제외 ${cat.skipped.length}` : ""}</div>
+                <div style={{ fontSize: 13, fontWeight: 700, color: cat.category === "transfer" ? "#ff6b6b" : cat.category === "collect" ? "#a890f0" : "#4ecdc4" }}>{cat.label}{cat.fixed ? " — 이로치·배경·XXL 은 게임 검색어로" : ` — 대상 ${cat.count}마리 · 묶음 ${cat.groups.length}${cat.skipped.length ? ` · 제외 ${cat.skipped.length}` : ""}`}{cat.protect ? " · 🛡 보호 조건 포함" : ""}</div>
                 {cat.groups.map((g, i) => (
                   <div key={g.query} style={{ ...s.collItem, flexDirection: "column", alignItems: "stretch", marginTop: 6, opacity: cleanupDone[g.query] ? 0.5 : 1 }}>
-                    <div style={{ fontSize: 11, color: "#8899aa" }}>묶음 {i + 1}/{cat.groups.length} · <b style={{ color: "#ffd93d" }}>예상 {g.expected}마리</b>{g.withCp ? " · CP 조건 포함" : ""}{g.overlap > 0 ? <span style={{ color: "#ff6b6b" }}> · ⚠️ 다른 개체 최대 {g.overlap}마리 포함 가능</span> : ""} · {g.targetIds.map((id) => cleanup.names[id]).filter(Boolean).slice(0, 8).join(", ")}{g.targetIds.length > 8 ? " …" : ""}</div>
+                    <div style={{ fontSize: 11, color: "#8899aa" }}>{cat.fixed ? <b style={{ color: "#a890f0" }}>{g.label}</b> : <>묶음 {i + 1}/{cat.groups.length} · <b style={{ color: "#ffd93d" }}>{cat.protect ? `게임 결과 ≤ 예상 ${g.expected}마리` : `예상 ${g.expected}마리`}</b></>}{g.withCp ? " · CP 조건 포함" : ""}{g.overlap > 0 ? <span style={{ color: "#ff6b6b" }}> · ⚠️ 다른 개체 최대 {g.overlap}마리 포함 가능</span> : ""}{cat.fixed ? " · 예상 수 없음(앱이 모르는 정보 — 게임 결과를 보고 태그)" : ` · ${g.targetIds.map((id) => cleanup.names[id]).filter(Boolean).slice(0, 8).join(", ")}${g.targetIds.length > 8 ? " …" : ""}`}</div>
                     <code style={{ fontSize: 12, color: "#e0e0e0", wordBreak: "break-all", marginTop: 4, userSelect: "all" }}>{g.query}</code>
                     <div style={{ display: "flex", gap: 6, marginTop: 6 }}>
                       <button onClick={() => copyQuery(g)} style={{ ...s.chip, fontSize: 11, flex: 1 }}>{copied === g.query ? "복사됨 ✓" : "📋 복사"}</button>
-                      {!cleanupDone[g.query] && <button onClick={() => cleanupGroupDone(cat, g)} disabled={cleanupBusy} style={{ ...s.chip, fontSize: 11, color: cat.category === "transfer" ? "#ff6b6b" : "#4ecdc4" }}>{cat.category === "transfer" ? "보냄 처리 완료" : "완료(정리)"}</button>}
+                      {!cleanupDone[g.query] && !cat.fixed && <button onClick={() => cleanupGroupDone(cat, g)} disabled={cleanupBusy} style={{ ...s.chip, fontSize: 11, color: cat.category === "transfer" ? "#ff6b6b" : "#4ecdc4" }}>{cat.category === "transfer" ? "보냄 처리 완료" : "완료(정리)"}</button>}
                     </div>
-                    {copied === g.query && <div style={{ fontSize: 10, color: "#ffd93d", marginTop: 4 }}>{cat.noTag ? `⚠️ 게임 결과 ≤ 예상 ${g.expected}마리. 적으면 태그 달린 개체가 빠진 것입니다 — 많으면 진행하지 마세요.` : `⚠️ 게임 검색 결과가 정확히 ${g.expected}마리일 때만 전체 선택하세요. 다르면 진행하지 마세요.`}</div>}
+                    {copied === g.query && !cat.fixed && <div style={{ fontSize: 10, color: "#ffd93d", marginTop: 4 }}>{cat.protect ? `⚠️ 게임 결과 ≤ 예상 ${g.expected}마리. 적으면 보호 대상(태그·이로치·반짝반짝·XXL·배경)이 빠진 것, 많으면 보내지 마세요.` : `⚠️ 게임 검색 결과가 정확히 ${g.expected}마리일 때만 전체 선택하세요. 다르면 진행하지 마세요.`}</div>}
                   </div>
                 ))}
                 {cat.skipped.length > 0 && <div style={{ fontSize: 10, color: "#576574", marginTop: 4 }}>제외: {cat.skipped.map((x) => `${cleanup.names[x.id] || x.id}(${x.reason})`).join(", ")}</div>}

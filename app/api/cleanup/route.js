@@ -3,7 +3,8 @@ import { getServiceClient } from "../../lib/supabaseServer";
 import { rateLimit, clientIp } from "../../lib/deviceAuth";
 import { resolveUser, buildVerdictContext } from "../../lib/verdictContext";
 import { fillMissingVerdicts } from "../../lib/scanVerdict";
-import { buildCleanup, DEFAULT_MAX_LEN, EXPECTED_LIMIT_NOTE, NO_TAG_NOTE } from "../../lib/searchBuilder";
+import { backfillSuperseded } from "../../lib/scanBackfill";
+import { buildCleanup, DEFAULT_MAX_LEN, EXPECTED_LIMIT_NOTE, PROTECT_NOTE, PROTECT_SUFFIX } from "../../lib/searchBuilder";
 import { computeVerdict, inputFromRow } from "../../lib/verdict";
 import { isLegendaryClass } from "../../lib/speciesRankings";
 import { findPokemon } from "../../lib/pokemonData";
@@ -20,10 +21,12 @@ export async function GET(req) {
   if (!user) return NextResponse.json({ error: "로그인이 필요합니다" }, { status: 401 });
   const sp = new URL(req.url).searchParams;
   const maxLen = Math.min(400, Math.max(60, Number(sp.get("maxLen")) || DEFAULT_MAX_LEN));
-  const noTag = sp.get("noTag") === "1"; // 4-C: 박사행 검색어에 "&!#"(태그 없는 개체만) 추가 (기본 끔, 한국어판 동작 확인 필요)
   const { ctx } = await buildVerdictContext(req);
   const { data: scans } = await sb.from("scan_items").select("*").eq("user_id", user.userId).eq("dismissed", false).eq("superseded", false).order("created_at", { ascending: false }).limit(300);
-  const items = scans || [];
+  let items = scans || [];
+  // 4-C.2 스캔 기록 백필(멱등, 규칙 버전당 1회): 과거 기록끼리도 규칙 ③ 으로 superseded 처리
+  let backfill = null;
+  try { backfill = await backfillSuperseded(sb, user.userId, items, ctx); if (backfill.changed) items = backfill.items; } catch (e) { console.warn(`[cleanup] 백필 실패: ${e.message}`); }
   try { await fillMissingVerdicts(sb, items, ctx); } catch {}
   const rows = ctx.myRows || [];
   const legendaryOf = (r) => { const p = findPokemon(ctx.dataset, { id: r.species_id, form: r.form || "Normal" }); return p ? isLegendaryClass(p) : false; };
@@ -34,13 +37,13 @@ export async function GET(req) {
     let v = null; try { v = computeVerdict(inputFromRow(r, ctx.storageMode), ctx); } catch { v = null; }
     const verdict = r.status === "transfer" ? { tier: "transfer", recommendedTags: [], collect: v?.collect || [] } : (v ? { tier: v.tier, recommendedTags: r.tags?.length ? r.tags : v.recommendedTags, collect: v.collect } : {});
     return { id: `row:${r.id}`, species_id: r.species_id, hp: r.hp, cp: r.cp, cpVerified: r.cp != null, is_shadow: Boolean(r.is_shadow), form: r.form || "Normal",
-      verdict, recheck: v ? !v.confident : true, is_shiny: Boolean(r.is_shiny), is_lucky: Boolean(r.is_lucky), legendary: legendaryOf(r), name_kr: r.name_kr, game_tags: r.game_tags || [] };
+      verdict, recheck: v ? !v.confident : true, is_shiny: Boolean(r.is_shiny), is_lucky: Boolean(r.is_lucky), legendary: legendaryOf(r), name_kr: r.name_kr, game_tags: [...new Set([...(r.game_tags || []), ...(r.tags || [])])] };
   });
   const all = [...scanTargets, ...rowTargets];
-  const categories = buildCleanup(all, all, { maxLen, noTag });
+  const categories = buildCleanup(all, all, { maxLen });
   const names = Object.fromEntries(all.map((x) => [x.id, x.name_kr]));
   const gameTagged = all.filter((x) => (x.game_tags || []).length).length;
-  return NextResponse.json({ categories, names, population: all.length, gameTagged, maxLen, noTag, note: noTag ? NO_TAG_NOTE : EXPECTED_LIMIT_NOTE, at: new Date().toISOString() });
+  return NextResponse.json({ categories, names, population: all.length, gameTagged, maxLen, protect: PROTECT_SUFFIX, note: EXPECTED_LIMIT_NOTE, protectNote: PROTECT_NOTE, backfill: backfill ? { ran: backfill.ran, superseded: backfill.superseded, version: backfill.version } : null, at: new Date().toISOString() });
 }
 
 export async function POST(req) {

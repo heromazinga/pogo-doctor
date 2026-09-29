@@ -9,7 +9,7 @@ export function verdictForItem(it, ctx, ivCandidates) {
       ivs: anyIv ? { atk: it.atk_iv, def: it.def_iv, sta: it.sta_iv } : null, ivCandidates,
       is_shadow: Boolean(it.is_shadow), caught_on: it.caught_on, storageMode: ctx.storageMode }, ctx);
     // 4-C: 태그별 추천 기술(moves)·진화 대기의 이벤트 힌트도 저장 (웹 스캔 기록 표시)
-    return { tier: v.tier, summary: v.summary, recommendedTags: v.recommendedTags, purposes: v.purposes, collect: v.collect, event: v.event?.note || null, confident: v.confident,
+    return { tier: v.tier, summary: v.summary, recommendedTags: v.recommendedTags, purposes: v.purposes, collect: v.collect, event: v.event?.note || null, confident: v.confident, dynamax: Boolean(v.dynamax),
       tags: v.tags.map((t) => ({ name: t.name, tier: t.tier, reason: t.reason, moves: t.moves || null, evolveAtEvent: t.evolveAtEvent || null })), recommendedMoves: v.recommendedMoves || {}, rulesVersion: RULES_VERSION, at: new Date().toISOString() };
   } catch (e) { return { tier: "need_appraisal", summary: `판정 실패: ${e.message}`, recommendedTags: [], purposes: [], error: true }; }
 }

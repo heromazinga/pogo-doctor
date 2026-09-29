@@ -206,12 +206,8 @@ class MainActivity : ComponentActivity() {
                         OutlinedButton(enabled = paired && !busy, onClick = { startActivity(Intent(this@MainActivity, CleanupActivity::class.java)) }) { Text("태그 선택") }
                     }
                     Text("묶음: $cleanupStatus · 자세한 목록·완료 처리는 웹 내 목록 → 🧹 정리 도우미", fontSize = 11.sp, color = Color(0xFF8899AA))
-                    // 4-C: 박사행 검색어에 &!#(태그 없는 개체만). 평가 화면에는 태그가 안 보여 칩 판독 대신 게임 검색으로 태그 개체를 뺀다 (한국어판 동작 확인 필요, 기본 끔)
-                    var cleanupNoTag by remember { mutableStateOf(prefs.cleanupNoTag) }
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Text("박사행 검색어에 &!# (태그 없는 개체만) 추가 — 켜면 게임 결과 ≤ 예상. 한국어판 동작 확인 필요", fontSize = 12.sp, color = Color(0xFF8899AA), modifier = Modifier.weight(1f).padding(top = 12.dp))
-                        Switch(checked = cleanupNoTag, onCheckedChange = { cleanupNoTag = it; prefs.cleanupNoTag = it })
-                    }
+                    // 4-C.2: 박사행 검색어에는 보호 조건(&!#&!색이 다른&!반짝반짝&!xxl&!배경)이 항상 붙는다(옵션 없음). 코스튬은 검색어가 없어 태그로 보호
+                    Text("🛡 박사행 검색어에는 보호 조건(태그·이로치·반짝반짝·XXL·배경 제외)이 항상 붙습니다 → 게임 결과 ≤ 예상 N마리. 적으면 보호 대상이 빠진 것, 많으면 보내지 마세요. 코스튬은 태그로 보호하세요.", fontSize = 12.sp, color = Color(0xFF8899AA))
                 }
             }
 
