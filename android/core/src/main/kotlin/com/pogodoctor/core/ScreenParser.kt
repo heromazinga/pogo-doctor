@@ -34,7 +34,8 @@ data class ScreenInfo(
 data class MoveMatch(val nameKr: String, val raw: String, val score: Double)
 data class Appraisal(val atk: Int?, val def: Int?, val sta: Int?)
 
-class ScreenParser(private val species: List<SpeciesRef>, private val allMoveNamesKr: Collection<String>) {
+// extraTags: 4-B6.2 사용자 게임 태그 이름(앱 설정). GameTags.KNOWN 에 더해 칩 판독에 쓴다
+class ScreenParser(private val species: List<SpeciesRef>, private val allMoveNamesKr: Collection<String>, private val extraTags: Collection<String> = emptyList()) {
     private val speciesByName: Map<String, SpeciesRef> = species.associateBy { Fuzzy.normalize(it.nameKr) }
     private val speciesNames: List<String> = species.map { it.nameKr }.distinct()
     private val nameIndex = NameIndex(speciesNames)   // 4-B3: 자모 색인으로 후보를 줄여 편집 거리 계산 (파싱 543ms → 수십 ms 목표)
@@ -98,8 +99,8 @@ class ScreenParser(private val species: List<SpeciesRef>, private val allMoveNam
         // 이름: CP 줄 아래 ~ HP 줄 위의 한글 줄 중 종 이름과 가장 유사한 것 (라벨·포획 줄 제외)
         val cpLine = lines.firstOrNull { CP_RE.containsMatchIn(fixDigits(it.text)) }
         val hpLine = lines.firstOrNull { HP_RE.containsMatchIn(fixDigits(it.text)) || HP_RE2.containsMatchIn(fixDigits(it.text)) }
-        val tagLines = GameTags.detect(lines).toSet()
-        fun nameLike(l: OcrLine): Boolean { val t = l.text.trim(); return t.length in 2..12 && t.any { it in '가'..'힣' } && NOISE.none { t.contains(it) } && !isLabelLine(l) && !isCaughtLine(l) && !CP_RE.containsMatchIn(t) && !HP_RE2.containsMatchIn(t) && GameTags.detect(listOf(l)).isEmpty() }
+        val gameTags = GameTags.detect(lines, extraTags)
+        fun nameLike(l: OcrLine): Boolean { val t = l.text.trim(); return t.length in 2..12 && t.any { it in '가'..'힣' } && NOISE.none { t.contains(it) } && !isLabelLine(l) && !isCaughtLine(l) && !CP_RE.containsMatchIn(t) && !HP_RE2.containsMatchIn(t) && GameTags.detect(listOf(l), extraTags).isEmpty() }
         val nameCands = lines.filter { l -> nameLike(l) && (cpLine == null || l.centerY > cpLine.centerY) && (hpLine == null || l.centerY < hpLine.centerY) }
             .ifEmpty { lines.filter { nameLike(it) } }
         var bestName: Fuzzy.Match? = null; var nameRaw: String? = null
@@ -163,6 +164,6 @@ class ScreenParser(private val species: List<SpeciesRef>, private val allMoveNam
         }
         if (cp == null && !cpTruncated) warnings.add("CP 를 찾지 못했습니다")
         if (hp == null) warnings.add("HP 를 찾지 못했습니다 (개체값 후보가 넓어집니다)")
-        return ScreenInfo(kind, cp, hp, nameRaw, sp, bestName?.score ?: 0.0, moves, appraisalBars, warnings, candidates, parseCaughtOn(lines), cpTruncated, GameTags.detect(lines))
+        return ScreenInfo(kind, cp, hp, nameRaw, sp, bestName?.score ?: 0.0, moves, appraisalBars, warnings, candidates, parseCaughtOn(lines), cpTruncated, gameTags)
     }
 }

@@ -155,8 +155,12 @@ function evaluateCandidate(p, cand, input, ctx, rankings, { forEvolve = false } 
       continue;
     }
     let tier = null;
-    if (top && me.rank <= RULES.LEAGUE_MAIN_PRODUCT_RANK) tier = "main";
-    else if ((top && me.rank <= RULES.LEAGUE_HOLD_PRODUCT_RANK) || (!top && me.rank <= RULES.LEAGUE_MID_HOLD_PRODUCT_RANK)) tier = "hold";
+    // 4-B6.2: 보류 기준은 보관함 여유에 따라. 빠듯 = 500/100(기존), 그 외 = 800/200 (rulesOverride 로 비교 가능)
+    const tight = (input.storageMode || ctx.storageMode) === "tight";
+    const holdRank = tight ? rule(ctx, "LEAGUE_HOLD_PRODUCT_RANK_TIGHT") : rule(ctx, "LEAGUE_HOLD_PRODUCT_RANK");
+    const midHoldRank = tight ? rule(ctx, "LEAGUE_MID_HOLD_PRODUCT_RANK_TIGHT") : rule(ctx, "LEAGUE_MID_HOLD_PRODUCT_RANK");
+    if (top && me.rank <= rule(ctx, "LEAGUE_MAIN_PRODUCT_RANK")) tier = "main";
+    else if ((top && me.rank <= holdRank) || (!top && me.rank <= midHoldRank)) tier = "hold";
     if (!tier) continue;
     tags.push({ name: TAG[league], tier, reason: `PvPoke ${sp.rank}위·스탯곱 ${me.rank}/4096위 (L${me.level} CP${me.cp})`, metrics: { speciesRank: sp.rank, top, productRank: me.rank, levelAtCap: me.level, cpAtCap: me.cp } });
   }

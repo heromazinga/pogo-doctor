@@ -229,9 +229,11 @@ class CaptureService : Service() {
     private var gate: ScanGate? = null
     private var parserCache: Pair<String?, ScreenParser>? = null
     private fun parserFor(data: DataRepo.Data): ScreenParser {
+        // 캐시 키 = 데이터셋 생성 시각 + 사용자 게임 태그 목록(4-B6.2, 설정에서 바꾸면 새 파서)
+        val key = "${data.generatedAt}|${prefs.gameTagNames}"
         val c = parserCache
-        if (c != null && c.first == data.generatedAt) return c.second
-        return ScreenParser(data.species, data.allMoveNamesKr).also { parserCache = data.generatedAt to it }
+        if (c != null && c.first == key) return c.second
+        return ScreenParser(data.species, data.allMoveNamesKr, prefs.gameTagList).also { parserCache = key to it }
     }
     private fun scanFrame() {
         val session = scan ?: return
@@ -477,7 +479,7 @@ class CaptureService : Service() {
     private suspend fun analyze(bmp: Bitmap, viaActivity: Boolean) {
         val data = repo.loadCached() ?: run { toast("포켓몬 데이터가 없습니다 — 앱에서 '데이터 갱신'"); return }
         val lines = Ocr.recognize(bmp)
-        val parser = ScreenParser(data.species, data.allMoveNamesKr)
+        val parser = parserFor(data)
         var info = parser.parse(lines)
         val now = System.currentTimeMillis()
         if (info.kind == ScreenInfo.Kind.APPRAISAL) {

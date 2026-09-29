@@ -69,6 +69,17 @@ class Phase4b6Test {
         assertEquals(listOf("불꽃 레이드"), GameTags.detect(listOf(OcrLine("불꽃  레이드", 0, 0, 10, 10))), "공백 차이 무시")
     }
 
+    // 4-B6.2: 사용자 기존 태그 이름은 기본 인식, 앱 설정 목록(extra)은 추가 인식, 띄어쓰기 무시. 줄 전체가 태그면 토큰으로 쪼개지 않음("체육관 방어" ≠ "체육관")
+    @Test fun user_game_tag_names_are_known_by_default_and_extra_list_adds() {
+        for (t in listOf("즐겨찾기", "슈퍼리그", "하이퍼리그", "레이드1군", "레이드2군", "다이맥스", "체육관")) assertTrue(t in GameTags.KNOWN, t)
+        val lines = listOf(OcrLine("레이드 1군", 0, 0, 10, 10), OcrLine("즐겨찾기", 0, 20, 10, 10), OcrLine("체육관 방어", 0, 40, 10, 10), OcrLine("PVP용", 0, 60, 10, 10))
+        assertEquals(listOf("레이드1군", "즐겨찾기", "체육관 방어"), GameTags.detect(lines))
+        assertEquals(listOf("레이드1군", "즐겨찾기", "체육관 방어", "PVP용"), GameTags.detect(lines, listOf("PVP용")))
+        val parser = ScreenParser(listOf(SpeciesRef(979, "Normal", "저승갓숭", 220, 178, 242, emptyList())), emptyList(), listOf("PVP용"))
+        val info = parser.parse(listOf(OcrLine("저승갓숭", 0, 0, 100, 20), OcrLine("CP2461", 0, 30, 100, 20), OcrLine("HP 150/150", 0, 60, 100, 20), OcrLine("PVP용", 0, 90, 40, 12), OcrLine("하이퍼리그", 50, 90, 40, 12)))
+        assertEquals(listOf("PVP용", "하이퍼리그"), info.gameTags)
+    }
+
     @Test fun search_builder_loose_mode_reports_overlap_and_strict_splits() {
         val t = { id: String, sp: Int, hp: Int -> SearchBuilder.Item(id, sp, hp, null, false) }
         val targets = listOf(t("a", 700, 154), t("b", 381, 118))

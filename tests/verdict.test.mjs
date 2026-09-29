@@ -6,7 +6,8 @@ import { computeVerdict, leagueProductTable } from "../app/lib/verdict.js";
 import { getRankings } from "../app/lib/speciesRankings.js";
 import { extractEventTargets, matchEvents } from "../app/lib/eventTargets.js";
 import { ivCandidates } from "../app/lib/ivCalc.js";
-import { RULES, TAG, purposesFromTags } from "../app/lib/verdictRules.js";
+import { RULES, RULES_VERSION, TAG, purposesFromTags } from "../app/lib/verdictRules.js";
+import { fillMissingVerdicts, isStaleVerdict } from "../app/lib/scanVerdict.js";
 
 // ── 합성 데이터셋 ──
 const moveStats = {
@@ -59,11 +60,13 @@ const dataset = {
     sp(18, "Pidgeot", "피죤투", ["normal", "flying"], 166, 154, 195, ["Gust", "Air Slash"], ["Hurricane", "Hyper Beam"]),
     sp(242, "Blissey", "해피너스", ["normal"], 129, 169, 496, ["Pound"], ["Hyper Beam"]),
     sp(700, "Sylveon", "님피아", ["fairy"], 203, 205, 216, ["Charm", "Quick Attack"], ["Moonblast", "Hyper Beam"]),
+    // 4-B6.2: 실DB 사례(저승갓숭 0/11/14 L28.5 CP2461, 하이퍼 스탯곱 594위). 기술 없음 → 레이드 순위 없음, 리그만 검증
+    sp(979, "Annihilape", "저승갓숭", ["fighting", "ghost"], 220, 178, 242, [], []),
     ...fillers,
   ],
 };
 const mk = (entries) => { const m = new Map(); entries.forEach((id, i) => m.set(id, { rank: i + 1, score: 100 - i, name: id })); return m; };
-const leagueRankings = { fetchedAt: "t", errors: {}, leagues: { great: mk(["azumarill", "cinderace"]), ultra: mk(["charizard"]), master: mk(["mewtwo"]) } };
+const leagueRankings = { fetchedAt: "t", errors: {}, leagues: { great: mk(["azumarill", "cinderace"]), ultra: mk(["charizard", "annihilape"]), master: mk(["mewtwo"]) } };
 const ctx = (over = {}) => ({ dataset, leagueRankings, eventTargets: [], myRows: [], storageMode: "normal", ...over });
 const tagOf = (v, name) => v.tags.find((t) => t.name === name);
 
@@ -153,6 +156,43 @@ test("4-B6 레이드 공격 IV 하한: 0/15/15 → 레이드 태그 없음, 10~1
   assert.equal(RULES.RAID_MIN_ATK_IV, 10); assert.equal(RULES.RAID_MAIN_MIN_ATK_IV, 12);
   const before = computeVerdict({ species_id: 815, ivs: { atk: 0, def: 15, sta: 15 }, level: 40 }, ctx({ rulesOverride: { RAID_MIN_ATK_IV: 0, RAID_MAIN_MIN_ATK_IV: 0 } }));
   assert.equal(tagOf(before, TAG.raid("불꽃")).tier, "main", "수정 전 기준 재현");
+});
+
+test("4-B6.2 리그 보류 완화: 저승갓숭 0/11/14 L28.5 CP2461(하이퍼 스탯곱 594위) → 보통/여유 보류(≤800), 빠듯은 기존 500 유지 → 태그 없음·박사행", () => {
+  const p = dataset.pokemon.find((x) => x.id === 979);
+  const me = leagueProductTable(p, 2500, 50).rank.get("0,11,14");
+  assert.ok(me.rank > 500 && me.rank <= 800, `스탯곱 순위 ${me.rank} (실DB explain: 594)`);
+  const input = { species_id: 979, ivs: { atk: 0, def: 11, sta: 14 }, level: 28.5, cp: 2461 };
+  const normal = computeVerdict(input, ctx());
+  assert.equal(tagOf(normal, TAG.ultra).tier, "hold");
+  assert.equal(normal.tier, "hold");
+  assert.equal(tagOf(computeVerdict(input, ctx({ storageMode: "relaxed" })), TAG.ultra).tier, "hold");
+  const tight = computeVerdict(input, ctx({ storageMode: "tight" }));
+  assert.equal(tagOf(tight, TAG.ultra), undefined, "빠듯: 500 기준 유지");
+  assert.equal(tight.tier, "transfer");
+  const before = computeVerdict(input, ctx({ rulesOverride: { LEAGUE_HOLD_PRODUCT_RANK: 500, LEAGUE_MID_HOLD_PRODUCT_RANK: 100 } }));
+  assert.equal(tagOf(before, TAG.ultra), undefined, "완화 전 기준 재현(stats 비교용)");
+  assert.equal(RULES.LEAGUE_HOLD_PRODUCT_RANK, 800); assert.equal(RULES.LEAGUE_MID_HOLD_PRODUCT_RANK, 200);
+  assert.equal(RULES.LEAGUE_HOLD_PRODUCT_RANK_TIGHT, 500); assert.equal(RULES.LEAGUE_MID_HOLD_PRODUCT_RANK_TIGHT, 100);
+});
+
+test("4-B6.2 판정 최신화: 저장된 판정의 rulesVersion 이 다르면 다시 계산·저장, 같으면 유지", async () => {
+  const updates = [];
+  const sb = { from: () => ({ update: (patch) => ({ eq: async (_k, id) => { updates.push({ id, patch }); return {}; } }) }) };
+  const base = { species_id: 979, form: "Normal", atk_iv: 0, def_iv: 11, sta_iv: 14, level: 28.5, cp: 2461, hp: 150 };
+  const items = [
+    { id: "a", ...base, verdict: null },
+    { id: "b", ...base, verdict: { tier: "transfer", recommendedTags: [], tags: [], rulesVersion: "old" } },
+    { id: "c", ...base, verdict: { tier: "hold", recommendedTags: [TAG.ultra], tags: [], rulesVersion: RULES_VERSION } },
+    { id: "d", ...base, verdict: { tier: "need_appraisal", error: true } },
+  ];
+  const n = await fillMissingVerdicts(sb, items, ctx());
+  assert.equal(n, 3);
+  assert.deepEqual(updates.map((u) => u.id), ["a", "b", "d"]);
+  assert.equal(items[1].verdict.tier, "hold", "옛 규칙(박사행)으로 저장된 판정이 새 규칙(보류)으로 갱신됨");
+  assert.equal(items[1].verdict.rulesVersion, RULES_VERSION);
+  assert.equal(items[2].verdict.rulesVersion, RULES_VERSION);
+  assert.ok(isStaleVerdict(undefined) && isStaleVerdict({ error: true }) && isStaleVerdict({ rulesVersion: "x" }) && !isStaleVerdict({ rulesVersion: RULES_VERSION }));
 });
 
 test("마스터리그: 뮤츠 96% → 주력, 93% → 보류", () => {

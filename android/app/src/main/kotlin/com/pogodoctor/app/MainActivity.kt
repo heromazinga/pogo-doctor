@@ -108,6 +108,7 @@ class MainActivity : ComponentActivity() {
         var stableMs by remember { mutableStateOf(prefs.scanStableMs.toString()) }
         var scanVibrate by remember { mutableStateOf(prefs.scanVibrate) }
         var debugMax by remember { mutableStateOf(prefs.scanDebugMax.toString()) }
+        var gameTagNames by remember { mutableStateOf(prefs.gameTagNames) }
         var webCode by remember { mutableStateOf("") }
         var busy by remember { mutableStateOf(false) }
         var log by remember { mutableStateOf("") }
@@ -249,6 +250,11 @@ class MainActivity : ComponentActivity() {
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         OutlinedTextField(value = debugMax, onValueChange = { debugMax = it.filter { ch -> ch.isDigit() } }, label = { Text("디버그 업로드 상한(세션당, 0~200)") }, modifier = Modifier.weight(1f))
                         OutlinedButton(modifier = Modifier.padding(top = 8.dp), onClick = { prefs.scanDebugMax = debugMax.toIntOrNull() ?: 20; debugMax = prefs.scanDebugMax.toString(); status = "디버그 업로드 상한 ${prefs.scanDebugMax}장 저장" }) { Text("저장") }
+                    }
+                    // 4-B6.2 사용자 게임 태그 이름: 평가 화면 칩 판독에 쓰는 목록(띄어쓰기 무시 비교). 추천 태그 이름은 항상 인식
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        OutlinedTextField(value = gameTagNames, onValueChange = { gameTagNames = it }, label = { Text("내 게임 태그 이름 (쉼표 구분, 추천 태그 이름은 항상 인식)") }, modifier = Modifier.weight(1f))
+                        OutlinedButton(modifier = Modifier.padding(top = 8.dp), onClick = { prefs.gameTagNames = gameTagNames; gameTagNames = prefs.gameTagNames; status = "게임 태그 ${prefs.gameTagList.size}개 저장" }) { Text("저장") }
                     }
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         Text("연속 스캔 기록 시 진동 (새 기록에만)", fontSize = 13.sp, modifier = Modifier.padding(top = 12.dp))
