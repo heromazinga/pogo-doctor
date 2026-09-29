@@ -56,6 +56,7 @@ class MainActivity : ComponentActivity() {
     private var status by mutableStateOf("")
     private var paired by mutableStateOf(false)
     private var running by mutableStateOf(false)
+    private var scanning by mutableStateOf(false)
 
     private val projectionLauncher = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { r ->
         if (r.resultCode == RESULT_OK && r.data != null) {
@@ -74,7 +75,7 @@ class MainActivity : ComponentActivity() {
         setContent { Surface(Modifier.fillMaxSize(), color = Color(0xFF0F2035)) { MaterialTheme(colorScheme = darkColorScheme()) { Screen() } } }
     }
 
-    override fun onResume() { super.onResume(); running = CaptureService.running; paired = prefs.isPaired }
+    override fun onResume() { super.onResume(); running = CaptureService.running; scanning = CaptureService.scanning; paired = prefs.isPaired }
 
     private fun startCapture() {
         if (!Settings.canDrawOverlays(this)) {
@@ -102,6 +103,8 @@ class MainActivity : ComponentActivity() {
         var debug by remember { mutableStateOf(prefs.debugMode) }
         var delayMs by remember { mutableStateOf(prefs.captureDelayMs.toString()) }
         var storageMode by remember { mutableStateOf(prefs.storageMode) }
+        var scanMs by remember { mutableStateOf(prefs.scanIntervalMs.toString()) }
+        var scanStrip by remember { mutableStateOf(prefs.scanStrip) }
         var webCode by remember { mutableStateOf("") }
         var busy by remember { mutableStateOf(false) }
         var log by remember { mutableStateOf("") }
@@ -161,6 +164,19 @@ class MainActivity : ComponentActivity() {
 
             Card(Modifier.fillMaxWidth()) {
                 Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(if (scanning) "📷 연속 스캔 중" else "📷 연속 스캔 (4-B)", fontSize = 16.sp)
+                    Text("포켓몬GO 평가 화면(막대 3개)을 켜 둔 채 좌우로 넘기기만 하면 자동으로 읽어 서버 \"스캔 기록\" 에 남깁니다(자동 저장 없음 — 웹 내 목록 → 📷 스캔 기록에서 검토 후 저장). 결과 창을 띄우지 않고 알림 한 줄만 갱신합니다(상단 띠는 설정에서 켤 수 있음). CP 가 배너에 가려져도 막대+HP 로 기록하고 이후 CP 를 읽으면 그 기록을 보완합니다. 켜기/끄기: 여기, 알림의 \"연속 스캔\", 빠른 설정 타일 \"포고박사 연속 스캔\".", fontSize = 12.sp, color = Color(0xFF8899AA))
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Button(enabled = running && paired, onClick = { startService(Intent(this@MainActivity, CaptureService::class.java).setAction(CaptureService.ACTION_SCAN_TOGGLE)); scanning = !scanning; status = if (scanning) "연속 스캔 시작 — 포켓몬GO 평가 화면으로" else "연속 스캔 중지" }) { Text(if (scanning) "스캔 중지" else "연속 스캔 시작") }
+                        OutlinedButton(onClick = { startActivity(Intent(this@MainActivity, WebActivity::class.java)) }) { Text("스캔 기록 보기(웹)") }
+                    }
+                    if (!paired) Text("스캔 기록은 서버에 남으므로 기기 연결이 필요합니다", fontSize = 11.sp, color = Color(0xFFFF6B6B))
+                    if (prefs.lastScanReport.isNotBlank()) Text("최근 세션: ${prefs.lastScanReport}", fontSize = 10.sp, color = Color(0xFF8899AA))
+                }
+            }
+
+            Card(Modifier.fillMaxWidth()) {
+                Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Text("📱 포켓몬GO 위에서는 빠른 설정 타일을 쓰세요", fontSize = 16.sp)
                     Text("포켓몬GO 는 실행 중 다른 앱의 떠 있는 창을 숨깁니다(Android 12+). 그래서 ⚡ 버튼과 결과 카드는 포켓몬GO 위에서 보이지 않습니다. 대신 화면 위에서 아래로 쓸어내린 빠른 설정의 \"포고박사 캡처\" 타일(또는 알림의 \"캡처\" 버튼)을 누르면 알림창이 닫히고 ${prefs.captureDelayMs}ms 뒤 1장을 캡처해 결과를 반투명 창으로 보여줍니다.", fontSize = 12.sp, color = Color(0xFF8899AA))
                     Text("타일 추가: 빠른 설정 패널 펼치기 → 연필(편집) 또는 ⋮ → 타일 편집 → \"포고박사 캡처\" 를 끌어다 놓기. 타일은 오버레이가 실행 중일 때만 켜집니다.", fontSize = 12.sp, color = Color(0xFF8899AA))
@@ -183,11 +199,19 @@ class MainActivity : ComponentActivity() {
                         OutlinedTextField(value = delayMs, onValueChange = { delayMs = it.filter { ch -> ch.isDigit() } }, label = { Text("타일 캡처 지연(ms, 100~5000)") }, modifier = Modifier.weight(1f))
                         OutlinedButton(modifier = Modifier.padding(top = 8.dp), onClick = { prefs.captureDelayMs = delayMs.toIntOrNull() ?: 800; delayMs = prefs.captureDelayMs.toString(); status = "캡처 지연 ${prefs.captureDelayMs}ms 저장" }) { Text("저장") }
                     }
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        OutlinedTextField(value = scanMs, onValueChange = { scanMs = it.filter { ch -> ch.isDigit() } }, label = { Text("연속 스캔 프레임 간격(ms, 250~2000)") }, modifier = Modifier.weight(1f))
+                        OutlinedButton(modifier = Modifier.padding(top = 8.dp), onClick = { prefs.scanIntervalMs = scanMs.toIntOrNull() ?: 400; scanMs = prefs.scanIntervalMs.toString(); status = "스캔 간격 ${prefs.scanIntervalMs}ms 저장" }) { Text("저장") }
+                    }
                     Text("📦 보관함 여유 (판정에서 🟡 보류 처리): 여유=모두 보관 · 보통=같은 종·태그 2마리까지 · 빠듯=주력만", fontSize = 12.sp, color = Color(0xFF8899AA))
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         for ((k, label) in listOf("relaxed" to "여유", "normal" to "보통", "tight" to "빠듯")) {
                             if (storageMode == k) Button(onClick = { }) { Text(label) } else OutlinedButton(onClick = { prefs.storageMode = k; storageMode = k; status = "보관함 여유: $label" }) { Text(label) }
                         }
+                    }
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Text("연속 스캔 상단 띠 표시 (포켓몬GO 위에서는 숨겨질 수 있음. 끄면 알림 한 줄만)", fontSize = 13.sp, modifier = Modifier.padding(top = 12.dp))
+                        Switch(checked = scanStrip, onCheckedChange = { scanStrip = it; prefs.scanStrip = it })
                     }
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         Text("디버그 모드 (인식 텍스트·결과를 기기에 기록 + 캡처를 서버에 업로드(포획 장소 줄 가림), 7일 보관)", fontSize = 13.sp, modifier = Modifier.padding(top = 12.dp))

@@ -6,6 +6,7 @@ import { usageDate } from "./lib/aiUsage";
 import { getAccountState, requestLinkEmail, verifyLinkEmail, snapshotAnonymousRows, requestSignInEmail, verifySignInEmail, mergeRowsIntoCurrent, signOutAccount, loginWithAppCode } from "./lib/account";
 import { listDevices, revokeDevice, listDebugLogs, debugImageUrl, deleteDebugLog } from "./lib/devices";
 import { TIER_LABEL, RULES, purposesFromTags } from "./lib/verdictRules";
+import { findMatch, mergePatch, familyOfFactory } from "./lib/pokemonMatch";
 
 // 4-A 보관함 여유 설정 (기기 로컬 저장, 판정 API 에 전달)
 const STORAGE_MODE_LABELS = { relaxed: "여유", normal: "보통", tight: "빠듯" };
@@ -93,6 +94,12 @@ export default function Home() {
   const [storageMode, setStorageMode] = useState("normal");
   const [analysisVerdict, setAnalysisVerdict] = useState(null); // 분석 화면 판정 { verdict, meta } | { error }
   const [inApp, setInApp] = useState(false); // 앱 내 WebView(UA PogoDoctorApp): 코드 발급·앱 코드 로그인·이메일 UI 숨김
+  // 4-B: 스캔 기록 패널, 저장 시 기존 항목 갱신 안내
+  const [showScans, setShowScans] = useState(false);
+  const [scans, setScans] = useState([]);
+  const [scanBusy, setScanBusy] = useState(false);
+  const [scanError, setScanError] = useState(null);
+  const [saveNotice, setSaveNotice] = useState(null);
   const [editing, setEditing] = useState(null); // { id, status, purposes, memo }
   const [thinking, setThinking] = useState(false); // 첫 텍스트 도착 전(모델 thinking 구간)
   const [pendingReanalyze, setPendingReanalyze] = useState(false);
@@ -240,6 +247,43 @@ export default function Home() {
     setCollection((prev) => prev.map((e) => (e.id === row.id ? toEntry(row) : e)));
   };
   const toggleTag = (list, t) => (list.includes(t) ? list.filter((x) => x !== t) : list.length < 8 ? [...list, t] : list);
+
+  // ─── 4-B 스캔 기록 (연속 스캔, 앱이 서버에 기록. 저장은 여기서 사용자가 확정) ───
+  const loadScans = async () => {
+    if (!session) return;
+    setScanBusy(true); setScanError(null);
+    try {
+      const res = await fetch("/api/scan", { headers: { ...(await authHeader()) } });
+      const data = await res.json();
+      if (!res.ok) { setScanError(data.error || `HTTP ${res.status}`); return; }
+      setScans(data.items || []);
+    } catch (e) { setScanError(e.message); } finally { setScanBusy(false); }
+  };
+  const scanAction = async (action, ids, extra = {}) => {
+    setScanBusy(true); setScanError(null);
+    try {
+      const res = await fetch("/api/scan", { method: "POST", headers: { "Content-Type": "application/json", ...(await authHeader()) }, body: JSON.stringify({ action, ids, ...extra }) });
+      const data = await res.json();
+      if (!res.ok) { setScanError(data.error || `HTTP ${res.status}`); return; }
+      if (action === "save") {
+        const upd = (data.results || []).filter((r) => r.updated).length, err = (data.results || []).filter((r) => r.error).length;
+        setSaveNotice(`스캔 ${(data.results || []).length - err}건 저장 (기존 항목 갱신 ${upd}건${err ? `, 실패 ${err}건` : ""})`);
+        await reloadCollection();
+      }
+      await loadScans();
+    } catch (e) { setScanError(e.message); } finally { setScanBusy(false); }
+  };
+  const openScans = async () => { setShowScans(true); await loadScans(); };
+  // 박사행 후 정리: "보낼 예정" 항목 일괄 삭제 (확인 대화상자)
+  const purgeTransferred = async () => {
+    const targets = collection.filter((c) => c.status === "transfer");
+    if (!targets.length) return;
+    if (!window.confirm(`박사에게 보낼 예정 ${targets.length}마리를 목록에서 삭제합니다 (게임에서 실제로 보낸 뒤 누르세요). 계속할까요?`)) return;
+    let fail = 0;
+    for (const t of targets) { const { error } = await deleteMyPokemon(t.id); if (error) fail++; }
+    await reloadCollection();
+    setCollError(fail ? `${fail}건 삭제 실패` : null);
+  };
   const refreshUsage = async () => { const n = await getTodayUsage(usageDate()); if (n !== null) setUsageCount(n); };
 
   // ─── 포켓몬 데이터 로드 ───
@@ -645,6 +689,22 @@ export default function Home() {
     if (!selectedPokemon || currentKept || saving) return;
     if (!session) { setCollError("서버 저장이 연결되지 않아 저장할 수 없습니다"); return; }
     setSaving(true);
+    // 4-B 매칭: 기존 항목(①종 계열·폼·개체값·포획일 ②종·폼·CP·HP)과 일치하면 새 행 대신 갱신
+    const incoming = {
+      species_id: selectedPokemon.id, form: selectedPokemon.form || "Normal", name_kr: selectedPokemon.nameKr, cp: parseInt(cp) || null, hp: null,
+      atk_iv: atkIv, def_iv: defIv, sta_iv: staIv, fast_move: fastMove || null, charged_moves: chargedMove ? [chargedMove] : [], is_shadow: isShadow, is_shiny: isShiny, caught_on: null, source: "web",
+    };
+    const matched = findMatch(collection.map((c) => c.raw), incoming, familyOfFactory(allPokemon));
+    if (matched) {
+      const { row: r2, error: e2 } = await updateMyPokemon(matched.row.id, mergePatch(matched.row, incoming));
+      setSaving(false);
+      if (e2) { setCollError(`갱신 실패: ${e2}`); return; }
+      setCollection((prev) => prev.map((e) => (e.id === r2.id ? toEntry(r2) : e)));
+      setCurrentKept(true); setSaveNotice(`기존 항목 갱신 (${matched.rule === "cp+hp" ? "종·CP·HP 일치" : "개체값·포획일 일치"}) — 메모·태그·상태는 유지`);
+      setSaveOpts({ open: false, status: "keep", purposes: [], tags: [], memo: "" });
+      return;
+    }
+    setSaveNotice(null);
     const { row, error } = await insertMyPokemon({
       species_id: selectedPokemon.id,
       form: selectedPokemon.form || "Normal",
@@ -1304,6 +1364,7 @@ export default function Home() {
                 })()}
               </div>
             )}
+            {saveNotice && currentKept && <div style={{ ...s.collNote, margin: "8px 20px 0" }}>{saveNotice}</div>}
             {selectedPokemon && !streaming && saveOpts.open && !currentKept && (
               <div style={s.saveBox}>
                 <div style={s.saveRowLabel}>상태</div>
@@ -1677,6 +1738,7 @@ export default function Home() {
             <div style={s.collHeader}>
               <h2 style={{ fontSize: 18, fontWeight: 800, color: "#e0e0e0" }}>📋 내 포켓몬 목록 ({collection.length})</h2>
               <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                <button onClick={openScans} style={{ background: "none", border: "1px solid #2a3a5c", borderRadius: 8, color: "#4ecdc4", fontSize: 11, padding: "4px 8px", cursor: "pointer", fontFamily: "'Outfit',sans-serif" }}>📷 스캔 기록</button>
                 {collection.length > 0 && (
                   <button onClick={exportCollection} style={{ background: "none", border: "1px solid #2a3a5c", borderRadius: 8, color: "#8899aa", fontSize: 11, padding: "4px 8px", cursor: "pointer", fontFamily: "'Outfit',sans-serif" }}>📤 내보내기</button>
                 )}
@@ -1685,6 +1747,10 @@ export default function Home() {
             </div>
             {sessionNotice && <div style={s.sourceNotice}>{sessionNotice}</div>}
             {collError && <div style={s.error}>{collError}</div>}
+            {saveNotice && <div style={s.collNote}>{saveNotice} <button onClick={() => setSaveNotice(null)} style={{ ...s.chip, fontSize: 10, marginLeft: 8, padding: "2px 6px" }}>닫기</button></div>}
+            {collStatusFilter === "transfer" && collection.some((c) => c.status === "transfer") && (
+              <button onClick={purgeTransferred} style={{ ...s.resetBtn, margin: "0 0 10px", padding: 8, width: "100%", borderColor: "#ff6b6b", color: "#ff6b6b" }}>🗑 보냄 처리 — 보낼 예정 {collection.filter((c) => c.status === "transfer").length}마리 목록에서 삭제</button>
+            )}
 
             {ivMissingCount > 0 && <div style={s.sourceNotice}>개체값 미입력 {ivMissingCount}건이 목록 위쪽에 있습니다 — ✏️ 로 개체값·CP 를 입력하세요</div>}
             <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap", marginBottom: 10, fontSize: 11, color: "#8899aa" }}>
@@ -1828,6 +1894,48 @@ export default function Home() {
                 ))}
               </div>
             )}
+          </div>
+        </div>
+      )}
+
+      {/* ─── 4-B 스캔 기록 Panel ─── */}
+      {showScans && (
+        <div style={s.collOverlay}>
+          <div style={s.collPanel}>
+            <div style={s.collHeader}>
+              <h2 style={{ fontSize: 18, fontWeight: 800, color: "#e0e0e0" }}>📷 스캔 기록 ({scans.length})</h2>
+              <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                <button onClick={loadScans} disabled={scanBusy} style={{ ...s.chip, fontSize: 10 }}>🔄</button>
+                <button style={s.collClose} onClick={() => setShowScans(false)}>✕</button>
+              </div>
+            </div>
+            <div style={{ fontSize: 11, color: "#8899aa", lineHeight: 1.6, marginBottom: 10 }}>앱의 연속 스캔(평가 화면을 넘기기만)으로 기록된 개체입니다. 자동 저장되지 않으며, 여기서 검토 후 저장합니다. 저장 시 기존 항목(종·개체값·포획일 또는 종·CP·HP 일치)은 갱신됩니다. 14일 후 자동 삭제.</div>
+            {scanError && <div style={s.error}>{scanError}</div>}
+            {scans.length > 0 && (
+              <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 10 }}>
+                <button onClick={() => scanAction("save", scans.map((x) => x.id))} disabled={scanBusy} style={{ ...s.keepBtn, width: "auto", padding: "8px 12px" }}>✅ 추천대로 전부 저장 ({scans.length})</button>
+                <button onClick={() => scanAction("save", scans.filter((x) => x.verdict?.tier !== "transfer").map((x) => x.id))} disabled={scanBusy} style={{ ...s.chip, fontSize: 11 }}>보관 추천만 저장 ({scans.filter((x) => x.verdict?.tier !== "transfer").length})</button>
+                <button onClick={() => { if (window.confirm("스캔 기록을 모두 지웁니다 (내 목록은 그대로). 계속할까요?")) scanAction("clear", []); }} disabled={scanBusy} style={{ ...s.chip, fontSize: 11, color: "#ff6b6b" }}>전부 지우기</button>
+              </div>
+            )}
+            {scans.length === 0 && !scanBusy && <div style={{ fontSize: 12, color: "#576574", padding: "8px 0" }}>기록이 없습니다 — 앱에서 "연속 스캔" 을 켜고 평가 화면을 넘기세요</div>}
+            {scans.map((it) => (
+              <div key={it.id} style={{ ...s.collItem, flexDirection: "column", alignItems: "stretch", marginBottom: 6 }}>
+                <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                  <img src={`https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/${it.species_id}.png`} alt="" style={{ width: 36, height: 36, imageRendering: "pixelated" }} />
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ fontSize: 13, fontWeight: 700, color: "#e0e0e0" }}>{it.is_shadow ? "👤" : ""}{it.name_kr}{it.form && it.form !== "Normal" ? ` (${it.form})` : ""} <span style={{ fontSize: 10, opacity: 0.5 }}>{fmtStamp(it.created_at)} · {it.session_id}</span></div>
+                    <div style={{ fontSize: 11, color: "#8899aa" }}>CP{it.cp || "?"} HP{it.hp || "?"} {Number.isInteger(it.atk_iv) ? `${it.atk_iv}/${it.def_iv}/${it.sta_iv} (${Math.round(((it.atk_iv + it.def_iv + it.sta_iv) / 45) * 100)}%)` : "개체값 미확정"}{it.level ? ` L${it.level}` : ""}{it.stars != null ? ` ★${it.stars}` : ""}{it.cp == null ? " · CP 미확인(레벨 범위)" : ""}{it.recheck ? " · ⚠️ 재확인 필요(CP/HP·막대 불일치)" : ""}</div>
+                    {it.verdict && <div style={{ fontSize: 11, color: TIER_COLORS[it.verdict.tier] || "#8899aa", marginTop: 2 }}>{it.verdict.summary}{it.verdict.event ? ` · ${it.verdict.event}` : ""}</div>}
+                  </div>
+                </div>
+                <div style={{ display: "flex", gap: 6, marginTop: 6 }}>
+                  <button onClick={() => scanAction("save", [it.id], { status: "keep" })} disabled={scanBusy} style={{ ...s.chip, fontSize: 11, flex: 1 }}>보관{it.verdict?.recommendedTags?.length ? ` (${it.verdict.recommendedTags.join(", ")})` : ""}</button>
+                  <button onClick={() => scanAction("save", [it.id], { status: "transfer" })} disabled={scanBusy} style={{ ...s.chip, fontSize: 11, color: "#ff6b6b" }}>박사행</button>
+                  <button onClick={() => scanAction("dismiss", [it.id])} disabled={scanBusy} style={{ ...s.chip, fontSize: 11, color: "#8899aa" }}>숨김</button>
+                </div>
+              </div>
+            ))}
           </div>
         </div>
       )}

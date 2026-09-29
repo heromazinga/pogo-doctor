@@ -2,10 +2,12 @@ import { NextResponse } from "next/server";
 import { getServiceClient } from "../../../lib/supabaseServer";
 import { validatePokemonBody, rateLimit, clientIp } from "../../../lib/deviceAuth";
 import { userFromDeviceToken } from "../../../lib/deviceServer";
+import { upsertMyPokemon } from "../../../lib/savePokemonServer";
 
 const COLUMNS = "id,species_id,form,name_kr,cp,atk_iv,def_iv,sta_iv,level,fast_move,charged_moves,is_shadow,is_purified,is_shiny,is_lucky,status,purposes,tags,hp,caught_on,source,memo,created_at,updated_at";
 
 // 앱 → my_pokemon 저장 (source='overlay'). 본문의 user_id/id/source 는 무시하고 서버가 정한다.
+// 4-B: 기존 행과 매칭(①종 계열·폼·개체값·포획일 ②종·폼·CP·HP)되면 새 행 대신 갱신하고 updated:true (memo·tags·status 는 유지)
 export async function POST(req) {
   const rl = rateLimit(`device-pokemon:${clientIp(req)}`, { limit: 120, windowMs: 60 * 1000 });
   if (!rl.ok) return NextResponse.json({ error: "요청이 너무 많습니다" }, { status: 429 });
@@ -19,9 +21,9 @@ export async function POST(req) {
   const v = validatePokemonBody(body);
   if (v.errors.length) return NextResponse.json({ error: "필드 검증 실패", details: v.errors }, { status: 400 });
 
-  const { data, error } = await sb.from("my_pokemon").insert({ ...v.row, user_id: auth.userId }).select(COLUMNS).single();
-  if (error) return NextResponse.json({ error: `저장 실패: ${error.message}` }, { status: 500 });
-  return NextResponse.json({ row: data });
+  const r = await upsertMyPokemon(sb, auth.userId, v.row);
+  if (r.error) return NextResponse.json({ error: `저장 실패: ${r.error}` }, { status: 500 });
+  return NextResponse.json({ row: r.row, updated: r.updated, rule: r.rule });
 }
 
 // 앱 → 연결 상태 확인 (토큰 유효성)

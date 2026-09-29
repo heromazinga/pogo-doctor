@@ -33,6 +33,8 @@ import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
 import android.util.Base64
+import android.os.BatteryManager
+import com.pogodoctor.core.IvCalc
 import com.pogodoctor.core.Appraisal
 import com.pogodoctor.core.BarReader
 import com.pogodoctor.core.Merge
@@ -58,6 +60,9 @@ class CaptureService : Service() {
         const val EXTRA_RESULT_DATA = "resultData"
         const val ACTION_STOP = "com.pogodoctor.app.STOP"
         const val ACTION_CAPTURE_DELAYED = "com.pogodoctor.app.CAPTURE_DELAYED"
+        const val ACTION_SCAN_TOGGLE = "com.pogodoctor.app.SCAN_TOGGLE"   // 4-B 연속 스캔 켜기/끄기
+        @Volatile var scanning = false
+        @Volatile var scanLine: String = ""
         private const val CHANNEL = "capture"
         private const val NOTIF_ID = 1
         private const val BLACK_THRESHOLD = 12.0 // 평균 밝기(0~255) 이하면 캡처 차단(검은 화면)으로 판정
@@ -79,6 +84,11 @@ class CaptureService : Service() {
     private var card: View? = null
     private var busy = false
 
+    // ─── 4-B 연속 스캔 ───
+    private var scan: ScanSession? = null
+    private var strip: TextView? = null
+    private var scanBusy = false
+
     // 상세 + 평가 화면을 합쳐 개체값 확정
     private var lastDetail: ScreenInfo? = null
     private var lastDetailAt = 0L
@@ -98,6 +108,11 @@ class CaptureService : Service() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
             ACTION_STOP -> { stopSelf(); return START_NOT_STICKY }
+            ACTION_SCAN_TOGGLE -> {
+                if (projection == null) { toast("캡처 서비스가 실행 중이 아닙니다 — 앱에서 오버레이 시작"); return START_NOT_STICKY }
+                if (scanning) stopScan() else startScan()
+                return START_NOT_STICKY
+            }
             ACTION_CAPTURE_DELAYED -> {
                 if (projection == null) { toast("캡처 서비스가 실행 중이 아닙니다 — 앱에서 오버레이 시작"); return START_NOT_STICKY }
                 val delay = prefs.captureDelayMs.toLong()
@@ -121,7 +136,7 @@ class CaptureService : Service() {
 
     private val delayedCapture = Runnable { captureAndAnalyze(viaActivity = true) }
 
-    private fun buildNotification(): Notification {
+    private fun buildNotification(text: String? = null): Notification {
         val nm = getSystemService(NotificationManager::class.java)
         nm.createNotificationChannel(NotificationChannel(CHANNEL, getString(R.string.notif_channel), NotificationManager.IMPORTANCE_LOW))
         val flags = PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
@@ -129,14 +144,129 @@ class CaptureService : Service() {
         val open = PendingIntent.getActivity(this, 2, Intent(this, MainActivity::class.java), flags)
         // "캡처" 는 트램펄린 액티비티로: 액티비티 시작이 알림창을 닫고, 서비스에 지연 캡처를 요청한다
         val capture = PendingIntent.getActivity(this, 3, Intent(this, TrampolineActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK), flags)
+        val scanToggle = PendingIntent.getActivity(this, 4, Intent(this, TrampolineActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK).putExtra(TrampolineActivity.EXTRA_ACTION, "scan"), flags)
         val icon = Icon.createWithResource(this, R.drawable.ic_notif)
+        val title = if (scanning) "연속 스캔 중 — 평가 화면을 넘기세요" else getString(R.string.notif_title)
         return Notification.Builder(this, CHANNEL)
-            .setSmallIcon(R.drawable.ic_notif).setContentTitle(getString(R.string.notif_title)).setContentText(getString(R.string.notif_text))
+            .setSmallIcon(R.drawable.ic_notif).setContentTitle(title).setContentText(text ?: (if (scanning) scanLine else getString(R.string.notif_text)))
+            .setStyle(Notification.BigTextStyle().bigText(text ?: (if (scanning) scanLine else getString(R.string.notif_text))))
             .setContentIntent(open)
             .addAction(Notification.Action.Builder(icon, "캡처", capture).build())
+            .addAction(Notification.Action.Builder(icon, if (scanning) "스캔 중지" else "연속 스캔", scanToggle).build())
             .addAction(Notification.Action.Builder(icon, "중지", stop).build())
-            .setOngoing(true).build()
+            .setOnlyAlertOnce(true).setOngoing(true).build()
     }
+    private fun updateNotification(text: String) { scanLine = text; getSystemService(NotificationManager::class.java).notify(NOTIF_ID, buildNotification(text)) }
+
+    // ─── 4-B 연속 스캔: 초당 2~3프레임 샘플 → 이름·CP·막대 영역 지문 변화 감지 → 연속 2프레임 동일(안정) 시 1회 분석 → 서버 기록 → 알림 한 줄 갱신 ───
+    //     결과 액티비티는 띄우지 않는다(게임 조작 방해 금지). 자동 저장 없음(서버 스캔 기록만). 기술은 읽지 않는다.
+    private fun batteryPct(): Int = try { getSystemService(BatteryManager::class.java).getIntProperty(BatteryManager.BATTERY_PROPERTY_CAPACITY) } catch (_: Exception) { -1 }
+    private fun startScan() {
+        val session = ScanSession(); session.metrics.batteryStart = batteryPct()
+        scan = session; scanning = true
+        hideCard(); bubble?.text = "📷"
+        if (prefs.scanStrip) showStrip()   // 상단 띠는 기본 끔(설정에서 켜기). 결과는 알림 한 줄
+        updateNotification("스캔 0 · 평가 화면(막대 3개)을 켜고 좌우로 넘기세요")
+        DebugLog.add(this, "scan", emptyList(), "연속 스캔 시작 세션 ${session.id} 간격 ${prefs.scanIntervalMs}ms")
+        handler.removeCallbacks(scanTick); handler.post(scanTick)
+    }
+    private fun stopScan() {
+        val session = scan ?: return
+        handler.removeCallbacks(scanTick)
+        scanning = false; scan = null; scanBusy = false
+        session.metrics.batteryEnd = batteryPct()
+        val report = session.metrics.report()
+        prefs.lastScanReport = "${session.id}: $report"
+        DebugLog.add(this, "scan", emptyList(), "연속 스캔 종료 — $report")
+        hideStrip(); bubble?.text = "⚡"
+        updateNotification("스캔 종료 · 기록 ${session.metrics.recorded}건 — 웹 내 목록 → 📷 스캔 기록에서 검토·저장")
+        toast("연속 스캔 종료: 기록 ${session.metrics.recorded}건 (웹 📷 스캔 기록에서 저장)")
+    }
+    private val scanTick = object : Runnable {
+        override fun run() {
+            if (!scanning) return
+            if (!scanBusy) scanFrame()
+            handler.postDelayed(this, prefs.scanIntervalMs.toLong())
+        }
+    }
+    private fun scanFrame() {
+        val session = scan ?: return
+        scanBusy = true
+        scope.launch {
+            try {
+                val t0 = System.currentTimeMillis()
+                val bmp = captureOnce() ?: return@launch
+                val t1 = System.currentTimeMillis()
+                val fp = withContext(Dispatchers.Default) { ScanSession.fingerprint(bmp) }
+                val t2 = System.currentTimeMillis()
+                session.metrics.frames++; session.metrics.captureMs += t1 - t0; session.metrics.fpMs += t2 - t1
+                if (!session.shouldAnalyze(fp)) return@launch
+                if (averageBrightness(bmp) <= BLACK_THRESHOLD) { setStrip("⛔ 캡처 차단(검은 화면)"); return@launch }
+                session.lastAnalyzedFp = fp
+                scanAnalyze(session, bmp)
+            } catch (e: Exception) {
+                DebugLog.add(this@CaptureService, "scan-error", emptyList(), "", e.toString())
+            } finally { scanBusy = false }
+        }
+    }
+    private suspend fun scanAnalyze(session: ScanSession, bmp: Bitmap) {
+        val data = repo.loadCached() ?: return
+        val t0 = System.currentTimeMillis()
+        val lines = Ocr.recognize(bmp)
+        val t1 = System.currentTimeMillis()
+        val parser = ScreenParser(data.species, data.allMoveNamesKr)
+        var info = parser.parse(lines)
+        session.metrics.analyses++; session.metrics.ocrMs += t1 - t0
+        if (info.kind != ScreenInfo.Kind.APPRAISAL) { setStrip("평가 화면(막대 3개)이 아닙니다 · 스캔 ${session.metrics.recorded}"); return }
+        val labels = lines.filter { ScreenParser.isLabelLine(it) }
+        val reading = withContext(Dispatchers.Default) { BarReader.readAppraisal({ x, y -> if (x in 0 until bmp.width && y in 0 until bmp.height) bmp.getPixel(x, y) else 0 }, bmp.width, bmp.height, labels) }
+        session.metrics.barMs += System.currentTimeMillis() - t1
+        val ap = reading.appraisal
+        val apA = ap.atk; val apD = ap.def; val apS = ap.sta   // 다른 모듈의 public 프로퍼티는 스마트 캐스트 불가 → 지역 val
+        if (apA == null || apD == null || apS == null) { setStrip("막대 판독 대기(애니메이션) · 스캔 ${session.metrics.recorded}"); session.lastAnalyzedFp = null; return }
+        // 막대 안정: 직전 분석과 같은 값이어야 기록 (채움 애니메이션 종료 확인). 다르면 다음 프레임에서 재확인
+        if (session.lastBars != ap) { session.lastBars = ap; session.lastAnalyzedFp = null; return }
+        info = parser.parse(lines, ap)
+        val sp = info.species
+        if (sp == null) { setStrip("종 미인식(${info.nameRaw ?: "?"}) · 후보 ${info.speciesCandidates.map { it.nameKr }} · 스캔 ${session.metrics.recorded}"); return }
+        val cp = info.cp
+        // CP 가 배너에 가려진 프레임도 막대+HP 로 레벨 범위 기록("CP 미확인"). 같은 개체를 이후 CP 까지 읽으면 서버가 그 기록을 갱신한다
+        if (cp == null) session.metrics.skippedNoCp++
+        val key = ScanSession.scanKey(sp, cp, info.hp, ap, false)
+        if (session.isDuplicate(key)) { session.metrics.duplicates++; setStrip("같은 개체(이미 기록) · 스캔 ${session.metrics.recorded}"); return }
+        // CP/HP 로 레벨 교차 확인: 막대 개체값과 성립하는 후보가 없으면 "재확인 필요"
+        val base = IvCalc.Base(sp.atk, sp.def, sp.sta)
+        var cands: List<IvCalc.Candidate> = if (cp != null) IvCalc.filterByAppraisal(IvCalc.candidates(base, cp, info.hp), apA, apD, apS) else emptyList()
+        val recheck = cp != null && cands.isEmpty()
+        if (cands.isEmpty()) cands = IvCalc.candidatesWithoutCp(base, info.hp, ap)
+        val pct = Math.round((apA + apD + apS) * 100.0 / 45)
+        val body = session.body(sp, info, ap, cands, reading.stars, recheck)
+        val t2 = System.currentTimeMillis()
+        try {
+            val res = withContext(Dispatchers.IO) { Api(prefs).scanItem(body) }
+            session.metrics.apiMs += System.currentTimeMillis() - t2
+            session.metrics.recorded++
+            val v = res.optJSONObject("verdict")
+            val line = "스캔 ${session.metrics.recorded} · 방금 ${sp.nameKr} ${pct}%${if (cp == null) " (CP 미확인)" else ""}${if (recheck) " ⚠️재확인" else ""}${if (res.optBoolean("cpFilled")) " · 기존 기록에 CP 보완" else ""} ${v?.optString("summary")?.take(60) ?: ""}"
+            setStrip(line); updateNotification(line)
+            if (prefs.debugMode) DebugLog.add(this, "scan-item", lines.map { it.text }, "$key → ${v?.optString("tier")} ${v?.optString("summary")}")
+        } catch (e: Exception) {
+            session.metrics.apiFail++
+            setStrip("기록 실패: ${e.message} · 스캔 ${session.metrics.recorded}")
+            DebugLog.add(this, "scan-api-error", emptyList(), key, e.toString())
+        }
+    }
+    // 작은 띠 오버레이: 터치 통과(FLAG_NOT_TOUCHABLE), 불투명도 0.8 (Android 12 untrusted touch 규칙). 포켓몬GO 가 숨기면 알림만 보인다
+    private fun showStrip() {
+        hideStrip()
+        val tv = TextView(this).apply { text = "📷 연속 스캔 시작"; textSize = 12f; setTextColor(Color.WHITE); setBackgroundColor(0xCC0F2035.toInt()); setPadding(dp(10), dp(6), dp(10), dp(6)); alpha = 0.8f }
+        val lp = WindowManager.LayoutParams(WindowManager.LayoutParams.MATCH_PARENT, WindowManager.LayoutParams.WRAP_CONTENT, WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
+            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE or WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN, PixelFormat.TRANSLUCENT)
+        lp.gravity = Gravity.TOP; lp.y = dp(28); lp.alpha = 0.8f
+        runCatching { wm.addView(tv, lp); strip = tv }
+    }
+    private fun hideStrip() { strip?.let { runCatching { wm.removeView(it) } }; strip = null }
+    private fun setStrip(text: String) { scanLine = text; strip?.text = text; if (strip == null) updateNotification(text) }
 
     private fun startProjection(code: Int, data: Intent): Boolean {
         val mpm = getSystemService(Context.MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
@@ -341,8 +471,9 @@ class CaptureService : Service() {
     private fun toast(msg: String) = Toast.makeText(this, msg, Toast.LENGTH_LONG).show()
 
     override fun onDestroy() {
-        running = false
-        handler.removeCallbacks(delayedCapture)
+        if (scanning) stopScan()
+        running = false; scanning = false
+        handler.removeCallbacks(delayedCapture); handler.removeCallbacks(scanTick); hideStrip()
         hideCard(); bubble?.let { runCatching { wm.removeView(it) } }; bubble = null
         display?.release(); reader?.close(); projection?.stop()
         scope.cancel()

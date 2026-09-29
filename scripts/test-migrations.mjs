@@ -43,6 +43,10 @@ await check("tags 9개 거부", `insert into public.my_pokemon(user_id,species_i
 await check("tag 25자 거부", `insert into public.my_pokemon(user_id,species_id,form,name_kr,tags) values ('${UID}',1,'Normal','x','{"${"가".repeat(25)}"}')`, false);
 await check("hp 5 거부", `insert into public.my_pokemon(user_id,species_id,form,name_kr,hp) values ('${UID}',1,'Normal','x',5)`, false);
 await check("caught_on date", `insert into public.my_pokemon(user_id,species_id,form,name_kr,caught_on) values ('${UID}',1,'Normal','x','2016-08-01')`, true);
+// 0005 스캔 기록: 같은 세션·같은 개체는 unique, cleanup 함수
+await check("scan_items insert", `insert into public.scan_items(user_id,session_id,scan_key,species_id,name_kr,cp,hp) values ('${UID}','s1','815|Normal|3002|161|15|14|14|0',815,'에이스번',3002,161)`, true);
+await check("scan_items 같은 세션·개체 중복 거부", `insert into public.scan_items(user_id,session_id,scan_key,species_id,name_kr) values ('${UID}','s1','815|Normal|3002|161|15|14|14|0',815,'에이스번')`, false);
+await check("cleanup_scan_items()", `select public.cleanup_scan_items()`, true);
 const idx = await db.query(`select indexname from pg_indexes where tablename='my_pokemon' and indexname like '%tags%'`);
 console.log("tags index:", idx.rows.map((r) => r.indexname).join(", ") || "없음");
 console.log(failed ? `FAILED ${failed}` : "ALL OK");

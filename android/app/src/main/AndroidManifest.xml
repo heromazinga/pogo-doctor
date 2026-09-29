@@ -67,6 +67,17 @@
                 <action android:name="android.service.quicksettings.action.QS_TILE" />
             </intent-filter>
         </service>
+        <!-- 4-B 빠른 설정 타일 "포고박사 연속 스캔" (켜기/끄기) -->
+        <service
+            android:name=".ScanTileService"
+            android:exported="true"
+            android:icon="@drawable/ic_notif"
+            android:label="포고박사 연속 스캔"
+            android:permission="android.permission.BIND_QUICK_SETTINGS_TILE">
+            <intent-filter>
+                <action android:name="android.service.quicksettings.action.QS_TILE" />
+            </intent-filter>
+        </service>
         <!-- ML Kit 한국어 모델은 text-recognition-korean 아티팩트에 번들 (다운로드 없음) -->
     </application>
 </manifest>
