@@ -11,14 +11,10 @@ export async function resolveUser(req) {
   const auth = req.headers.get("authorization") || "";
   const token = auth.startsWith("Bearer ") ? auth.slice(7).trim() : "";
   if (!token) return null;
-  if (token.includes(".")) {
-    const u = await getUserFromRequest(req);
-    return u ? { userId: u.id, via: "web" } : null;
-  }
-  const sb = getServiceClient();
-  if (!sb) return null;
-  const d = await userFromDeviceToken(sb, req);
-  return d ? { userId: d.userId, via: "device", deviceId: d.deviceId } : null;
+  const asWeb = async () => { const u = await getUserFromRequest(req); return u ? { userId: u.id, via: "web" } : null; };
+  const asDevice = async () => { const sb = getServiceClient(); if (!sb) return null; const d = await userFromDeviceToken(sb, req); return d ? { userId: d.userId, via: "device", deviceId: d.deviceId } : null; };
+  // JWT(점 포함)는 웹 세션 우선, 아니면 기기 토큰 우선. 실패하면 다른 쪽도 시도
+  return token.includes(".") ? (await asWeb()) || (await asDevice()) : (await asDevice()) || (await asWeb());
 }
 
 export async function loadMyRows(userId) {

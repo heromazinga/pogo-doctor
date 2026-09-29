@@ -105,6 +105,8 @@ class MainActivity : ComponentActivity() {
         var storageMode by remember { mutableStateOf(prefs.storageMode) }
         var scanMs by remember { mutableStateOf(prefs.scanIntervalMs.toString()) }
         var scanStrip by remember { mutableStateOf(prefs.scanStrip) }
+        var stableMs by remember { mutableStateOf(prefs.scanStableMs.toString()) }
+        var scanVibrate by remember { mutableStateOf(prefs.scanVibrate) }
         var webCode by remember { mutableStateOf("") }
         var busy by remember { mutableStateOf(false) }
         var log by remember { mutableStateOf("") }
@@ -172,6 +174,12 @@ class MainActivity : ComponentActivity() {
                     }
                     if (!paired) Text("스캔 기록은 서버에 남으므로 기기 연결이 필요합니다", fontSize = 11.sp, color = Color(0xFFFF6B6B))
                     if (prefs.lastScanReport.isNotBlank()) Text("최근 세션: ${prefs.lastScanReport}", fontSize = 10.sp, color = Color(0xFF8899AA))
+                    val q = remember { ScanQueue(this@MainActivity, prefs) }
+                    var qPending by remember { mutableStateOf(q.pending) }
+                    if (qPending > 0) {
+                        Text("전송 대기열 ${qPending}건 (앱 종료 후에도 보존됨)", fontSize = 11.sp, color = Color(0xFFFFD93D))
+                        OutlinedButton(enabled = paired, onClick = { q.onChange = { runOnUiThread { qPending = q.pending } }; q.start(lifecycleScope); status = "대기열 전송 시작" }) { Text("지금 재전송") }
+                    }
                 }
             }
 
@@ -208,6 +216,14 @@ class MainActivity : ComponentActivity() {
                         for ((k, label) in listOf("relaxed" to "여유", "normal" to "보통", "tight" to "빠듯")) {
                             if (storageMode == k) Button(onClick = { }) { Text(label) } else OutlinedButton(onClick = { prefs.storageMode = k; storageMode = k; status = "보관함 여유: $label" }) { Text(label) }
                         }
+                    }
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        OutlinedTextField(value = stableMs, onValueChange = { stableMs = it.filter { ch -> ch.isDigit() } }, label = { Text("연속 스캔 안정 대기(ms, 200~3000)") }, modifier = Modifier.weight(1f))
+                        OutlinedButton(modifier = Modifier.padding(top = 8.dp), onClick = { prefs.scanStableMs = stableMs.toIntOrNull() ?: 500; stableMs = prefs.scanStableMs.toString(); status = "안정 대기 ${prefs.scanStableMs}ms 저장" }) { Text("저장") }
+                    }
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Text("연속 스캔 기록 시 진동", fontSize = 13.sp, modifier = Modifier.padding(top = 12.dp))
+                        Switch(checked = scanVibrate, onCheckedChange = { scanVibrate = it; prefs.scanVibrate = it })
                     }
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         Text("연속 스캔 상단 띠 표시 (포켓몬GO 위에서는 숨겨질 수 있음. 끄면 알림 한 줄만)", fontSize = 13.sp, modifier = Modifier.padding(top = 12.dp))
