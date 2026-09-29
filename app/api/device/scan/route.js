@@ -49,12 +49,21 @@ export async function POST(req) {
     verdict = { tier: v.tier, summary: v.summary, recommendedTags: v.recommendedTags, purposes: v.purposes, collect: v.collect, event: v.event?.note || null, confident: v.confident, tags: v.tags.map((t) => ({ name: t.name, tier: t.tier, reason: t.reason })) };
   } catch (e) { verdict = { tier: "need_appraisal", summary: `판정 실패: ${e.message}`, recommendedTags: [], purposes: [] }; }
   item.verdict = verdict;
-  const { data: existing } = await sb.from("scan_items").select("id").eq("user_id", auth.userId).eq("session_id", item.session_id).eq("scan_key", item.scan_key).maybeSingle();
+  let { data: existing } = await sb.from("scan_items").select("id").eq("user_id", auth.userId).eq("session_id", item.session_id).eq("scan_key", item.scan_key).maybeSingle();
+  // CP 미확인으로 기록된 같은 개체(같은 세션·종·폼·막대·HP, cp null)를 이후 CP 까지 읽으면 그 기록을 갱신
+  let cpFilled = false;
+  if (!existing && item.cp != null && anyIv) {
+    let q = sb.from("scan_items").select("id").eq("user_id", auth.userId).eq("session_id", item.session_id).eq("species_id", item.species_id).eq("form", item.form)
+      .eq("atk_iv", item.atk_iv).eq("def_iv", item.def_iv).eq("sta_iv", item.sta_iv).is("cp", null).eq("is_shadow", item.is_shadow).order("created_at", { ascending: false }).limit(1);
+    if (item.hp != null) q = q.eq("hp", item.hp);
+    const { data: prev } = await q;
+    if (prev?.length) { existing = prev[0]; cpFilled = true; }
+  }
   let data, error;
   if (existing) ({ data, error } = await sb.from("scan_items").update(item).eq("id", existing.id).select("*").single());
   else ({ data, error } = await sb.from("scan_items").insert(item).select("*").single());
   if (error) return NextResponse.json({ error: `스캔 기록 실패: ${error.message}` }, { status: 500 });
-  return NextResponse.json({ item: data, verdict, duplicate: Boolean(existing) });
+  return NextResponse.json({ item: data, verdict, duplicate: Boolean(existing) && !cpFilled, cpFilled });
 }
 
 // 앱 → 세션 스캔 기록 조회 (?session=… 없으면 최근 200)

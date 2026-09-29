@@ -288,6 +288,7 @@ function parsePvpoke(json) {
       hasMoves: fastAll.length + chargedAll.length > 0,
       released: typeof p.released === "boolean" ? p.released : null, // PvPoke 출시 여부
       pvpokeId: p.speciesId, // PvPoke 랭킹 파일의 speciesId (4-A 리그 순위 매칭)
+      shadowEligible: Array.isArray(p.tags) && p.tags.includes("shadoweligible"), // PvPoke gamemaster tags: 섀도 존재 종 (4-A2 섀도 순위 범위)
     });
   }
   return { records, moveNames, moveKinds, moveStats };
@@ -742,6 +743,7 @@ function crossValidate(loaded /* {sourceKey: {meta, parsed}} */) {
       pokemonClass: recs.find((x) => x.rec.pokemonClass)?.rec.pokemonClass || null,
       evolutions: recs.find((x) => Array.isArray(x.rec.evolutions) && x.rec.evolutions.length)?.rec.evolutions || [],
       pvpokeId: recs.find((x) => x.rec.pvpokeId)?.rec.pvpokeId || null,
+      shadowEligible: recs.some((x) => x.rec.shadowEligible === true),
     });
   }
   counts.stat = statDisputes;

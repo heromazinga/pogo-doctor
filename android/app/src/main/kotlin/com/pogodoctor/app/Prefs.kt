@@ -45,6 +45,10 @@ class Prefs(ctx: Context) {
     var scanIntervalMs: Int
         get() = plain.getInt("scan_interval_ms", 400).coerceIn(250, 2000)
         set(v) = plain.edit().putInt("scan_interval_ms", v.coerceIn(250, 2000)).apply()
+    // 연속 스캔 상단 띠 오버레이 (기본 끔: 포켓몬GO 위에서는 숨겨지므로 결과는 알림 한 줄)
+    var scanStrip: Boolean
+        get() = plain.getBoolean("scan_strip", false)
+        set(v) = plain.edit().putBoolean("scan_strip", v).apply()
     var lastScanReport: String
         get() = plain.getString("last_scan_report", "")!!
         set(v) = plain.edit().putString("last_scan_report", v).apply()

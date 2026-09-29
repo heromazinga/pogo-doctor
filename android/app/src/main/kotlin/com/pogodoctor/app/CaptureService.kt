@@ -165,7 +165,8 @@ class CaptureService : Service() {
         val session = ScanSession(); session.metrics.batteryStart = batteryPct()
         scan = session; scanning = true
         hideCard(); bubble?.text = "📷"
-        showStrip(); updateNotification("스캔 0 · 평가 화면(막대 3개)을 켜고 좌우로 넘기세요")
+        if (prefs.scanStrip) showStrip()   // 상단 띠는 기본 끔(설정에서 켜기). 결과는 알림 한 줄
+        updateNotification("스캔 0 · 평가 화면(막대 3개)을 켜고 좌우로 넘기세요")
         DebugLog.add(this, "scan", emptyList(), "연속 스캔 시작 세션 ${session.id} 간격 ${prefs.scanIntervalMs}ms")
         handler.removeCallbacks(scanTick); handler.post(scanTick)
     }
@@ -221,22 +222,24 @@ class CaptureService : Service() {
         val reading = withContext(Dispatchers.Default) { BarReader.readAppraisal({ x, y -> if (x in 0 until bmp.width && y in 0 until bmp.height) bmp.getPixel(x, y) else 0 }, bmp.width, bmp.height, labels) }
         session.metrics.barMs += System.currentTimeMillis() - t1
         val ap = reading.appraisal
-        if (ap.atk == null || ap.def == null || ap.sta == null) { setStrip("막대 판독 대기(애니메이션) · 스캔 ${session.metrics.recorded}"); session.lastAnalyzedFp = null; return }
+        val apA = ap.atk; val apD = ap.def; val apS = ap.sta   // 다른 모듈의 public 프로퍼티는 스마트 캐스트 불가 → 지역 val
+        if (apA == null || apD == null || apS == null) { setStrip("막대 판독 대기(애니메이션) · 스캔 ${session.metrics.recorded}"); session.lastAnalyzedFp = null; return }
         // 막대 안정: 직전 분석과 같은 값이어야 기록 (채움 애니메이션 종료 확인). 다르면 다음 프레임에서 재확인
         if (session.lastBars != ap) { session.lastBars = ap; session.lastAnalyzedFp = null; return }
         info = parser.parse(lines, ap)
         val sp = info.species
-        if (info.cp == null) { session.metrics.skippedNoCp++; setStrip("CP 가 가려짐 — 안내 배너가 사라지면 다시 읽습니다 · 스캔 ${session.metrics.recorded}"); session.lastAnalyzedFp = null; return }
         if (sp == null) { setStrip("종 미인식(${info.nameRaw ?: "?"}) · 후보 ${info.speciesCandidates.map { it.nameKr }} · 스캔 ${session.metrics.recorded}"); return }
-        val key = ScanSession.scanKey(sp, info.cp, info.hp, ap, false)
+        val cp = info.cp
+        // CP 가 배너에 가려진 프레임도 막대+HP 로 레벨 범위 기록("CP 미확인"). 같은 개체를 이후 CP 까지 읽으면 서버가 그 기록을 갱신한다
+        if (cp == null) session.metrics.skippedNoCp++
+        val key = ScanSession.scanKey(sp, cp, info.hp, ap, false)
         if (session.isDuplicate(key)) { session.metrics.duplicates++; setStrip("같은 개체(이미 기록) · 스캔 ${session.metrics.recorded}"); return }
         // CP/HP 로 레벨 교차 확인: 막대 개체값과 성립하는 후보가 없으면 "재확인 필요"
         val base = IvCalc.Base(sp.atk, sp.def, sp.sta)
-        val all = IvCalc.candidates(base, info.cp!!, info.hp)
-        var cands = IvCalc.filterByAppraisal(all, ap.atk, ap.def, ap.sta)
-        val recheck = cands.isEmpty()
-        if (recheck) cands = IvCalc.candidatesWithoutCp(base, info.hp, ap)
-        val pct = Math.round((ap.atk + ap.def + ap.sta) * 100.0 / 45)
+        var cands: List<IvCalc.Candidate> = if (cp != null) IvCalc.filterByAppraisal(IvCalc.candidates(base, cp, info.hp), apA, apD, apS) else emptyList()
+        val recheck = cp != null && cands.isEmpty()
+        if (cands.isEmpty()) cands = IvCalc.candidatesWithoutCp(base, info.hp, ap)
+        val pct = Math.round((apA + apD + apS) * 100.0 / 45)
         val body = session.body(sp, info, ap, cands, reading.stars, recheck)
         val t2 = System.currentTimeMillis()
         try {
@@ -244,7 +247,7 @@ class CaptureService : Service() {
             session.metrics.apiMs += System.currentTimeMillis() - t2
             session.metrics.recorded++
             val v = res.optJSONObject("verdict")
-            val line = "스캔 ${session.metrics.recorded} · 방금 ${sp.nameKr} ${pct}%${if (recheck) " ⚠️재확인" else ""} ${v?.optString("summary")?.take(60) ?: ""}"
+            val line = "스캔 ${session.metrics.recorded} · 방금 ${sp.nameKr} ${pct}%${if (cp == null) " (CP 미확인)" else ""}${if (recheck) " ⚠️재확인" else ""}${if (res.optBoolean("cpFilled")) " · 기존 기록에 CP 보완" else ""} ${v?.optString("summary")?.take(60) ?: ""}"
             setStrip(line); updateNotification(line)
             if (prefs.debugMode) DebugLog.add(this, "scan-item", lines.map { it.text }, "$key → ${v?.optString("tier")} ${v?.optString("summary")}")
         } catch (e: Exception) {
@@ -263,7 +266,7 @@ class CaptureService : Service() {
         runCatching { wm.addView(tv, lp); strip = tv }
     }
     private fun hideStrip() { strip?.let { runCatching { wm.removeView(it) } }; strip = null }
-    private fun setStrip(text: String) { scanLine = text; strip?.text = text }
+    private fun setStrip(text: String) { scanLine = text; strip?.text = text; if (strip == null) updateNotification(text) }
 
     private fun startProjection(code: Int, data: Intent): Boolean {
         val mpm = getSystemService(Context.MEDIA_PROJECTION_SERVICE) as MediaProjectionManager

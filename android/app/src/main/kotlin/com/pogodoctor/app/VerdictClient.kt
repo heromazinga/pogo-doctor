@@ -7,7 +7,7 @@ import org.json.JSONArray
 import org.json.JSONObject
 
 // 4-A 서버 판정(POST /api/verdict) 호출 + 응답 파싱. 오프라인이면 호출측이 기기 내 간이 판정으로 대체한다.
-// 보내는 것: 종·폼·개체값 후보(최대 300)·CP·HP·기술(영어 ID)·보관함 여유. 포획 장소는 보내지 않는다.
+// 보내는 것: 종·폼·개체값 후보(최대 300)·CP·HP·기술(영어 ID)·포획 날짜·보관함 여유. 포획 장소는 보내지 않는다.
 object VerdictClient {
     data class Tag(val name: String, val tier: String, val reason: String)
     data class Verdict(
@@ -20,6 +20,7 @@ object VerdictClient {
     fun body(sp: SpeciesRef, info: ScreenInfo, cands: List<IvCalc.Candidate>, moveEn: List<String>, storageMode: String): JSONObject {
         val b = JSONObject().put("species_id", sp.id).put("form", sp.form).put("storageMode", storageMode)
         info.cp?.let { b.put("cp", it) }; info.hp?.let { b.put("hp", it) }
+        info.caughtOn?.let { b.put("caught_on", it) } // 포획 날짜만 (교환 시 반짝반짝 판단), 장소 없음
         if (cands.isNotEmpty()) {
             val arr = JSONArray()
             for (c in cands.take(300)) arr.put(JSONObject().put("level", c.level).put("atk", c.atk).put("def", c.def).put("sta", c.sta))

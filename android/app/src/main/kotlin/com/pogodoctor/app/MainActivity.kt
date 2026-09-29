@@ -104,6 +104,7 @@ class MainActivity : ComponentActivity() {
         var delayMs by remember { mutableStateOf(prefs.captureDelayMs.toString()) }
         var storageMode by remember { mutableStateOf(prefs.storageMode) }
         var scanMs by remember { mutableStateOf(prefs.scanIntervalMs.toString()) }
+        var scanStrip by remember { mutableStateOf(prefs.scanStrip) }
         var webCode by remember { mutableStateOf("") }
         var busy by remember { mutableStateOf(false) }
         var log by remember { mutableStateOf("") }
@@ -164,7 +165,7 @@ class MainActivity : ComponentActivity() {
             Card(Modifier.fillMaxWidth()) {
                 Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Text(if (scanning) "📷 연속 스캔 중" else "📷 연속 스캔 (4-B)", fontSize = 16.sp)
-                    Text("포켓몬GO 평가 화면(막대 3개)을 켜 둔 채 좌우로 넘기기만 하면 자동으로 읽어 서버 \"스캔 기록\" 에 남깁니다(자동 저장 없음 — 웹 내 목록 → 📷 스캔 기록에서 검토 후 저장). 결과 창을 띄우지 않고 알림 한 줄·상단 띠만 갱신합니다. 켜기/끄기: 여기, 알림의 \"연속 스캔\", 빠른 설정 타일 \"포고박사 연속 스캔\".", fontSize = 12.sp, color = Color(0xFF8899AA))
+                    Text("포켓몬GO 평가 화면(막대 3개)을 켜 둔 채 좌우로 넘기기만 하면 자동으로 읽어 서버 \"스캔 기록\" 에 남깁니다(자동 저장 없음 — 웹 내 목록 → 📷 스캔 기록에서 검토 후 저장). 결과 창을 띄우지 않고 알림 한 줄만 갱신합니다(상단 띠는 설정에서 켤 수 있음). CP 가 배너에 가려져도 막대+HP 로 기록하고 이후 CP 를 읽으면 그 기록을 보완합니다. 켜기/끄기: 여기, 알림의 \"연속 스캔\", 빠른 설정 타일 \"포고박사 연속 스캔\".", fontSize = 12.sp, color = Color(0xFF8899AA))
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         Button(enabled = running && paired, onClick = { startService(Intent(this@MainActivity, CaptureService::class.java).setAction(CaptureService.ACTION_SCAN_TOGGLE)); scanning = !scanning; status = if (scanning) "연속 스캔 시작 — 포켓몬GO 평가 화면으로" else "연속 스캔 중지" }) { Text(if (scanning) "스캔 중지" else "연속 스캔 시작") }
                         OutlinedButton(onClick = { startActivity(Intent(this@MainActivity, WebActivity::class.java)) }) { Text("스캔 기록 보기(웹)") }
@@ -207,6 +208,10 @@ class MainActivity : ComponentActivity() {
                         for ((k, label) in listOf("relaxed" to "여유", "normal" to "보통", "tight" to "빠듯")) {
                             if (storageMode == k) Button(onClick = { }) { Text(label) } else OutlinedButton(onClick = { prefs.storageMode = k; storageMode = k; status = "보관함 여유: $label" }) { Text(label) }
                         }
+                    }
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Text("연속 스캔 상단 띠 표시 (포켓몬GO 위에서는 숨겨질 수 있음. 끄면 알림 한 줄만)", fontSize = 13.sp, modifier = Modifier.padding(top = 12.dp))
+                        Switch(checked = scanStrip, onCheckedChange = { scanStrip = it; prefs.scanStrip = it })
                     }
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         Text("디버그 모드 (인식 텍스트·결과를 기기에 기록 + 캡처를 서버에 업로드(포획 장소 줄 가림), 7일 보관)", fontSize = 13.sp, modifier = Modifier.padding(top = 12.dp))

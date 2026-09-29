@@ -1,6 +1,7 @@
 // 4-A 종족 순위 자동 산출 (손목록 금지) — 데이터셋(교차검증) 기준, generatedAt 별 메모
 //  - 타입별 레이드 순위: 출시 확인된 종(released !== false), 메가 제외, L40·15/15/15 가정, 그 타입의 빠른+차징 기술만 사용,
-//    중립 보스(타입 없음, RULES.RAID_BOSS, L40·15/15/15) 상대 raidScore = DPS^0.775 × TDO^0.225. 섀도(공격 ×1.2, 방어 ×0.833)는 별도 순위.
+//    중립 보스(타입 없음, RULES.RAID_BOSS, L40·15/15/15) 상대 raidScore = DPS^0.775 × TDO^0.225. 섀도(공격 ×1.2, 방어 ×0.833)는 별도 순위,
+//    PvPoke gamemaster 의 tags "shadoweligible" 이 있는 종만(데이터셋 shadowEligible). 각 항목 pct = 그 타입 1위 대비 %.
 //  - 체육관 방어 순위: 전설·환상·UB 제외, (방어+15)×(HP+15) 내구 순위(L40 기준 상수 배율은 순위에 영향 없음).
 //  - 진화 계열: evolutions 를 따라 최종형(잎)까지. 분기 진화는 각각.
 import { TYPES } from "./typeChart.js";
@@ -63,11 +64,13 @@ export function getRankings(dataset) {
     for (const p of pool) {
       const n = raidScoreForType(p, t, moveStats);
       if (n) normal.push({ id: p.id, form: p.form, name: p.name, nameKr: p.nameKr, score: Number(fine(n).toFixed(2)), fast: n.fast, charged: n.charged, usesSpecial: n.usesSpecial, legendary: isLegendaryClass(p) });
-      const s = raidScoreForType(p, t, moveStats, { shadow: true });
+      const s = p.shadowEligible ? raidScoreForType(p, t, moveStats, { shadow: true }) : null; // 섀도 순위는 섀도 존재 종만(PvPoke shadoweligible)
       if (s) shadow.push({ id: p.id, form: p.form, name: p.name, nameKr: p.nameKr, score: Number(fine(s).toFixed(2)), fast: s.fast, charged: s.charged, usesSpecial: s.usesSpecial, legendary: isLegendaryClass(p) });
     }
     normal.sort((a, b) => b.score - a.score); shadow.sort((a, b) => b.score - a.score);
-    raid[t] = { normal: normal.map((x, i) => ({ ...x, rank: i + 1 })), shadow: shadow.map((x, i) => ({ ...x, rank: i + 1 })) };
+    // pct: 그 타입 1위(전설 포함 전체 1위) 대비 점수 비율 (4-A2 기준: 순위 AND 비율)
+    const withPct = (list) => { const top = list[0]?.score || 0; return list.map((x, i) => ({ ...x, rank: i + 1, pct: top ? Math.round((x.score / top) * 100) : 0 })); };
+    raid[t] = { normal: withPct(normal), shadow: withPct(shadow) };
   }
   const gym = pool.filter((p) => !isLegendaryClass(p)).map((p) => ({ id: p.id, form: p.form, name: p.name, nameKr: p.nameKr, bulk: (p.baseDefense + 15) * (p.baseStamina + 15) }))
     .sort((a, b) => b.bulk - a.bulk).map((x, i) => ({ ...x, rank: i + 1 }));

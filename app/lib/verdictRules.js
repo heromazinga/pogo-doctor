@@ -5,6 +5,8 @@ export const RULES = {
   // 종족 순위 (자동 산출) — 타입별 레이드: teamScore 의 DPS^0.775 × TDO^0.225, 그 타입 기술만 사용, 중립 보스 가정
   RAID_TOP_RANK: 12,        // 12위 이내 = 상위종
   RAID_MID_RANK: 30,        // 13~30위 = 중위종
+  RAID_TOP_SCORE_PCT: 75,   // 4-A2: 상위종 = 순위 조건 AND 점수 ≥ 그 타입 1위(전설 포함 전체 1위) 점수의 75%
+  RAID_MID_SCORE_PCT: 65,   // 중위종 = 순위 ≤30 AND ≥65% (공격수가 적은 타입에서 약한 종이 순위만으로 들어오는 것 방지)
   RAID_MAIN_INDIV_RANK: 6,  // 내 목록 같은 종·같은 용도 안에서 공격 스탯 순위 ≤ 6 → 주력 (상위종일 때)
   RAID_BOSS: { baseAttack: 250, baseDefense: 200, baseStamina: 220 }, // 중립 보스 가정(타입 없음, L40·15/15/15)
   RAID_MEMBER_LEVEL: 40,    // 종족 순위 산출 시 개체 가정: L40, 15/15/15
@@ -36,8 +38,10 @@ export const RULES = {
   // 수집 추천
   COLLECT_HUNDO_PCT: 100,
   COLLECT_NUNDO_SUM: 0,
-  // 교환 시 반짝반짝(럭키) 확률 기준 연도: 공식 근거(Niantic 도움말·pokemongo.com)를 이 환경에서 확인할 수 없어 비활성 (README 근거)
-  LUCKY_TRADE_YEAR: null,
+  // 교환 시 반짝반짝(럭키) — 4-A2 활성. 근거(사용자 확인): Niantic 공식 "older Pokémon have a higher chance of triggering a Lucky Trade"(수치 비공개),
+  // 2018-09-05 공지: 2016년 7~8월 포획분은 교환 시 반짝반짝 확정(반짝반짝 보유 10마리 미만 조건). 출처 pokemongohub.net/post/guide/lucky-pokemon-mechanics-in-pokemon-go/
+  LUCKY_TRADE_YEAR: 2019,                       // 이 연도 이전(미만) 포획 → "확률↑"
+  LUCKY_TRADE_GUARANTEED: { from: "2016-07-01", to: "2016-08-31" }, // 포획일 범위 → "확정(조건부)"
 };
 
 // 태그 문자열 (게임에서 그대로 쓸 수 있는 한국어)

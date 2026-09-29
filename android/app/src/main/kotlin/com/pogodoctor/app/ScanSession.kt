@@ -51,7 +51,7 @@ class ScanSession(val id: String = newId()) {
         fun report(): String {
             val min = (System.currentTimeMillis() - startedAt) / 60000.0
             val a = maxOf(1, analyses)
-            return "세션 ${"%.1f".format(min)}분 · 프레임 $frames · 분석 $analyses · 기록 $recorded (중복 $duplicates, CP 가림 대기 $skippedNoCp) · " +
+            return "세션 ${"%.1f".format(min)}분 · 프레임 $frames · 분석 $analyses · 기록 $recorded (중복 $duplicates, CP 미확인 $skippedNoCp) · " +
                 "평균 ms: 캡처 ${captureMs / maxOf(1, frames)} 지문 ${fpMs / maxOf(1, frames)} OCR ${ocrMs / a} 막대 ${barMs / a} API ${apiMs / maxOf(1, recorded)} (실패 $apiFail) · " +
                 "배터리 ${if (batteryStart >= 0) "$batteryStart% → $batteryEnd%" else "?"}"
         }

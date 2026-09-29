@@ -100,8 +100,11 @@ function evaluateCandidate(p, cand, input, ctx, rankings, { forEvolve = false } 
   // 1) 타입별 레이드
   for (const t of TYPES) {
     const sp = raidRankOf(rankings, t, p.id, p.form, shadow);
-    if (!sp || sp.rank > RULES.RAID_MID_RANK) continue;
-    const top = sp.rank <= RULES.RAID_TOP_RANK;
+    if (!sp) continue;
+    // 4-A2: 순위 AND 타입 1위 대비 점수 비율 (상위 ≤12 & ≥75%, 중위 ≤30 & ≥65%)
+    const top = sp.rank <= RULES.RAID_TOP_RANK && sp.pct >= RULES.RAID_TOP_SCORE_PCT;
+    const mid = sp.rank <= RULES.RAID_MID_RANK && sp.pct >= RULES.RAID_MID_SCORE_PCT;
+    if (!top && !mid) continue;
     const indiv = indivRankBy(sameSpecies, p, (r) => ({ primary: Number.isInteger(r.atk_iv) ? r.atk_iv : -1, level: rowLevel(r, p) }), { primary: cand.atk, level: cand.level });
     const tier = top && indiv <= RULES.RAID_MAIN_INDIV_RANK ? "main" : "hold";
     const kr = TYPE_NAMES_KR[t];
@@ -118,8 +121,8 @@ function evaluateCandidate(p, cand, input, ctx, rankings, { forEvolve = false } 
     } else if (!forEvolve) {
       notes.push("기술 확인 필요(최적 기술 가정)");
     }
-    const reason = `${kr} ${sp.rank}위${shadow ? "(섀도)" : ""}·공격 ${cand.atk}, 내 ${p.nameKr} 중 ${indiv}위${notes.length ? " · " + notes.join(", ") : ""}`;
-    tags.push({ name: TAG.raid(kr), tier, reason, metrics: { type: t, speciesRank: sp.rank, top, indivRank: indiv, atkIv: cand.atk, level: cand.level, speciesScore: sp.score, myScore, bestMoves: [sp.fast, sp.charged], usesSpecial: sp.usesSpecial, notes } });
+    const reason = `${kr} ${sp.rank}위(1위 대비 ${sp.pct}%)${shadow ? "(섀도)" : ""}·공격 ${cand.atk}, 내 ${p.nameKr} 중 ${indiv}위${notes.length ? " · " + notes.join(", ") : ""}`;
+    tags.push({ name: TAG.raid(kr), tier, reason, metrics: { type: t, speciesRank: sp.rank, speciesPct: sp.pct, top, indivRank: indiv, atkIv: cand.atk, level: cand.level, speciesScore: sp.score, myScore, bestMoves: [sp.fast, sp.charged], usesSpecial: sp.usesSpecial, notes } });
   }
 
   // 2) 체육관 방어
@@ -170,9 +173,10 @@ function evaluateCandidate(p, cand, input, ctx, rankings, { forEvolve = false } 
   if (!forEvolve) {
     for (const f of finalForms(ctx.dataset, p)) {
       const sub = evaluateCandidate(f.species, cand, { ...input, cp: null, fast_move: null, charged_moves: [] }, ctx, rankings, { forEvolve: true });
-      const useful = sub.tags.filter((t) => t.tier === "main" || t.tier === "hold");
+      // 4-A2: 최종형이 "주력"일 때만 진화 대기 부여 (보류급이면 박사행)
+      const useful = sub.tags.filter((t) => t.tier === "main");
       if (!useful.length) continue;
-      const tier = useful.reduce((a, t) => better(a, t.tier), "hold");
+      const tier = "main";
       const candy = Number.isInteger(input.candy) ? (input.candy >= f.candiesFromHere ? `진화 가능(사탕 ${input.candy}/${f.candiesFromHere})` : `사탕 ${input.candy}/${f.candiesFromHere}`) : `사탕 ${f.candiesFromHere}개 필요`;
       tags.push({ name: TAG.evolve(f.species.nameKr), tier, reason: `${f.species.nameKr} 기준: ${useful.map((t) => `${t.name} ${TIER_LABEL[t.tier]}`).join(", ")} · ${candy}`, metrics: { finalId: f.species.id, finalForm: f.species.form, candiesNeeded: f.candiesFromHere, candy: input.candy ?? null, finalTags: useful.map((t) => ({ name: t.name, tier: t.tier })) } });
     }
@@ -206,6 +210,7 @@ export function computeVerdict(input, ctx) {
   const rankings = getRankings(dataset);
   const cands = normalizeCandidates(input, p);
   const disabled = RULES.LUCKY_TRADE_YEAR == null ? ["lucky_trade_year"] : [];
+  input = { ...input, caught_on: normalizeDate(input.caught_on) };
   const shadow = Boolean(input.is_shadow);
 
   if (!cands.length) {
@@ -249,9 +254,10 @@ export function computeVerdict(input, ctx) {
     }
   }
 
-  // 전설·환상·UB: 개체 무관 보관 권장(낮은 개체는 교환용) → 박사행이면 보류로 상향
+  // 전설·환상·UB: 개체 무관 보관 권장(낮은 개체는 교환용) → 박사행이면 보류로 상향. 보관함 "빠듯"이면 박사행 권장 유지(💎 표시는 남김)
   let legendaryHold = false;
-  if (tier === "transfer" && isLegendaryClass(p)) { tier = "hold"; legendaryHold = true; }
+  const storageMode = (input.storageMode || ctx.storageMode) in RULES.STORAGE_HOLD_LIMIT ? (input.storageMode || ctx.storageMode) : RULES.STORAGE_DEFAULT;
+  if (tier === "transfer" && isLegendaryClass(p) && storageMode !== "tight") { tier = "hold"; legendaryHold = true; }
 
   const allSame = evals.every((e) => e.cand.atk === evals[0].cand.atk && e.cand.def === evals[0].cand.def && e.cand.sta === evals[0].cand.sta);
   const collect = collectFor(p, input, allSame ? evals[0].cand : null, !legendaryHold && (tier === "main" || tier === "hold"));
@@ -281,7 +287,20 @@ function collectFor(p, input, cand, kept) {
     else if (kept) out.push({ reason: "전설·환상 — 보관 권장" });
     else out.push({ reason: "교환용(전설·환상, 교환 시 개체값 재설정)" });
   }
+  // 4-A2 교환 시 반짝반짝: 포획일 기준 (기기에서 읽은 날짜, 장소 없음). 이미 럭키면 해당 없음
+  const lucky = luckyTradeReason(input.caught_on);
+  if (lucky && !input.is_lucky) out.push({ reason: lucky });
   return out;
+}
+
+const normalizeDate = (d) => (typeof d === "string" && /^\d{4}-\d{2}-\d{2}/.test(d) ? d.slice(0, 10) : null);
+export function luckyTradeReason(caughtOn) {
+  const d = normalizeDate(caughtOn);
+  if (!d) return null;
+  const g = RULES.LUCKY_TRADE_GUARANTEED;
+  if (g && d >= g.from && d <= g.to) return `교환 시 반짝반짝 확정(조건부: 2016-07~08 포획, 반짝반짝 보유 10마리 미만) — 포획 ${d}`;
+  if (RULES.LUCKY_TRADE_YEAR != null && Number(d.slice(0, 4)) < RULES.LUCKY_TRADE_YEAR) return `교환 시 반짝반짝 확률↑(공식, 수치 비공개) — 포획 ${d}`;
+  return null;
 }
 
 function buildSummary(tier, tags, collect, event, cand, allSame, legendaryHold) {
@@ -305,6 +324,7 @@ export function inputFromRow(r, storageMode) {
     ivs: Number.isInteger(r.atk_iv) ? { atk: r.atk_iv, def: r.def_iv, sta: r.sta_iv } : null,
     fast_move: r.fast_move || null, charged_moves: r.charged_moves || [],
     is_shadow: Boolean(r.is_shadow), is_purified: Boolean(r.is_purified), is_shiny: Boolean(r.is_shiny), is_lucky: Boolean(r.is_lucky),
+    caught_on: r.caught_on || null,
     storageMode,
   };
 }
@@ -319,6 +339,7 @@ export function validateVerdictInput(b) {
   if (b.ivCandidates != null && !(Array.isArray(b.ivCandidates) && b.ivCandidates.length <= 4096)) errors.push("ivCandidates 는 배열(≤4096)");
   if (b.storageMode != null && !(b.storageMode in RULES.STORAGE_HOLD_LIMIT)) errors.push("storageMode 는 relaxed|normal|tight");
   if (b.candy != null && !(Number.isInteger(b.candy) && b.candy >= 0 && b.candy <= 99999)) errors.push("candy 는 0~99999 정수");
+  if (b.caught_on != null && !(typeof b.caught_on === "string" && /^\d{4}-\d{2}-\d{2}$/.test(b.caught_on))) errors.push("caught_on 은 YYYY-MM-DD");
   return { errors };
 }
 
