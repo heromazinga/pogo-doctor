@@ -271,6 +271,20 @@ test("4-C.3 결함 1: 찌르꼬 0/15/14 L2 CP null HP22 → CP 없어도 HP 로 
   assert.notEqual(s.tier, "transfer"); assert.ok(s.recommendedTags.includes(TAG.evolve("찌르호크")));
 });
 
+test("4-C.4 결함 3: 최종형이 리그 후보(D, 종 PvPoke 200위 밖·스탯곱 ≤41) 보류면 진화 후보(보류)로 이어진다 — 찌르꼬 0/15/14 HP22, 찌르호크 하이퍼 300위 가정", () => {
+  const ultra = new Map([...leagueRankings.leagues.ultra].filter(([k]) => k !== "staraptor").concat([["staraptor", { rank: 300, score: 50, name: "Staraptor" }]]));
+  const lr = { ...leagueRankings, leagues: { ...leagueRankings.leagues, ultra } };
+  const hp = calcHP(120, 14, 2);
+  const v = computeVerdict({ species_id: 396, ivs: { atk: 0, def: 15, sta: 14 }, level: null, cp: null, hp }, ctx({ leagueRankings: lr }));
+  const t = tagOf(v, TAG.evolve("찌르호크"));
+  assert.ok(t, v.tags.map((x) => x.name).join());
+  assert.equal(t.tier, "hold"); assert.ok(t.metrics.finalTags.some((x) => x.name === TAG.ultra && x.tier === "hold"), JSON.stringify(t.metrics.finalTags));
+  assert.equal(v.tier, "hold"); assert.ok(v.recommendedTags.includes(TAG.evolve("찌르호크")));
+  // 찌르호크가 PvPoke 파일에 아예 없으면(D 제외 규칙) 진화 후보 없음 → 박사행 (실DB explain 으로 확인할 지점)
+  const none = { ...leagueRankings, leagues: { ...leagueRankings.leagues, ultra: new Map([...leagueRankings.leagues.ultra].filter(([k]) => k !== "staraptor")) } };
+  assert.equal(computeVerdict({ species_id: 396, ivs: { atk: 0, def: 15, sta: 14 }, level: null, cp: null, hp }, ctx({ leagueRankings: none })).tier, "transfer");
+});
+
 test("4-C.2 C 수집 태그: 100%·0%·반짝반짝·오래 전 포획 → recommendedTags 에 '수집'(등급 무관), 이로치만으로는 아님", () => {
   assert.ok(computeVerdict({ species_id: 999, ivs: { atk: 15, def: 15, sta: 15 }, level: 20 }, ctx()).recommendedTags.includes(TAG.collect), "100%");
   assert.ok(computeVerdict({ species_id: 999, ivs: { atk: 0, def: 0, sta: 0 }, level: 20 }, ctx()).recommendedTags.includes(TAG.collect), "0%");

@@ -198,11 +198,15 @@ function evaluateCandidate(p, cand, input, ctx, rankings, { forEvolve = false } 
     for (const f of finalForms(ctx.dataset, p)) {
       const sub = evaluateCandidate(f.species, cand, { ...input, cp: null, fast_move: null, charged_moves: [] }, ctx, rankings, { forEvolve: true });
       // 4-A2: 최종형이 "주력"일 때만 진화 대기 부여 (보류급이면 박사행)
-      const useful = sub.tags.filter((t) => t.tier === "main");
+      // 4-A2: 최종형이 "주력"일 때 진화 후보(주력). 4-C.4: 최종형의 "리그 후보" 보류(스탯곱 ≤41, D)도 진화 후보(보류)로 이어진다
+      //   (실DB 결함: 찌르꼬 0/15/14 → 찌르호크 하이퍼 스탯곱 4위가 종 순위 200위 밖이라 D 보류였는데, 주력만 세어 진화 후보가 없었고 박사행이 됐다)
+      const mains = sub.tags.filter((t) => t.tier === "main");
+      const candHolds = sub.tags.filter((t) => t.tier === "hold" && t.metrics?.candidate);
+      const useful = mains.length ? mains : candHolds;
       if (!useful.length) continue;
       // 4-C.2: 필요 사탕 ≥200(예: 잉어킹 400)이면 등급 상한 보류 — 진화까지 멀어 주력으로 세지 않는다
       const candyHold = f.candiesFromHere >= rule(ctx, "EVOLVE_CANDY_HOLD");
-      const tier = candyHold ? "hold" : "main";
+      const tier = candyHold || !mains.length ? "hold" : "main";
       const candy = (Number.isInteger(input.candy) ? (input.candy >= f.candiesFromHere ? `진화 가능(사탕 ${input.candy}/${f.candiesFromHere})` : `사탕 ${input.candy}/${f.candiesFromHere}`) : `사탕 ${f.candiesFromHere}개 필요`) + (candyHold ? ` · 사탕 ${rule(ctx, "EVOLVE_CANDY_HOLD")}개 이상 → 보류` : "");
       // 4-C: 최종형의 추천 기술(첫 주력 태그 기준)을 함께 표시. 30일 내 이벤트 대상이면 computeVerdict 에서 "📅 이벤트 때 진화" 를 붙인다
       const moves = useful.find((t) => t.moves)?.moves || null;

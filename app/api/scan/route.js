@@ -28,7 +28,7 @@ export async function GET(req) {
     if (items.some((it) => isStaleVerdict(it.verdict))) filled = await fillMissingVerdicts(sb, items, ctx);
   } catch (e) { console.warn(`[scan] 판정 보충 실패: ${e.message}`); }
   const { data: sessions } = await sb.from("scan_sessions").select("session_id,metrics,started_at,ended_at,created_at").eq("user_id", user.userId).order("created_at", { ascending: false }).limit(20);
-  return NextResponse.json({ items, sessions: sessions || [], filled, backfill: backfill ? { ran: backfill.ran, superseded: backfill.superseded, conflicts: backfill.conflicts, version: backfill.version } : null });
+  return NextResponse.json({ items, sessions: sessions || [], filled, backfill: backfill ? { ran: backfill.ran, superseded: backfill.superseded, conflicts: backfill.conflicts, suspects: backfill.suspects, version: backfill.version } : null });
 }
 
 export async function POST(req) {

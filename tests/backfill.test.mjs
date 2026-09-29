@@ -1,7 +1,7 @@
 // 4-C.2 스캔 기록 superseded 백필(planSupersede) + CP 검증(cpConsistentLevel)
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { planSupersede, planConflicts } from "../app/lib/scanBackfill.js";
+import { planSupersede, planConflicts, planSuspects, isSuspectBars } from "../app/lib/scanBackfill.js";
 import { cpConsistentLevel } from "../app/lib/ivCalc.js";
 import { calcCP } from "../app/lib/cpm.js";
 import { calcHP } from "../app/lib/ivCalc.js";
@@ -69,6 +69,17 @@ test("백필 ③: CP 가 개체값·HP 와 맞지 않는 기록(괴력몬 2634 v
   const good = item("good", 68, [15, 12, 14], 30);
   const bad = { ...item("bad", 68, [15, 12, 14], 30), cp: Math.floor(good.cp / 10), level: null };
   assert.deepEqual(planSupersede([bad, good], dataset), [{ id: "bad", superseded_by: "good" }]);
+});
+
+test("4-C.4 과거 기록 의심 휴리스틱(planSuspects): 방어·HP ≤8 이고 공격 ≥ 방어+5 → recheck 대상, 이미 recheck 면 제외, 자연스러운 저개체는 아님", () => {
+  assert.ok(isSuspectBars({ atk_iv: 15, def_iv: 6, sta_iv: 8 }), "괴력몬 15/6/8");
+  assert.ok(isSuspectBars({ atk_iv: 13, def_iv: 7, sta_iv: 7 }), "냐오불 13/7/7");
+  assert.ok(isSuspectBars({ atk_iv: 11, def_iv: 4, sta_iv: 4 }), "과사삭벌레 11/4/4");
+  assert.ok(!isSuspectBars({ atk_iv: 15, def_iv: 12, sta_iv: 14 }));
+  assert.ok(!isSuspectBars({ atk_iv: 5, def_iv: 3, sta_iv: 2 }), "공격도 낮으면 자연스러운 저개체");
+  assert.ok(!isSuspectBars({ atk_iv: 15, def_iv: 8, sta_iv: 12 }), "HP 가 8 초과");
+  assert.ok(!isSuspectBars({ atk_iv: null, def_iv: 4, sta_iv: 4 }));
+  assert.deepEqual(planSuspects([{ id: "a", atk_iv: 15, def_iv: 6, sta_iv: 8 }, { id: "b", atk_iv: 15, def_iv: 6, sta_iv: 8, recheck: true }, { id: "c", atk_iv: 15, def_iv: 15, sta_iv: 15 }]), ["a"]);
 });
 
 test("백필 ④: 진화·강화(레벨 비감소) → 최신 기록 유지, 서로 다른 과거 후보 2개는 건드리지 않음, 포획일 다르면 별개", () => {

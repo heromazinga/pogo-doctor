@@ -36,6 +36,7 @@ export async function POST(req) {
   if (!optInt(b.stars, 0, 3)) errors.push("stars");
   if (b.caught_on != null && !validDate(b.caught_on)) errors.push("caught_on");
   if (b.game_tags != null && !validTags(b.game_tags)) errors.push("game_tags 는 1~24자 문자열 최대 8개");
+  if (b.recheck_reason != null && !(typeof b.recheck_reason === "string" && b.recheck_reason.length <= 80)) errors.push("recheck_reason 은 80자 이하");
   if (errors.length) return NextResponse.json({ error: "필드 검증 실패", details: errors }, { status: 400 });
 
   const item = {
@@ -44,6 +45,7 @@ export async function POST(req) {
     cp: b.cp ?? null, hp: b.hp ?? null, atk_iv: anyIv ? b.atk_iv : null, def_iv: anyIv ? b.def_iv : null, sta_iv: anyIv ? b.sta_iv : null,
     level: b.level ?? null, stars: b.stars ?? null, is_shadow: Boolean(b.is_shadow), caught_on: b.caught_on || null, recheck: Boolean(b.recheck), dismissed: false,
     game_tags: Array.isArray(b.game_tags) ? b.game_tags.map((t) => String(t).trim()).filter(Boolean).slice(0, 8) : [],
+    recheck_reason: b.recheck && typeof b.recheck_reason === "string" && b.recheck_reason.trim() ? b.recheck_reason.trim() : null, // 4-C.4 앱이 보낸 재확인 사유(막대 판독 불일치 등)
   };
   // 4-C.2 A. CP 자리수 누락 방지: 종·개체값·HP 로 가능한 레벨의 CP 와 맞지 않으면 CP 를 null 로 저장 (예: 괴력몬 2634 → 263 오판독)
   let cpRejected = null;

@@ -1960,7 +1960,7 @@ export default function Home() {
             </div>
             <div style={{ ...s.sourceNotice, marginBottom: 10 }}>⚠️ {cleanup?.note || "예상 수는 앱이 아는 개체(스캔 기록 + 내 목록) 기준입니다. 앱이 모르는 같은 종·HP 개체가 게임에 있으면 결과가 더 나옵니다 — 게임 결과 수가 예상과 다르면 보내지 마세요."}</div>
             {cleanup?.protectNote && <div style={{ ...s.sourceNotice, marginBottom: 10 }}>🛡 {cleanup.protectNote}</div>}
-            {cleanup?.backfill?.ran && <div style={{ fontSize: 10, color: "#4ecdc4", marginBottom: 8 }}>🧹 스캔 기록 정리 1회 실행: 대체된 과거 기록 {cleanup.backfill.superseded}건 · 재스캔 필요 표시 {cleanup.backfill.conflicts ?? 0}건 (규칙 {cleanup.backfill.version})</div>}
+            {cleanup?.backfill?.ran && <div style={{ fontSize: 10, color: "#4ecdc4", marginBottom: 8 }}>🧹 스캔 기록 정리 1회 실행: 대체된 과거 기록 {cleanup.backfill.superseded}건 · 재스캔 필요 표시 {cleanup.backfill.conflicts ?? 0}건(충돌) + {cleanup.backfill.suspects ?? 0}건(오판독 의심) (규칙 {cleanup.backfill.version})</div>}
             {cleanupError && <div style={s.error}>{cleanupError}</div>}
             {cleanupBusy && !cleanup && <div style={{ fontSize: 12, color: "#8899aa" }}>계산 중…</div>}
             {cleanup && cleanup.categories.length === 0 && <div style={{ fontSize: 12, color: "#576574", padding: "8px 0" }}>정리할 대상이 없습니다 (스캔 기록·내 목록의 판정 기준)</div>}

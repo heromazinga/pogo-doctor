@@ -13,6 +13,10 @@ import { cpConsistentLevel } from "./ivCalc.js";
 import { loadUserSettings, saveBackfillVersion } from "./userSettings.js";
 
 export const CONFLICT_REASON = "같은 CP·HP 다른 개체값 — 재스캔 필요";
+// 4-C.4 과거 기록 의심 휴리스틱(앱 v0.1.30 이하: 라벨행 값 채택 경로가 방어·HP 를 약 절반으로 기록): 방어·HP 둘 다 ≤8 이고 공격 ≥ 방어+5
+export const SUSPECT_REASON = "막대 오판독 의심(방어·HP ≤8, 공격 ≥ 방어+5) — 재스캔 필요";
+export function isSuspectBars(r) { return hasIv(r) && r.def_iv <= 8 && r.sta_iv <= 8 && r.atk_iv >= r.def_iv + 5; }
+export function planSuspects(items) { return items.filter((r) => !r.recheck && isSuspectBars(r)).map((r) => r.id); }
 const hasIv = (r) => [r.atk_iv, r.def_iv, r.sta_iv].every((v) => Number.isInteger(v));
 const caughtOk = (a, b) => !a.caught_on || !b.caught_on || a.caught_on === b.caught_on;
 const ivKey = (r) => `${r.atk_iv},${r.def_iv},${r.sta_iv}`;
@@ -94,7 +98,7 @@ export function planConflicts(items) {
 export async function backfillSuperseded(sb, userId, items, ctx) {
   const version = RULES_VERSION;
   const settings = ctx?.settings !== undefined ? ctx.settings : await loadUserSettings(sb, userId);
-  if (settings?.scan_backfill_version === version) return { ran: false, superseded: 0, conflicts: 0, version, changed: false, items };
+  if (settings?.scan_backfill_version === version) return { ran: false, superseded: 0, conflicts: 0, suspects: 0, version, changed: false, items };
   const plan = planSupersede(items, ctx.dataset);
   let n = 0;
   for (const p of plan) {
@@ -110,7 +114,14 @@ export async function backfillSuperseded(sb, userId, items, ctx) {
     if (!error) { c++; const it = remaining.find((x) => x.id === id); if (it) { it.recheck = true; it.recheck_reason = CONFLICT_REASON; } }
     else console.warn(`[backfill] recheck ${id}: ${error.message}`);
   }
+  // 4-C.4 과거 기록 의심(휴리스틱) → recheck (박사행·태그 묶음 제외, population 에는 남김). 사용자 재스캔으로 해소
+  let s = 0;
+  for (const id of planSuspects(remaining)) {
+    const { error } = await sb.from("scan_items").update({ recheck: true, recheck_reason: SUSPECT_REASON }).eq("user_id", userId).eq("id", id);
+    if (!error) { s++; const it = remaining.find((x) => x.id === id); if (it) { it.recheck = true; it.recheck_reason = SUSPECT_REASON; } }
+    else console.warn(`[backfill] suspect ${id}: ${error.message}`);
+  }
   const saved = await saveBackfillVersion(sb, userId, version);
-  console.log(`[backfill] ${userId} superseded ${n}/${plan.length}, conflicts ${c} (version ${version}, flag ${saved ? "saved" : "not saved"})`);
-  return { ran: true, superseded: n, conflicts: c, version, changed: n > 0 || c > 0, items: remaining };
+  console.log(`[backfill] ${userId} superseded ${n}/${plan.length}, conflicts ${c}, suspects ${s} (version ${version}, flag ${saved ? "saved" : "not saved"})`);
+  return { ran: true, superseded: n, conflicts: c, suspects: s, version, changed: n > 0 || c > 0 || s > 0, items: remaining };
 }
