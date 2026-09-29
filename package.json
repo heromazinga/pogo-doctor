@@ -6,7 +6,8 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "test": "node --test tests/*.test.mjs"
+    "test": "node --test tests/*.test.mjs",
+    "test:migrations": "node scripts/test-migrations.mjs"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.117.2",

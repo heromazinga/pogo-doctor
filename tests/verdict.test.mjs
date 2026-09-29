@@ -19,10 +19,21 @@ const moveStats = {
   "Hydro Pump": { type: "water", kind: "charged", power: 130, durationMs: 3300, energy: 100 },
   "Confusion": { type: "psychic", kind: "fast", power: 20, durationMs: 1600, energy: 15 },
   "Psystrike": { type: "psychic", kind: "charged", power: 90, durationMs: 2300, energy: 50 },
+  "Lock-On": { type: "normal", kind: "fast", power: 1, durationMs: 300, energy: 5 },
+  "Hyper Beam": { type: "normal", kind: "charged", power: 150, durationMs: 3800, energy: 100 },
+  "Pound": { type: "normal", kind: "fast", power: 7, durationMs: 600, energy: 6 },
+  "Quick Attack": { type: "normal", kind: "fast", power: 8, durationMs: 800, energy: 10 },
+  "Air Slash": { type: "flying", kind: "fast", power: 14, durationMs: 1200, energy: 10 },
+  "Hurricane": { type: "flying", kind: "charged", power: 110, durationMs: 2700, energy: 100 },
+  "Charm": { type: "fairy", kind: "fast", power: 20, durationMs: 1500, energy: 11 },
+  "Moonblast": { type: "fairy", kind: "charged", power: 130, durationMs: 3900, energy: 100 },
+  "Gust": { type: "flying", kind: "fast", power: 25, durationMs: 2000, energy: 20 },
+  "Hidden Power": { type: "normal", kind: "fast", power: 15, durationMs: 1500, energy: 15 },
+  "Giga Impact": { type: "normal", kind: "charged", power: 200, durationMs: 4700, energy: 100 },
 };
 const sp = (id, name, nameKr, types, atk, def, sta, fast, charged, extra = {}) => ({
   id, form: "Normal", name, nameKr, types, baseAttack: atk, baseDefense: def, baseStamina: sta, fast, charged,
-  eliteFast: [], eliteCharged: [], signatureFast: [], signatureCharged: [], released: true, pokemonClass: null, evolutions: [], pvpokeId: name.toLowerCase(), ...extra,
+  eliteFast: [], eliteCharged: [], signatureFast: [], signatureCharged: [], released: true, pokemonClass: null, evolutions: [], pvpokeId: name.toLowerCase(), shadowEligible: true, ...extra,
 });
 // 체육관 상위 20 을 채우는 내구형 더미(기술 없음 → 레이드 순위에 안 오름)
 const fillers = Array.from({ length: 25 }, (_, i) => sp(900 + i, `Filler${i}`, `더미${i}`, ["normal"], 100, 250 + i, 250, [], []));
@@ -39,6 +50,15 @@ const dataset = {
     sp(129, "Magikarp", "잉어킹", ["water"], 29, 85, 85, [], []),
     sp(150, "Mewtwo", "뮤츠", ["psychic"], 300, 182, 214, ["Confusion"], ["Psystrike"], { pokemonClass: "legendary" }),
     sp(999, "Weakmon", "약한몬", ["normal"], 50, 50, 50, [], [], { pokemonClass: "legendary" }),
+    // 4-A2: 타입 1위 대비 비율 검증용. 노말 1위 폴리곤Z, 비행 1위 레쿠쟈(전설), 페어리는 님피아뿐
+    sp(486, "Regigigas", "레지기가스", ["normal"], 287, 210, 221, ["Hidden Power"], ["Giga Impact"], { pokemonClass: "legendary", shadowEligible: false }),
+    sp(474, "Porygon-Z", "폴리곤Z", ["normal"], 264, 150, 198, ["Lock-On", "Hidden Power"], ["Hyper Beam"], { shadowEligible: false }),
+    sp(384, "Rayquaza", "레쿠쟈", ["dragon", "flying"], 284, 170, 213, ["Air Slash"], ["Hurricane"], { pokemonClass: "legendary", shadowEligible: false }),
+    sp(16, "Pidgey", "구구", ["normal", "flying"], 85, 73, 120, ["Tackle", "Quick Attack"], ["Hyper Beam"], { evolutions: [{ id: 17, form: "Normal", candies: 12 }] }),
+    sp(17, "Pidgeotto", "피죤", ["normal", "flying"], 117, 105, 160, ["Tackle"], ["Hyper Beam"], { evolutions: [{ id: 18, form: "Normal", candies: 50 }] }),
+    sp(18, "Pidgeot", "피죤투", ["normal", "flying"], 166, 154, 195, ["Gust", "Air Slash"], ["Hurricane", "Hyper Beam"]),
+    sp(242, "Blissey", "해피너스", ["normal"], 129, 169, 496, ["Pound"], ["Hyper Beam"]),
+    sp(700, "Sylveon", "님피아", ["fairy"], 203, 205, 216, ["Charm", "Quick Attack"], ["Moonblast", "Hyper Beam"]),
     ...fillers,
   ],
 };
@@ -224,10 +244,63 @@ test("종족 순위: 메가 제외·중복 폼 제거·섀도 별도, 체육관�
   assert.ok(r.raid.fire.shadow.find((x) => x.id === 815).score > r.raid.fire.normal.find((x) => x.id === 815).score, "섀도 점수 > 일반");
 });
 
-test("태그 → purposes 파생, 럭키 교환 연도는 비활성", () => {
+test("태그 → purposes 파생", () => {
   assert.deepEqual(purposesFromTags(["불꽃 레이드", "슈퍼리그", "체육관 방어", "마스터리그"]), ["raid", "great", "master"]);
-  assert.equal(RULES.LUCKY_TRADE_YEAR, null);
-  assert.ok(computeVerdict({ species_id: 129, ivs: { atk: 1, def: 1, sta: 1 }, level: 5 }, ctx()).disabled.includes("lucky_trade_year"));
+});
+
+test("4-A2 교환 시 반짝반짝: 2016-07~08 확정(조건부), 2019 이전 확률↑, 그 외 없음, 이미 럭키면 없음", () => {
+  const base = { species_id: 129, ivs: { atk: 1, def: 1, sta: 1 }, level: 5 };
+  assert.ok(computeVerdict({ ...base, caught_on: "2016-08-15" }, ctx()).collect.some((c) => c.reason.startsWith("교환 시 반짝반짝 확정")));
+  assert.ok(computeVerdict({ ...base, caught_on: "2018-03-01" }, ctx()).collect.some((c) => c.reason.startsWith("교환 시 반짝반짝 확률↑")));
+  assert.ok(!computeVerdict({ ...base, caught_on: "2019-01-01" }, ctx()).collect.some((c) => c.reason.includes("반짝반짝")));
+  assert.ok(!computeVerdict({ ...base, caught_on: "2017-01-01", is_lucky: true }, ctx()).collect.some((c) => c.reason.includes("교환 시")));
+  assert.equal(computeVerdict(base, ctx()).disabled.length, 0);
+  assert.equal(RULES.LUCKY_TRADE_YEAR, 2019);
+});
+
+test("4-A2 보관함 빠듯: 전설도 박사행 권장, 💎 교환용은 유지", () => {
+  const v = computeVerdict({ species_id: 999, ivs: { atk: 5, def: 7, sta: 3 }, level: 20, storageMode: "tight" }, ctx());
+  assert.equal(v.tier, "transfer");
+  assert.ok(v.collect.some((c) => c.reason.startsWith("교환용")));
+  assert.equal(computeVerdict({ species_id: 999, ivs: { atk: 5, def: 7, sta: 3 }, level: 20, storageMode: "normal" }, ctx()).tier, "hold");
+});
+
+test("4-A2 레이드 비율 기준: 구구 5/8/3 → 박사행(피죤투는 노말·비행 1위 대비 75% 미만이라 진화 대기 없음)", () => {
+  const v = computeVerdict({ species_id: 16, ivs: { atk: 5, def: 8, sta: 3 }, level: 15 }, ctx());
+  assert.equal(v.tier, "transfer", v.tags.map((t) => `${t.name}:${t.tier}:${t.reason}`).join(" | "));
+  assert.equal(tagOf(v, TAG.evolve("피죤투")), undefined);
+  const r = getRankings(dataset);
+  const pid = r.raid.flying.normal.find((x) => x.id === 18);
+  assert.ok(pid && pid.pct < RULES.RAID_MID_SCORE_PCT, `피죤투 비행 ${pid?.pct}% (1위 ${r.raid.flying.normal[0].nameKr})`);
+});
+
+test("4-A2 해피너스 → 노말 레이드 태그 없음, 체육관 방어 주력", () => {
+  const v = computeVerdict({ species_id: 242, ivs: { atk: 10, def: 15, sta: 15 }, level: 40 }, ctx());
+  assert.equal(tagOf(v, TAG.raid("노말")), undefined, v.tags.map((t) => t.name).join());
+  assert.equal(tagOf(v, TAG.gym)?.tier, "main");
+});
+
+test("4-A2 님피아 → 페어리 레이드만 (노말은 1위 대비 비율 미달)", () => {
+  const v = computeVerdict({ species_id: 700, ivs: { atk: 15, def: 15, sta: 15 }, level: 40 }, ctx());
+  assert.equal(tagOf(v, TAG.raid("페어리"))?.tier, "main");
+  assert.equal(tagOf(v, TAG.raid("노말")), undefined, v.tags.map((t) => `${t.name}:${t.reason}`).join(" | "));
+});
+
+test("4-A2 진화 대기는 최종형이 주력일 때만: 리자몽 주력이면 파이리 부여, 최종형 보류급이면 없음", () => {
+  const v = computeVerdict({ species_id: 4, ivs: { atk: 15, def: 15, sta: 15 }, level: 20 }, ctx());
+  assert.equal(tagOf(v, TAG.evolve("리자몽"))?.tier, "main");
+  // 내 목록에 리자몽 15/15/15 가 6마리 → 최종형 기준 순위 7 = 보류 → 진화 대기 없음
+  const myRows = Array.from({ length: 6 }, (_, i) => ({ id: `z${i}`, species_id: 6, form: "Normal", atk_iv: 15, def_iv: 15, sta_iv: 15, level: 50, is_shadow: false, status: "keep", tags: [] }));
+  const v2 = computeVerdict({ species_id: 4, ivs: { atk: 14, def: 15, sta: 15 }, level: 20 }, ctx({ myRows }));
+  assert.equal(tagOf(v2, TAG.evolve("리자몽")), undefined);
+  assert.equal(v2.tier, "transfer");
+});
+
+test("4-A2 섀도 순위는 PvPoke shadoweligible 종만", () => {
+  const r = getRankings(dataset);
+  assert.ok(!r.raid.normal.shadow.some((x) => x.id === 474), "폴리곤Z(shadowEligible:false) 는 섀도 순위 제외");
+  assert.ok(r.raid.fire.shadow.some((x) => x.id === 815));
+  assert.equal(r.raid.fire.normal[0].pct, 100);
 });
 
 test("이로치·럭키 → 💎, 데이터 없는 리그는 경고만", () => {
