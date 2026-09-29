@@ -55,6 +55,8 @@ const dataset = {
     sp(396, "Starly", "찌르꼬", ["normal", "flying"], 101, 58, 120, ["Tackle"], ["Hyper Beam"], { evolutions: [{ id: 397, form: "Normal", candies: 25 }] }),
     sp(397, "Staravia", "찌르버드", ["normal", "flying"], 142, 94, 146, ["Tackle"], ["Hyper Beam"], { evolutions: [{ id: 398, form: "Normal", candies: 100 }] }),
     sp(398, "Staraptor", "찌르호크", ["normal", "flying"], 234, 140, 198, ["Quick Attack"], ["Hyper Beam"]),
+    // 4-D 실DB 사례: 도치마론(PvPoke 슈퍼 1080위, L50 에도 1500 미도달) 15/15/12 가 스탯곱 상위로 보류되던 것 → 제외
+    sp(650, "Chespin", "도치마론", ["grass"], 110, 106, 148, [], []),
     sp(150, "Mewtwo", "뮤츠", ["psychic"], 300, 182, 214, ["Confusion"], ["Psystrike"], { pokemonClass: "legendary" }),
     sp(999, "Weakmon", "약한몬", ["normal"], 50, 50, 50, [], [], { pokemonClass: "legendary" }),
     // 4-A2: 타입 1위 대비 비율 검증용. 노말 1위 폴리곤Z, 비행 1위 레쿠쟈(전설), 페어리는 님피아뿐
@@ -232,7 +234,7 @@ test("4-B6.2 판정 최신화: 저장된 판정의 rulesVersion 이 다르면 �
 });
 
 test("4-C.2 E 진화 후보: 이름 '진화 후보(→X)', 필요 사탕 ≥200(잉어킹 400)이면 등급 상한 보류, 125(파이리)는 주력 유지", () => {
-  assert.equal(TAG.evolve("갸라도스"), "진화 후보(→갸라도스)");
+  assert.equal(TAG.evolve("갸라도스"), "진화 후보"); // 4-D: 단일 태그, 진화형은 사유에
   const karp = computeVerdict({ species_id: 129, ivs: { atk: 15, def: 12, sta: 11 }, level: 20 }, ctx());
   const t = tagOf(karp, TAG.evolve("갸라도스"));
   assert.ok(t, karp.tags.map((x) => x.name).join());
@@ -283,6 +285,41 @@ test("4-C.4 결함 3: 최종형이 리그 후보(D, 종 PvPoke 200위 밖·스�
   // 찌르호크가 PvPoke 파일에 아예 없으면(D 제외 규칙) 진화 후보 없음 → 박사행 (실DB explain 으로 확인할 지점)
   const none = { ...leagueRankings, leagues: { ...leagueRankings.leagues, ultra: new Map([...leagueRankings.leagues.ultra].filter(([k]) => k !== "staraptor")) } };
   assert.equal(computeVerdict({ species_id: 396, ivs: { atk: 0, def: 15, sta: 14 }, level: null, cp: null, hp }, ctx({ leagueRankings: none })).tier, "transfer");
+});
+
+test("4-D 리그 후보 축소: PvPoke ≤300 AND 상한 도달(레벨<50, CP ≥ 상한×0.97)만. 도치마론 15/15/12(슈퍼 1080위·미도달) 제외, 찌르꼬(찌르호크 하이퍼 L36 CP2497) 유지, 일반 보류도 미도달 제외", () => {
+  const great = new Map([...leagueRankings.leagues.great, ["chespin", { rank: 1080, score: 40, name: "Chespin" }]]);
+  const ultra = new Map([...leagueRankings.leagues.ultra].filter(([k]) => k !== "staraptor").concat([["staraptor", { rank: 250, score: 60, name: "Staraptor" }]]));
+  const lr = { ...leagueRankings, leagues: { ...leagueRankings.leagues, great, ultra } };
+  const ches = computeVerdict({ species_id: 650, ivs: { atk: 15, def: 15, sta: 12 }, level: 30 }, ctx({ leagueRankings: lr }));
+  assert.equal(tagOf(ches, TAG.great), undefined, ches.tags.map((t) => `${t.name}:${t.tier}`).join());
+  const hp = calcHP(120, 14, 2);
+  const star = computeVerdict({ species_id: 396, ivs: { atk: 0, def: 15, sta: 14 }, level: null, cp: null, hp }, ctx({ leagueRankings: lr }));
+  const t = tagOf(star, TAG.evolve());
+  assert.ok(t && t.tier === "hold", star.tags.map((x) => `${x.name}:${x.tier}`).join());
+  assert.ok(t.metrics.finalTags.some((x) => x.name === TAG.ultra), "찌르호크 하이퍼 상한 도달(L36 CP≈2497 ≥ 2425)");
+  // PvPoke 301위면 리그 후보 아님
+  const far = { ...lr, leagues: { ...lr.leagues, ultra: new Map([...ultra].filter(([k]) => k !== "staraptor").concat([["staraptor", { rank: 301, score: 60, name: "Staraptor" }]])) } };
+  assert.equal(computeVerdict({ species_id: 396, ivs: { atk: 0, def: 15, sta: 14 }, level: null, cp: null, hp }, ctx({ leagueRankings: far })).tier, "transfer");
+  // 일반 보류(상위종)도 상한 미도달이면 제외: 리자몽 슈퍼 1위로 주입, 0/0/0 은 L50 에 1500 도달 → 보류 여부는 스탯곱 순위로만; 도치마론을 상위종(1위)으로 주입해도 미도달이면 없음
+  const great2 = new Map([["chespin", { rank: 1, score: 100, name: "Chespin" }], ...leagueRankings.leagues.great]);
+  const ches2 = computeVerdict({ species_id: 650, ivs: { atk: 5, def: 15, sta: 15 }, level: 30 }, ctx({ leagueRankings: { ...lr, leagues: { ...lr.leagues, great: great2 } } }));
+  const g2 = tagOf(ches2, TAG.great);
+  assert.ok(!g2 || g2.tier === "main", `미도달 상위종은 보류 없음(주력은 스탯곱 ≤100 기준 그대로): ${g2?.tier}`);
+  assert.equal(RULES.LEAGUE_CANDIDATE_SPECIES_RANK, 300); assert.equal(RULES.LEAGUE_CAP_REACH_PCT, 0.97);
+});
+
+test("4-D 진화 후보 단일 태그: 이름은 '진화 후보' 하나, 진화형·사탕은 사유에. 최종형 여럿이면 등급→사탕 순 하나만(다른 진화형 표기)", () => {
+  assert.equal(TAG.evolve("아무개"), "진화 후보");
+  const v = computeVerdict({ species_id: 4, ivs: { atk: 15, def: 15, sta: 15 }, level: 20 }, ctx());
+  const ev = v.tags.filter((t) => t.name === "진화 후보");
+  assert.equal(ev.length, 1); assert.ok(ev[0].reason.startsWith("→리자몽 기준:"), ev[0].reason); assert.equal(ev[0].metrics.finalKr, "리자몽");
+  // 최종형 2개(합성: 파이리 → 리자몽 / 갸라도스 로 갈라지는 가짜 계열)
+  const ds = { ...dataset, generatedAt: "test-multi", pokemon: dataset.pokemon.map((p) => (p.id === 5 ? { ...p, evolutions: [{ id: 6, form: "Normal", candies: 100 }, { id: 130, form: "Normal", candies: 400 }] } : p)) };
+  const m = computeVerdict({ species_id: 4, ivs: { atk: 15, def: 15, sta: 15 }, level: 20 }, ctx({ dataset: ds }));
+  const ev2 = m.tags.filter((t) => t.name === "진화 후보");
+  assert.equal(ev2.length, 1, "태그 하나로 합침"); assert.ok(m.confident, "같은 이름 태그 여러 개로 need_appraisal 이 되면 안 됨");
+  assert.ok(ev2[0].reason.includes("다른 진화형 1"), ev2[0].reason); assert.equal(ev2[0].metrics.alternatives.length, 1);
 });
 
 test("4-C.2 C 수집 태그: 100%·0%·반짝반짝·오래 전 포획 → recommendedTags 에 '수집'(등급 무관), 이로치만으로는 아님", () => {

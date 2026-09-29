@@ -15,7 +15,11 @@ import java.util.Locale
 
 // 4-B 연속 스캔 세션 상태·순수 로직 (프레임 지문, 안정 판정, 중복 키, 측정값). 서비스가 캡처·OCR·API 를 붙인다.
 // 절대 규칙: 화면을 읽기만 한다. 터치·스와이프 자동 조작 없음.
-class ScanSession(val id: String = newId()) {
+// mode(4-D): normal | shadow | purified — 세션 동안 고정. shadow 면 기록에 is_shadow=true(섀도 판정), purified 면 is_purified=true
+class ScanSession(val id: String = newId(), val mode: String = "normal") {
+    val isShadow: Boolean get() = mode == "shadow"
+    val isPurified: Boolean get() = mode == "purified"
+    val modeLabel: String get() = when (mode) { "shadow" -> "섀도"; "purified" -> "정화"; else -> "일반" }
     companion object {
         fun newId(): String = SimpleDateFormat("yyyyMMdd-HHmm", Locale.US).format(Date()) + "-" + (1000 + (Math.random() * 9000).toInt())
 
@@ -101,11 +105,13 @@ class ScanSession(val id: String = newId()) {
 
     fun isDuplicate(key: String): Boolean = !keys.add(key)
     // 이 세션에서 같은 종·HP·막대로 CP 없이 기록된 적이 있으면 → 이번 기록은 CP 보완(서버 cpFilled)
-    fun isCpFill(sp: SpeciesRef, hp: Int?, ap: Appraisal?): Boolean = keys.contains(scanKey(sp, null, hp, ap, false))
+    fun isCpFill(sp: SpeciesRef, hp: Int?, ap: Appraisal?): Boolean = keys.contains(scanKey(sp, null, hp, ap, isShadow))
 
     // 스캔 항목 본문 (/api/device/scan). 기술은 읽지 않는다. 포획 장소 없음(날짜만)
     fun body(sp: SpeciesRef, info: ScreenInfo, ap: Appraisal, cands: List<IvCalc.Candidate>, stars: Int?, recheck: Boolean, recheckReason: String? = null): JSONObject {
         val b = JSONObject().put("session_id", id).put("species_id", sp.id).put("form", sp.form).put("name_kr", sp.nameKr)
+            .put("app_version", BuildConfig.VERSION_NAME)                  // 4-D 신뢰 기록 판단(≥0.1.38)
+            .put("is_shadow", isShadow).put("is_purified", isPurified)      // 4-D 스캔 모드
         info.cp?.let { b.put("cp", it) }; info.hp?.let { b.put("hp", it) }
         b.put("atk_iv", ap.atk).put("def_iv", ap.def).put("sta_iv", ap.sta)
         if (cands.size == 1) b.put("level", cands[0].level)

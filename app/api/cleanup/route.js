@@ -4,6 +4,7 @@ import { rateLimit, clientIp } from "../../lib/deviceAuth";
 import { resolveUser, buildVerdictContext } from "../../lib/verdictContext";
 import { fillMissingVerdicts } from "../../lib/scanVerdict";
 import { backfillSuperseded } from "../../lib/scanBackfill";
+import { fetchActiveScanItems } from "../../lib/scanQuery";
 import { buildCleanup, DEFAULT_MAX_LEN, EXPECTED_LIMIT_NOTE, PROTECT_NOTE, PROTECT_SUFFIX } from "../../lib/searchBuilder";
 import { computeVerdict, inputFromRow } from "../../lib/verdict";
 import { isLegendaryClass } from "../../lib/speciesRankings";
@@ -22,8 +23,9 @@ export async function GET(req) {
   const sp = new URL(req.url).searchParams;
   const maxLen = Math.min(400, Math.max(60, Number(sp.get("maxLen")) || DEFAULT_MAX_LEN));
   const { ctx } = await buildVerdictContext(req);
-  const { data: scans } = await sb.from("scan_items").select("*").eq("user_id", user.userId).eq("dismissed", false).eq("superseded", false).order("created_at", { ascending: false }).limit(300);
-  let items = scans || [];
+  // 4-D: 활성 기록 전부(페이지네이션, ≤3000) — 상한 300 이 population 을 잘라 예상 수·보호 판단을 틀리게 했다
+  let items, truncated = false;
+  try { ({ items, truncated } = await fetchActiveScanItems(sb, user.userId)); } catch (e) { return NextResponse.json({ error: e.message }, { status: 500 }); }
   // 4-C.2 스캔 기록 백필(멱등, 규칙 버전당 1회): 과거 기록끼리도 규칙 ③ 으로 superseded 처리
   let backfill = null;
   try { backfill = await backfillSuperseded(sb, user.userId, items, ctx); if (backfill.changed) items = backfill.items; } catch (e) { console.warn(`[cleanup] 백필 실패: ${e.message}`); }
@@ -43,7 +45,7 @@ export async function GET(req) {
   const categories = buildCleanup(all, all, { maxLen });
   const names = Object.fromEntries(all.map((x) => [x.id, x.name_kr]));
   const gameTagged = all.filter((x) => (x.game_tags || []).length).length;
-  return NextResponse.json({ categories, names, population: all.length, gameTagged, maxLen, protect: PROTECT_SUFFIX, note: EXPECTED_LIMIT_NOTE, protectNote: PROTECT_NOTE, backfill: backfill ? { ran: backfill.ran, superseded: backfill.superseded, conflicts: backfill.conflicts, suspects: backfill.suspects, version: backfill.version } : null, at: new Date().toISOString() });
+  return NextResponse.json({ categories, names, population: all.length, scans: items.length, truncated, gameTagged, maxLen, protect: PROTECT_SUFFIX, note: EXPECTED_LIMIT_NOTE, protectNote: PROTECT_NOTE, backfill: backfill ? { ran: backfill.ran, superseded: backfill.superseded, conflicts: backfill.conflicts, suspects: backfill.suspects, version: backfill.version } : null, at: new Date().toISOString() });
 }
 
 export async function POST(req) {

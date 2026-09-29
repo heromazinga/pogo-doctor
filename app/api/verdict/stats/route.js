@@ -4,6 +4,7 @@ import { resolveUser, buildVerdictContext } from "../../../lib/verdictContext";
 import { computeVerdict, inputFromRow } from "../../../lib/verdict";
 import { verdictForItem } from "../../../lib/scanVerdict";
 import { RULES_VERSION } from "../../../lib/verdictRules";
+import { fetchActiveScanItems } from "../../../lib/scanQuery";
 
 export const dynamic = "force-dynamic";
 
@@ -22,7 +23,8 @@ export async function GET(req) {
   for (const k of OVERRIDABLE) if (sp.get(k) != null) override[k] = Number(sp.get(k));
   const { ctx } = await buildVerdictContext(req);
   ctx.rulesOverride = override;
-  const { data: scans } = await sb.from("scan_items").select("*").eq("user_id", user.userId).eq("dismissed", false).eq("superseded", false).limit(300);
+  let scans = [], truncated = false;
+  try { ({ items: scans, truncated } = await fetchActiveScanItems(sb, user.userId)); } catch (e) { return NextResponse.json({ error: e.message }, { status: 500 }); } // 4-D: 활성 전부(≤3000)
   const tiers = { main: 0, hold: 0, transfer: 0, need_appraisal: 0 };
   const holdReasons = {}, mainTags = {};
   const tally = (v) => {
@@ -31,5 +33,5 @@ export async function GET(req) {
   };
   for (const r of ctx.myRows || []) { try { tally(computeVerdict(inputFromRow(r, ctx.storageMode), ctx)); } catch {} }
   for (const it of scans || []) { const v = verdictForItem(it, ctx); if (!v.error) tally(v); }
-  return NextResponse.json({ total: (ctx.myRows || []).length + (scans || []).length, rows: (ctx.myRows || []).length, scans: (scans || []).length, override, rulesVersion: RULES_VERSION, storageMode: ctx.storageMode, tiers, holdReasons, mainTags });
+  return NextResponse.json({ total: (ctx.myRows || []).length + (scans || []).length, rows: (ctx.myRows || []).length, scans: (scans || []).length, truncated, override, rulesVersion: RULES_VERSION, storageMode: ctx.storageMode, tiers, holdReasons, mainTags });
 }

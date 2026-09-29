@@ -156,7 +156,9 @@ function evaluateCandidate(p, cand, input, ctx, rankings, { forEvolve = false } 
     // 4-C.2 리그 후보: 스탯곱 순위 ≤41(상위 1%)이면 종 PvPoke 순위(200위 안팎)와 무관하게 보류 (사례: 찌르꼬 0/15/14 → 찌르호크 하이퍼 4위·슈퍼 115위)
     //   단, PvPoke 순위 파일에 아예 없는 종(리그에서 쓸 수 없는 약한 종)은 제외 — 그런 종은 스탯곱 1위라도 의미가 없다
     const candidateRank = rule(ctx, "LEAGUE_CANDIDATE_PRODUCT_RANK");
-    const candidate = Boolean(sp) && me.rank <= candidateRank;
+    // 4-D: 상한 도달 = 상한 레벨 < 50 AND 상한 레벨 CP ≥ 상한×0.97. 미도달(약한 종은 L50 에도 상한 아래 → 고개체가 스탯곱 1위)은 리그 후보·보류에서 제외
+    const capReached = me.level < RULES.LEAGUE_MAX_LEVEL && me.cp >= cap * rule(ctx, "LEAGUE_CAP_REACH_PCT");
+    const candidate = Boolean(sp) && sp.rank <= rule(ctx, "LEAGUE_CANDIDATE_SPECIES_RANK") && me.rank <= candidateRank && capReached;
     if (!ranked && !candidate) continue;
     const top = ranked && sp.rank <= RULES.LEAGUE_TOP_RANK;
     const currentCp = input.cp && !forEvolve ? input.cp : calcCP({ atk: p.baseAttack, def: p.baseDefense, sta: p.baseStamina }, cand, cand.level);
@@ -170,13 +172,13 @@ function evaluateCandidate(p, cand, input, ctx, rankings, { forEvolve = false } 
     const holdRank = tight ? rule(ctx, "LEAGUE_HOLD_PRODUCT_RANK_TIGHT") : rule(ctx, "LEAGUE_HOLD_PRODUCT_RANK");
     const midHoldRank = tight ? rule(ctx, "LEAGUE_MID_HOLD_PRODUCT_RANK_TIGHT") : rule(ctx, "LEAGUE_MID_HOLD_PRODUCT_RANK");
     if (top && me.rank <= rule(ctx, "LEAGUE_MAIN_PRODUCT_RANK")) tier = "main";
-    else if (ranked && ((top && me.rank <= holdRank) || (!top && me.rank <= midHoldRank))) tier = "hold";
+    else if (ranked && capReached && ((top && me.rank <= holdRank) || (!top && me.rank <= midHoldRank))) tier = "hold"; // 4-D: 일반 보류도 상한 도달 개체만
     else if (candidate) tier = "hold";
     if (!tier) continue;
     const moves = movesFromPvpoke(ctx.dataset, p, sp?.moveset);
     const rankTxt = ranked ? `PvPoke ${sp.rank}위` : `PvPoke ${sp.rank}위(200위 밖)`;
     const candTxt = !ranked || (!top && me.rank <= candidateRank && me.rank > midHoldRank) ? ` · 리그 후보(스탯곱 상위 ${candidateRank}위 이내)` : "";
-    tags.push({ name: TAG[league], tier, reason: `${rankTxt}·스탯곱 ${me.rank}/4096위 (L${me.level} CP${me.cp})${candTxt}${moves ? " · " + moveLine(moves) : ""}`, moves, metrics: { speciesRank: sp?.rank ?? null, top, productRank: me.rank, levelAtCap: me.level, cpAtCap: me.cp, candidate: !ranked || (!top && me.rank <= candidateRank) } });
+    tags.push({ name: TAG[league], tier, reason: `${rankTxt}·스탯곱 ${me.rank}/4096위 (L${me.level} CP${me.cp})${candTxt}${moves ? " · " + moveLine(moves) : ""}`, moves, metrics: { speciesRank: sp?.rank ?? null, top, productRank: me.rank, levelAtCap: me.level, cpAtCap: me.cp, capReached, candidate: !ranked || (!top && me.rank <= candidateRank) } });
   }
 
   // 4) 마스터리그
@@ -194,6 +196,8 @@ function evaluateCandidate(p, cand, input, ctx, rankings, { forEvolve = false } 
   }
 
   // 5) 진화 대기(→최종형): 최종형 기준으로 위 태그 평가(후보 동일, 기술은 미정)
+  // 4-D: 태그는 "진화 후보" 하나로 단일화(진화형·사탕은 사유에). 최종형이 여럿(이브이 등)이면 등급 높은 것 → 사탕 적은 것 하나만
+  const evolveOptions = [];
   if (!forEvolve) {
     for (const f of finalForms(ctx.dataset, p)) {
       const sub = evaluateCandidate(f.species, cand, { ...input, cp: null, fast_move: null, charged_moves: [] }, ctx, rankings, { forEvolve: true });
@@ -210,7 +214,13 @@ function evaluateCandidate(p, cand, input, ctx, rankings, { forEvolve = false } 
       const candy = (Number.isInteger(input.candy) ? (input.candy >= f.candiesFromHere ? `진화 가능(사탕 ${input.candy}/${f.candiesFromHere})` : `사탕 ${input.candy}/${f.candiesFromHere}`) : `사탕 ${f.candiesFromHere}개 필요`) + (candyHold ? ` · 사탕 ${rule(ctx, "EVOLVE_CANDY_HOLD")}개 이상 → 보류` : "");
       // 4-C: 최종형의 추천 기술(첫 주력 태그 기준)을 함께 표시. 30일 내 이벤트 대상이면 computeVerdict 에서 "📅 이벤트 때 진화" 를 붙인다
       const moves = useful.find((t) => t.moves)?.moves || null;
-      tags.push({ name: TAG.evolve(f.species.nameKr), tier, reason: `${f.species.nameKr} 기준: ${useful.map((t) => `${t.name} ${TIER_LABEL[t.tier]}`).join(", ")} · ${candy}${moves ? " · " + moveLine(moves) : ""}`, moves, metrics: { finalId: f.species.id, finalForm: f.species.form, candiesNeeded: f.candiesFromHere, candy: input.candy ?? null, finalTags: useful.map((t) => ({ name: t.name, tier: t.tier, moves: t.moves || null })) } });
+      evolveOptions.push({ name: TAG.evolve(), tier, reason: `→${f.species.nameKr} 기준: ${useful.map((t) => `${t.name} ${TIER_LABEL[t.tier]}`).join(", ")} · ${candy}${moves ? " · " + moveLine(moves) : ""}`, moves, metrics: { finalId: f.species.id, finalForm: f.species.form, finalKr: f.species.nameKr, candiesNeeded: f.candiesFromHere, candy: input.candy ?? null, finalTags: useful.map((t) => ({ name: t.name, tier: t.tier, moves: t.moves || null })) } });
+    }
+    if (evolveOptions.length) {
+      evolveOptions.sort((a, b) => TIER_ORDER[b.tier] - TIER_ORDER[a.tier] || a.metrics.candiesNeeded - b.metrics.candiesNeeded);
+      const best = evolveOptions[0];
+      if (evolveOptions.length > 1) { best.reason += ` (다른 진화형 ${evolveOptions.length - 1}: ${evolveOptions.slice(1).map((o) => o.metrics.finalKr).join(", ")})`; best.metrics.alternatives = evolveOptions.slice(1).map((o) => ({ finalId: o.metrics.finalId, finalKr: o.metrics.finalKr, tier: o.tier })); }
+      tags.push(best);
     }
   }
   return { tags, warnings, pct };

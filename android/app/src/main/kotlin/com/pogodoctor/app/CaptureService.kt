@@ -152,7 +152,7 @@ class CaptureService : Service() {
         val copyTransfer = PendingIntent.getActivity(this, 5, Intent(this, TrampolineActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK).putExtra(TrampolineActivity.EXTRA_ACTION, "copy_transfer"), flags)
         val copyTag = PendingIntent.getActivity(this, 6, Intent(this, TrampolineActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK).putExtra(TrampolineActivity.EXTRA_ACTION, "choose_tag"), flags)
         val icon = Icon.createWithResource(this, R.drawable.ic_notif)
-        val title = if (scanning) "연속 스캔 중 — 평가 화면을 넘기세요" else getString(R.string.notif_title)
+        val title = if (scanning) "연속 스캔 중(${scan?.modeLabel ?: "일반"}) — 평가 화면을 넘기세요" else getString(R.string.notif_title)
         val b = Notification.Builder(this, CHANNEL)
             .setSmallIcon(R.drawable.ic_notif).setContentTitle(title).setContentText(text ?: (if (scanning) scanLine else getString(R.string.notif_text)))
             .setStyle(Notification.BigTextStyle().bigText(text ?: (if (scanning) scanLine else getString(R.string.notif_text))))
@@ -180,13 +180,13 @@ class CaptureService : Service() {
     private var scanStartedAt = 0L
     private var hadScanRecords = false   // 4-B5: 스캔 종료 후에도 정리 복사 액션 유지
     private fun startScan() {
-        val session = ScanSession(); session.metrics.batteryStart = batteryPct()
+        val session = ScanSession(mode = prefs.scanMode); session.metrics.batteryStart = batteryPct()   // 4-D 스캔 모드(일반/섀도/정화)는 시작 시점 설정으로 고정
         scan = session; scanning = true; scanStartedAt = System.currentTimeMillis(); gate = ScanGate(prefs.scanStableMs.toLong(), 3, 300)
         hideCard(); bubble?.text = "📷"
         if (prefs.scanStrip) showStrip()   // 상단 띠는 기본 끔(설정에서 켜기). 결과는 알림 한 줄
         queue.start(scope)
-        refreshScanLine("평가 화면(막대 3개)을 켜고 좌우로 넘기세요")
-        DebugLog.add(this, "scan", emptyList(), "연속 스캔 시작 세션 ${session.id} 간격 ${prefs.scanIntervalMs}ms 안정 ${prefs.scanStableMs}ms 대기열 ${queue.pending}")
+        refreshScanLine("[${session.modeLabel}] 평가 화면(막대 3개)을 켜고 좌우로 넘기세요")
+        DebugLog.add(this, "scan", emptyList(), "연속 스캔 시작 세션 ${session.id} 모드 ${session.mode} 간격 ${prefs.scanIntervalMs}ms 안정 ${prefs.scanStableMs}ms 대기열 ${queue.pending}")
         handler.removeCallbacks(scanTick); handler.post(scanTick)
     }
     private fun stopScan() {
@@ -324,7 +324,7 @@ class CaptureService : Service() {
         if (cpOcr != null && cp == null) session.metrics.cpRejected++
         // CP 가 배너에 가려진(또는 검증 실패) 프레임도 막대+HP 로 레벨 범위 기록("CP 미확인"). 같은 개체를 이후 CP 까지 읽으면 서버가 그 기록을 갱신한다
         if (cp == null) { session.metrics.skippedNoCp++; session.metrics.failNoCp++ }
-        val key = ScanSession.scanKey(spFinal, cp, info.hp, ap, false)
+        val key = ScanSession.scanKey(spFinal, cp, info.hp, ap, session.isShadow)
         if (session.isDuplicate(key)) { g.close(); session.metrics.duplicates++; session.metrics.failDuplicate++; session.lastLine = "같은 개체(이미 기록)"; refreshScanLine(); return }
         // 레벨 후보: 검증된 CP 가 있으면 CP+HP+막대, 없으면 막대+HP. "재확인 필요"는 막대와 HP 가 모순일 때(후보 0)만
         var cands: List<IvCalc.Candidate> = if (cp != null) IvCalc.filterByAppraisal(IvCalc.candidates(base, cp, info.hp), apA, apD, apS) else emptyList()

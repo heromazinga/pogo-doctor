@@ -7,6 +7,8 @@ import { getFamilyOf } from "../../../lib/savePokemonServer";
 import { getPokemonDataset, findPokemon } from "../../../lib/pokemonData";
 import { cpConsistentLevel } from "../../../lib/ivCalc";
 import { CONFLICT_REASON } from "../../../lib/scanBackfill";
+import { fetchActiveScanItems } from "../../../lib/scanQuery";
+import { isTrustedVersion } from "../../../lib/appVersion";
 import { buildVerdictContext } from "../../../lib/verdictContext";
 import { verdictForItem } from "../../../lib/scanVerdict";
 
@@ -37,6 +39,7 @@ export async function POST(req) {
   if (b.caught_on != null && !validDate(b.caught_on)) errors.push("caught_on");
   if (b.game_tags != null && !validTags(b.game_tags)) errors.push("game_tags 는 1~24자 문자열 최대 8개");
   if (b.recheck_reason != null && !(typeof b.recheck_reason === "string" && b.recheck_reason.length <= 80)) errors.push("recheck_reason 은 80자 이하");
+  if (b.app_version != null && !(typeof b.app_version === "string" && /^v?\d+\.\d+(\.\d+)?/.test(b.app_version) && b.app_version.length <= 20)) errors.push("app_version 형식");
   if (errors.length) return NextResponse.json({ error: "필드 검증 실패", details: errors }, { status: 400 });
 
   const item = {
@@ -46,7 +49,10 @@ export async function POST(req) {
     level: b.level ?? null, stars: b.stars ?? null, is_shadow: Boolean(b.is_shadow), caught_on: b.caught_on || null, recheck: Boolean(b.recheck), dismissed: false,
     game_tags: Array.isArray(b.game_tags) ? b.game_tags.map((t) => String(t).trim()).filter(Boolean).slice(0, 8) : [],
     recheck_reason: b.recheck && typeof b.recheck_reason === "string" && b.recheck_reason.trim() ? b.recheck_reason.trim() : null, // 4-C.4 앱이 보낸 재확인 사유(막대 판독 불일치 등)
+    app_version: typeof b.app_version === "string" ? b.app_version.trim().slice(0, 20) : null, // 4-D 기록한 앱 버전(≥0.1.38 신뢰 기록)
+    is_purified: Boolean(b.is_purified), // 4-D 스캔 모드 "정화"
   };
+  const trustedNew = isTrustedVersion(item.app_version);
   // 4-C.2 A. CP 자리수 누락 방지: 종·개체값·HP 로 가능한 레벨의 CP 와 맞지 않으면 CP 를 null 로 저장 (예: 괴력몬 2634 → 263 오판독)
   let cpRejected = null;
   if (item.cp != null && anyIv) {
@@ -75,18 +81,25 @@ export async function POST(req) {
   if (!existing && anyIv) {
     const fam = await getFamilyOf();
     const famIds = fam ? [...fam(item.species_id)] : [item.species_id];
-    const { data: prior } = await sb.from("scan_items").select("id,species_id,form,cp,hp,level,atk_iv,def_iv,sta_iv,is_shadow,session_id").eq("user_id", auth.userId).eq("dismissed", false).eq("superseded", false)
+    const { data: prior } = await sb.from("scan_items").select("id,species_id,form,cp,hp,level,atk_iv,def_iv,sta_iv,is_shadow,session_id,caught_on,app_version").eq("user_id", auth.userId).eq("dismissed", false).eq("superseded", false)
       .in("species_id", famIds).eq("form", item.form).eq("is_shadow", item.is_shadow).eq("atk_iv", item.atk_iv).eq("def_iv", item.def_iv).eq("sta_iv", item.sta_iv).limit(50);
-    const r = findSuperseded(prior || [], item, fam);
+    // 4-D: 신뢰 기록(앱 ≥0.1.38)이 들어오면 같은 종·개체값의 미신뢰 이전 기록은 레벨과 무관하게 대체. 신뢰 기록끼리는 규칙 ③
+    const untrusted = trustedNew ? (prior || []).filter((x) => !isTrustedVersion(x.app_version)) : [];
+    const r = findSuperseded((prior || []).filter((x) => !untrusted.includes(x)), item, fam);
     if (r.ambiguous) item.recheck = true;
-    else if (r.superseded.length) item._supersedes = r.superseded.map((x) => x.id);
+    const ids = [...(r.ambiguous ? [] : r.superseded.map((x) => x.id)), ...untrusted.map((x) => x.id)];
+    if (ids.length) item._supersedes = ids;
   }
   // 4-C.3 개체값 충돌: 같은 종·폼·섀도·CP·HP 인데 개체값이 다른 활성 기록이 있으면(막대 오판독 의심) 새 기록과 그 기록 모두 recheck "재스캔 필요"
   let conflictIds = [];
   if (!existing && anyIv && item.cp != null && item.hp != null) {
-    const { data: same } = await sb.from("scan_items").select("id,atk_iv,def_iv,sta_iv").eq("user_id", auth.userId).eq("dismissed", false).eq("superseded", false)
+    const { data: same } = await sb.from("scan_items").select("id,atk_iv,def_iv,sta_iv,app_version").eq("user_id", auth.userId).eq("dismissed", false).eq("superseded", false)
       .eq("species_id", item.species_id).eq("form", item.form).eq("is_shadow", item.is_shadow).eq("cp", item.cp).eq("hp", item.hp).limit(20);
-    conflictIds = (same || []).filter((x) => x.atk_iv !== item.atk_iv || x.def_iv !== item.def_iv || x.sta_iv !== item.sta_iv).map((x) => x.id);
+    const diff = (same || []).filter((x) => x.atk_iv !== item.atk_iv || x.def_iv !== item.def_iv || x.sta_iv !== item.sta_iv);
+    // 4-D: 새 기록이 신뢰 기록이면 미신뢰(구 앱) 충돌 기록은 대체, 신뢰 기록끼리 충돌할 때만 둘 다 재확인
+    const oldOnes = trustedNew ? diff.filter((x) => !isTrustedVersion(x.app_version)) : [];
+    conflictIds = diff.filter((x) => !oldOnes.includes(x)).map((x) => x.id);
+    if (oldOnes.length) item._supersedes = [...new Set([...(item._supersedes || []), ...oldOnes.map((x) => x.id)])];
     if (conflictIds.length) { item.recheck = true; item.recheck_reason = CONFLICT_REASON; item._supersedes = undefined; }
   }
   const supersedes = item._supersedes || []; delete item._supersedes;
@@ -122,9 +135,8 @@ export async function GET(req) {
   const auth = await userFromDeviceToken(sb, req);
   if (!auth) return NextResponse.json({ error: "기기 토큰이 없거나 해제되었습니다" }, { status: 401 });
   const session = new URL(req.url).searchParams.get("session");
-  let q = sb.from("scan_items").select("*").eq("user_id", auth.userId).eq("dismissed", false).eq("superseded", false).order("created_at", { ascending: false }).limit(200);
-  if (session) q = q.eq("session_id", session);
-  const { data, error } = await q;
-  if (error) return NextResponse.json({ error: error.message }, { status: 500 });
-  return NextResponse.json({ items: data || [] });
+  try {
+    const { items, truncated } = await fetchActiveScanItems(sb, auth.userId); // 4-D: 활성 전부(≤3000)
+    return NextResponse.json({ items: session ? items.filter((it) => it.session_id === session) : items, truncated });
+  } catch (e) { return NextResponse.json({ error: e.message }, { status: 500 }); }
 }
