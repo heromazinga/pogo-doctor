@@ -12,8 +12,9 @@ export async function GET(req) {
   if (!sb) return NextResponse.json({ error: "서버 Supabase 미설정" }, { status: 503 });
   const t0 = Date.now();
   const { error } = await sb.from("ai_usage").select("usage_date").limit(1);
-  let cleaned = null, debugCleaned = null;
+  let cleaned = null, debugCleaned = null, scanCleaned = null;
   try { const r = await sb.rpc("cleanup_device_pair_codes"); cleaned = r.error ? null : r.data; } catch {}
+  try { const r = await sb.rpc("cleanup_scan_items"); scanCleaned = r.error ? null : r.data; } catch {} // 4-B: 14일 지난 스캔 기록
   // 7일 지난 디버그 캡처: Storage 이미지 삭제 → 행 삭제 (마이그레이션 0003)
   try {
     const { data: rows } = await sb.rpc("expired_device_debug_logs");
@@ -29,5 +30,5 @@ export async function GET(req) {
     return NextResponse.json({ ok: false, error: error.message }, { status: 500 });
   }
   console.log(`[keep-alive] ok ${Date.now() - t0}ms cleanedCodes=${cleaned} cleanedDebug=${debugCleaned}`);
-  return NextResponse.json({ ok: true, at: new Date().toISOString(), ms: Date.now() - t0, cleanedCodes: cleaned, cleanedDebug: debugCleaned });
+  return NextResponse.json({ ok: true, at: new Date().toISOString(), ms: Date.now() - t0, cleanedCodes: cleaned, cleanedDebug: debugCleaned, cleanedScan: scanCleaned });
 }

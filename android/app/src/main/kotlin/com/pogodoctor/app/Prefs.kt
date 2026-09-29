@@ -41,6 +41,14 @@ class Prefs(ctx: Context) {
         get() = plain.getString("storage_mode", "normal")!!.takeIf { it in listOf("relaxed", "normal", "tight") } ?: "normal"
         set(v) = plain.edit().putString("storage_mode", v).apply()
 
+    // 4-B 연속 스캔 프레임 간격(ms): 초당 2~3프레임 샘플
+    var scanIntervalMs: Int
+        get() = plain.getInt("scan_interval_ms", 400).coerceIn(250, 2000)
+        set(v) = plain.edit().putInt("scan_interval_ms", v.coerceIn(250, 2000)).apply()
+    var lastScanReport: String
+        get() = plain.getString("last_scan_report", "")!!
+        set(v) = plain.edit().putString("last_scan_report", v).apply()
+
     var debugMode: Boolean
         get() = plain.getBoolean("debug", false)
         set(v) = plain.edit().putBoolean("debug", v).apply()
