@@ -1,7 +1,7 @@
 // 4-C.2 스캔 기록 superseded 백필(planSupersede) + CP 검증(cpConsistentLevel)
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { planSupersede, planConflicts, planSuspects, isSuspectBars } from "../app/lib/scanBackfill.js";
+import { planSupersede, planConflicts, planSuspects, isSuspectBars, planModeSupersede } from "../app/lib/scanBackfill.js";
 import { cpConsistentLevel } from "../app/lib/ivCalc.js";
 import { calcCP } from "../app/lib/cpm.js";
 import { calcHP } from "../app/lib/ivCalc.js";
@@ -97,6 +97,20 @@ test("4-C.4 과거 기록 의심 휴리스틱(planSuspects): 방어·HP ≤8 이
   assert.ok(!isSuspectBars({ atk_iv: 15, def_iv: 8, sta_iv: 12 }), "HP 가 8 초과");
   assert.ok(!isSuspectBars({ atk_iv: null, def_iv: 4, sta_iv: 4 }));
   assert.deepEqual(planSuspects([{ id: "a", atk_iv: 15, def_iv: 6, sta_iv: 8 }, { id: "b", atk_iv: 15, def_iv: 6, sta_iv: 8, recheck: true }, { id: "c", atk_iv: 15, def_iv: 15, sta_iv: 15 }]), ["a"]);
+});
+
+test("4-D2 스캔 모드 기록 우선(planModeSupersede): 섀도/정화 신뢰 기록이 같은 종·CP·HP·개체값의 일반 기록을 대체, 반대 방향·미신뢰 모드 기록·다른 개체값은 대체 없음", () => {
+  const normal = { ...item("n", 68, [15, 12, 14], 31), cp: 2634, hp: 163, app_version: "0.1.38", is_shadow: false, is_purified: false };
+  const shadow = { ...item("s", 68, [15, 12, 14], 31), cp: 2634, hp: 163, app_version: "0.1.40", is_shadow: true, is_purified: false };
+  assert.deepEqual(planModeSupersede([normal, shadow]), [{ id: "n", superseded_by: "s" }], "섀도 모드 기록이 전날 일반 기록을 대체");
+  assert.deepEqual(planModeSupersede([shadow, normal]), [{ id: "n", superseded_by: "s" }], "순서 무관(일반이 나중이어도)");
+  const purified = { ...shadow, id: "p", is_shadow: false, is_purified: true };
+  assert.deepEqual(planModeSupersede([normal, purified]), [{ id: "n", superseded_by: "p" }], "정화 모드도 동일");
+  assert.deepEqual(planModeSupersede([shadow]), [], "일반 기록 없으면 없음");
+  assert.deepEqual(planModeSupersede([normal, { ...shadow, app_version: "0.1.30" }]), [], "미신뢰 모드 기록은 대체 안 함");
+  assert.deepEqual(planModeSupersede([normal, { ...shadow, def_iv: 6 }]), [], "개체값 다르면 다른 개체(충돌 규칙이 처리)");
+  assert.deepEqual(planModeSupersede([normal, { ...shadow, cp: null }]), [], "CP 없으면 판단 불가");
+  assert.deepEqual(planModeSupersede([normal, shadow, { ...shadow, id: "s2", created_at: "2026-09-30T00:00:00Z" }]).map((p) => p.superseded_by), ["s2"], "최신 모드 기록으로");
 });
 
 test("백필 ④: 진화·강화(레벨 비감소) → 최신 기록 유지, 서로 다른 과거 후보 2개는 건드리지 않음, 포획일 다르면 별개", () => {

@@ -8,14 +8,14 @@ export const DEFAULT_MAX_LEN = 200;
 // 예상 수 한계 안내 (박사행 토스트·🧹 패널·앱 목록에 상시 표기)
 export const EXPECTED_LIMIT_NOTE = "예상 수는 앱이 아는 개체(스캔 기록 + 내 목록) 기준입니다. 앱이 모르는 같은 종·HP 개체가 게임에 있으면 결과가 더 나옵니다 — 게임 결과 수가 예상과 다르면 보내지 마세요.";
 // 4-C.2 박사행 보호 조건 안내: 보호 대상(태그·이로치·반짝반짝·XXL·배경)은 검색에서 빠지므로 결과는 예상 이하
-export const PROTECT_NOTE = "박사행 검색어에는 보호 조건(&!#&!색이 다른&!반짝반짝&!xxl&!배경)이 항상 붙습니다. 게임 결과 ≤ 예상 N마리 — 적으면 보호 대상이 빠진 것, 많으면 보내지 마세요(앱이 모르는 같은 종·HP 개체). 코스튬은 검색어가 없으니 태그로 보호하세요.";
+export const PROTECT_NOTE = "박사행 검색어에는 보호 조건(&!#&!색이 다른&!반짝반짝&!xxl&!배경&!특별)이 항상 붙습니다(태그·이로치·반짝반짝·XXL·배경·코스튬 제외). 게임 결과 ≤ 예상 N마리 — 적으면 보호 대상이 빠진 것, 많으면 보내지 마세요(앱이 모르는 같은 종·HP 개체).";
 
 const key = (x) => `${x.species_id}|${x.hp ?? ""}|${x.cp ?? ""}|${x.is_shadow ? 1 : 0}`;
 
 // 검색식이 개체 x 를 잡는가 (도감번호 OR, hp OR, cp 범위 OR 로 판단. 폼·섀도는 검색식에 넣지 않으므로 잡힌다고 본다)
 // 4-C.2 박사행 보호 조건(항상 적용): 태그 없음·이로치 아님·반짝반짝 아님·XXL 아님·배경 없음. 검색어 길이 계산에 포함.
 //   한국어판 동작은 사용자 확인("색이 다른" 띄어쓰기 포함). 코스튬은 검색어가 없어 사용자가 태그로 보호한다.
-export const PROTECT_CLAUSES = ["!#", "!색이 다른", "!반짝반짝", "!xxl", "!배경"];
+export const PROTECT_CLAUSES = ["!#", "!색이 다른", "!반짝반짝", "!xxl", "!배경", "!특별"]; // 4-D2: !특별 = 코스튬(한국어판 검색어, 사용자 확인)
 export const PROTECT_SUFFIX = "&" + PROTECT_CLAUSES.join("&");
 export const NO_TAG_CLAUSE = "!#";
 // 검색어가 개체 x 를 잡는가. 부정 절: !# → game_tags 없음, !색이 다른 → 이로치 아님, !반짝반짝 → 럭키 아님, !xxl·!배경 → 앱이 모르는 정보(잡힌다고 봄)
@@ -26,7 +26,7 @@ export function matches(query, x) {
     if (t === NO_TAG_CLAUSE) return !(x.game_tags || []).length;
     if (t === "!색이 다른") return !x.is_shiny;
     if (t === "!반짝반짝") return !x.is_lucky;
-    if (t === "!xxl" || t === "!배경") return true;
+    if (t === "!xxl" || t === "!배경" || t === "!특별") return true;
     if (/^\d+$/.test(t)) return String(x.species_id) === t;
     if (/^hp\d+$/.test(t)) return x.hp != null && `hp${x.hp}` === t;
     const m = t.match(/^cp(\d+)(?:-(\d+))?$/);

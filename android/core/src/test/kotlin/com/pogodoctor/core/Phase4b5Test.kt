@@ -83,15 +83,15 @@ class Phase4b6Test {
     // 4-C.2: 박사행 보호 조건 절은 태그·이로치·반짝반짝 개체를 잡지 않는다 (웹 searchBuilder.js 와 동일). 길이 상한에 포함
     @Test fun protect_suffix_excludes_tagged_shiny_lucky_and_counts_toward_maxlen() {
         val q = SearchBuilder.withProtect("700&hp154")
-        assertEquals("700&hp154&!#&!색이 다른&!반짝반짝&!xxl&!배경", q)
+        assertEquals("700&hp154&!#&!색이 다른&!반짝반짝&!xxl&!배경&!특별", q)
         assertTrue(SearchBuilder.matches(q, SearchBuilder.Item("a", 700, 154, null, false)))
         assertTrue(!SearchBuilder.matches(q, SearchBuilder.Item("b", 700, 154, null, false, gameTags = listOf("즐겨찾기"))))
         assertTrue(!SearchBuilder.matches(q, SearchBuilder.Item("c", 700, 154, null, false, isShiny = true)))
         assertTrue(!SearchBuilder.matches(q, SearchBuilder.Item("d", 700, 154, null, false, isLucky = true)))
         assertTrue(!SearchBuilder.matches(q, SearchBuilder.Item("e", 700, 120, null, false)))
         val targets = (0 until 6).map { SearchBuilder.Item("t$it", 100 + it, 100 + it, null, false) }
-        val r = SearchBuilder.buildGroups(targets, targets, maxLen = 60, strict = true, suffix = SearchBuilder.PROTECT_SUFFIX)
-        assertTrue(r.groups.size > 1 && r.groups.all { it.query.length <= 60 && it.query.endsWith(SearchBuilder.PROTECT_SUFFIX) })
+        val r = SearchBuilder.buildGroups(targets, targets, maxLen = 64, strict = true, suffix = SearchBuilder.PROTECT_SUFFIX)
+        assertTrue(r.groups.size > 1 && r.groups.all { it.query.length <= 64 && it.query.endsWith(SearchBuilder.PROTECT_SUFFIX) })
         assertEquals(6, r.groups.sumOf { it.expected })
     }
 

@@ -29,7 +29,9 @@ export async function GET(req) {
   // 4-C.2 스캔 기록 백필(멱등, 규칙 버전당 1회): 과거 기록끼리도 규칙 ③ 으로 superseded 처리
   let backfill = null;
   try { backfill = await backfillSuperseded(sb, user.userId, items, ctx); if (backfill.changed) items = backfill.items; } catch (e) { console.warn(`[cleanup] 백필 실패: ${e.message}`); }
-  try { await fillMissingVerdicts(sb, items, ctx); } catch {}
+  // 4-D2: 판정 재계산은 청크(100건·15s)만. 남은 항목은 저장된(옛 규칙) 판정으로 분류하고 pending 으로 알린다 → 다음 조회가 이어서 처리
+  let fill = { filled: 0, pending: 0 };
+  try { fill = await fillMissingVerdicts(sb, items, ctx); } catch {}
   const rows = ctx.myRows || [];
   const legendaryOf = (r) => { const p = findPokemon(ctx.dataset, { id: r.species_id, form: r.form || "Normal" }); return p ? isLegendaryClass(p) : false; };
   // 대상: 스캔 항목(판정 있음) + 내 목록(판정은 여기서 계산; 박사행은 status=transfer 또는 판정 transfer)
@@ -43,9 +45,11 @@ export async function GET(req) {
   });
   const all = [...scanTargets, ...rowTargets];
   const categories = buildCleanup(all, all, { maxLen });
+  // 4-D2: 판정 재계산이 남아 있으면(pending) 박사행 묶음은 잠금 — 되돌릴 수 없으므로 옛 규칙 판정으로 보내지 않게. 태그·수집은 유지(되돌릴 수 있음)
+  for (const cat of categories) if (cat.category === "transfer" && fill.pending > 0) { cat.locked = true; cat.lockReason = `판정 재계산 중 ${fill.pending}건 — 잠시 후 다시 열기`; }
   const names = Object.fromEntries(all.map((x) => [x.id, x.name_kr]));
   const gameTagged = all.filter((x) => (x.game_tags || []).length).length;
-  return NextResponse.json({ categories, names, population: all.length, scans: items.length, truncated, gameTagged, maxLen, protect: PROTECT_SUFFIX, note: EXPECTED_LIMIT_NOTE, protectNote: PROTECT_NOTE, backfill: backfill ? { ran: backfill.ran, superseded: backfill.superseded, conflicts: backfill.conflicts, suspects: backfill.suspects, version: backfill.version } : null, at: new Date().toISOString() });
+  return NextResponse.json({ categories, names, population: all.length, scans: items.length, truncated, filled: fill.filled, pending: fill.pending, gameTagged, maxLen, protect: PROTECT_SUFFIX, note: EXPECTED_LIMIT_NOTE, protectNote: PROTECT_NOTE, backfill: backfill ? { ran: backfill.ran, superseded: backfill.superseded, conflicts: backfill.conflicts, suspects: backfill.suspects, version: backfill.version } : null, at: new Date().toISOString() });
 }
 
 export async function POST(req) {

@@ -82,6 +82,26 @@ export function planSupersede(items, dataset) {
   return out;
 }
 
+// 4-D2 순수 계산: 스캔 모드(섀도/정화) 신뢰 기록이 같은 종·폼·CP·HP·개체값의 "일반 모드" 기록과 만나면 일반 기록을 대체(모드 기록이 정확한 속성).
+//   반대 방향(일반이 섀도를 대체)은 하지 않는다. 실측: 섀도 모드 37건이 전날 일반 기록과 둘 다 활성 → population 508(실제 470)
+export function planModeSupersede(items) {
+  const groups = new Map();
+  for (const r of items) {
+    if (!hasIv(r) || r.cp == null || r.hp == null) continue;
+    const k = `${r.species_id}|${r.form || "Normal"}|${r.cp}|${r.hp}|${ivKey(r)}`;
+    if (!groups.has(k)) groups.set(k, []);
+    groups.get(k).push(r);
+  }
+  const out = [];
+  for (const list of groups.values()) {
+    const modes = list.filter((r) => (r.is_shadow || r.is_purified) && isTrustedVersion(r.app_version)).sort((a, b) => String(a.created_at).localeCompare(String(b.created_at)));
+    if (!modes.length) continue;
+    const winner = modes[modes.length - 1];
+    for (const r of list) if (!r.is_shadow && !r.is_purified) out.push({ id: r.id, superseded_by: winner.id });
+  }
+  return out;
+}
+
 // 순수 계산: 같은 종·폼·섀도·CP·HP 인데 개체값이 다른 활성 기록 → { recheck: [id], supersede: [{id, superseded_by}] }
 //   4-D: 그중 신뢰 기록(앱 ≥0.1.38)이 있으면 미신뢰 기록은 최신 신뢰 기록으로 대체하고, 남은 신뢰 기록끼리 개체값이 갈릴 때만 recheck
 export function planConflicts(items) {
@@ -118,6 +138,12 @@ export async function backfillSuperseded(sb, userId, items, ctx) {
   }
   let gone = new Set(plan.map((p) => p.id));
   let remaining = items.filter((it) => !gone.has(it.id));
+  // 4-D2 모드 기록(섀도/정화)이 같은 종·CP·HP·개체값의 일반 기록을 대체
+  for (const p of planModeSupersede(remaining)) {
+    const { error } = await sb.from("scan_items").update({ superseded: true, superseded_by: p.superseded_by }).eq("user_id", userId).eq("id", p.id);
+    if (!error) { n++; gone.add(p.id); } else console.warn(`[backfill] mode-supersede ${p.id}: ${error.message}`);
+  }
+  remaining = remaining.filter((it) => !gone.has(it.id));
   const cplan = planConflicts(remaining);
   for (const p of cplan.supersede) {
     const { error } = await sb.from("scan_items").update({ superseded: true, superseded_by: p.superseded_by }).eq("user_id", userId).eq("id", p.id);

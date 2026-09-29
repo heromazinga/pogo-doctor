@@ -17,12 +17,20 @@ export function verdictForItem(it, ctx, ivCandidates) {
 // 4-B6.2: 저장된 판정이 없거나, 실패했거나, 규칙 버전(RULES_VERSION)이 다르면 다시 계산해야 한다
 export function isStaleVerdict(v) { return !v || Boolean(v.error) || v.rulesVersion !== RULES_VERSION; }
 
-// verdict 가 비어 있거나 낡은 항목을 한 번의 컨텍스트로 다시 계산하고 저장 (웹·정리 도우미 조회 시). 반환: 다시 계산한 수
-export async function fillMissingVerdicts(sb, items, ctx) {
+// verdict 가 비어 있거나 낡은 항목을 한 번의 컨텍스트로 다시 계산하고 저장 (웹·정리 도우미 조회 시).
+// 4-D2: 청크(limit)·시간 예산(budgetMs) 안에서만 처리하고 나머지는 pending 으로 돌려준다(첫 /api/scan 27.6s → 함수 시간 제한 위험). 남은 건 다음 조회가 이어서 처리
+// 반환 { filled, pending, stale }
+export const FILL_CHUNK = 100;
+export const FILL_BUDGET_MS = 15000;
+export async function fillMissingVerdicts(sb, items, ctx, { limit = FILL_CHUNK, budgetMs = FILL_BUDGET_MS } = {}) {
   const stale = items.filter((it) => isStaleVerdict(it.verdict));
+  const started = Date.now();
+  let filled = 0;
   for (const it of stale) {
+    if (filled >= limit || Date.now() - started > budgetMs) break;
     it.verdict = verdictForItem(it, ctx);
+    filled++;
     if (!it.verdict.error) await sb.from("scan_items").update({ verdict: it.verdict }).eq("id", it.id);
   }
-  return stale.length;
+  return { filled, pending: stale.length - filled, stale: stale.length };
 }

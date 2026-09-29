@@ -23,8 +23,9 @@ object CleanupCopier {
     @Volatile var lastError: String? = null
     @Volatile var note: String = LIMIT_NOTE
     @Volatile var gameTagged: Int = 0
+    @Volatile var pending: Int = 0        // 4-D2 서버 판정 재계산 남은 수 — >0 이면 박사행 복사 차단(되돌릴 수 없음)
 
-    fun status(): String = "박사행 ${if (transfer.isEmpty()) 0 else transferIdx + 1}/${transfer.size} · 태그 카테고리 ${tagCats.size}개" + (if (gameTagged > 0) " · 게임 태그 있음 $gameTagged 제외" else "")
+    fun status(): String = "박사행 ${if (transfer.isEmpty()) 0 else transferIdx + 1}/${transfer.size} · 태그 카테고리 ${tagCats.size}개" + (if (gameTagged > 0) " · 게임 태그 있음 $gameTagged 제외" else "") + (if (pending > 0) " · 🔒 재계산 중 $pending" else "")
     fun categories(): List<Category> = tagCats
     fun transferCount(): Int = transfer.size
 
@@ -53,7 +54,7 @@ object CleanupCopier {
                 else if (category == "collect") for (g in list) tg.add(Category("collect:${g.query}", g.label, listOf(g)))
             }
             transfer = tr; tagCats = tg; fetchedAt = System.currentTimeMillis(); lastError = null
-            note = res.optString("note", LIMIT_NOTE).ifBlank { LIMIT_NOTE }; gameTagged = res.optInt("gameTagged", 0)
+            note = res.optString("note", LIMIT_NOTE).ifBlank { LIMIT_NOTE }; gameTagged = res.optInt("gameTagged", 0); pending = res.optInt("pending", 0)
             if (transferIdx >= tr.size) transferIdx = 0
             true
         } catch (e: Exception) { lastError = e.message ?: e.toString(); false }
@@ -81,6 +82,7 @@ object CleanupCopier {
 
     // 박사행 k 번째 묶음 복사 → 토스트 "[박사행 k/n] …" + 한계 문구. 반환: 상태 문자열
     fun copyNextTransfer(ctx: Context): String {
+        if (pending > 0) { val msg = "판정 재계산 중 ${pending}건 — 박사행 복사는 잠시 후 다시(웹 🧹 패널 🔄 로 갱신)"; Toast.makeText(ctx, msg, Toast.LENGTH_LONG).show(); return msg }
         if (transfer.isEmpty()) { val msg = if (lastError != null) "정리 묶음을 받지 못했습니다: $lastError" else "정리할 박사행 대상이 없습니다"; Toast.makeText(ctx, msg, Toast.LENGTH_LONG).show(); return msg }
         val idx = transferIdx; val g = transfer[idx]
         copy(ctx, g.query)
