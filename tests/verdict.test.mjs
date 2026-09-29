@@ -224,9 +224,19 @@ test("4-B6.2 판정 최신화: 저장된 판정의 rulesVersion 이 다르면 �
     { id: "c", ...base, verdict: { tier: "hold", recommendedTags: [TAG.ultra], tags: [], rulesVersion: RULES_VERSION } },
     { id: "d", ...base, verdict: { tier: "need_appraisal", error: true } },
   ];
-  const n = await fillMissingVerdicts(sb, items, ctx());
-  assert.equal(n, 3);
+  const r = await fillMissingVerdicts(sb, items, ctx());
+  assert.equal(r.filled, 3); assert.equal(r.pending, 0); assert.equal(r.stale, 3);
   assert.deepEqual(updates.map((u) => u.id), ["a", "b", "d"]);
+  // 4-D2 청크: limit 2 → 2건만 처리, 1건 pending. 다음 호출이 이어서 처리
+  const items2 = [{ id: "x", ...base, verdict: null }, { id: "y", ...base, verdict: null }, { id: "z", ...base, verdict: null }];
+  const r2 = await fillMissingVerdicts(sb, items2, ctx(), { limit: 2 });
+  assert.equal(r2.filled, 2); assert.equal(r2.pending, 1); assert.equal(items2[2].verdict, null);
+  const r3 = await fillMissingVerdicts(sb, items2, ctx(), { limit: 2 });
+  assert.equal(r3.filled, 1); assert.equal(r3.pending, 0);
+  // 시간 예산 0ms → 첫 항목도 처리 전에 중단? (예산 검사는 항목 시작 전) → 0건, 전부 pending
+  const items3 = [{ id: "p", ...base, verdict: null }];
+  const r4 = await fillMissingVerdicts(sb, items3, ctx(), { budgetMs: -1 });
+  assert.equal(r4.filled, 0); assert.equal(r4.pending, 1);
   assert.equal(items[1].verdict.tier, "hold", "옛 규칙(박사행)으로 저장된 판정이 새 규칙(보류)으로 갱신됨");
   assert.equal(items[1].verdict.rulesVersion, RULES_VERSION);
   assert.equal(items[2].verdict.rulesVersion, RULES_VERSION);

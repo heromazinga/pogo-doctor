@@ -91,7 +91,8 @@ export default function Home() {
   const [verdictLoading, setVerdictLoading] = useState(false);
   const [collTierFilter, setCollTierFilter] = useState("all");
   const [collTagFilter, setCollTagFilter] = useState("all");
-  const [storageMode, setStorageMode] = useState("normal");
+  // 4-D2: 초기값 null — localStorage 값이 없으면 storageMode 를 보내지 않고 서버 저장값(meta.storageMode)을 받아 쓴다 (첫 요청이 user_settings 를 normal 로 덮어쓰던 경합 방지)
+  const [storageMode, setStorageMode] = useState(null);
   const [analysisVerdict, setAnalysisVerdict] = useState(null); // 분석 화면 판정 { verdict, meta } | { error }
   const [inApp, setInApp] = useState(false); // 앱 내 WebView(UA PogoDoctorApp): 코드 발급·앱 코드 로그인·이메일 UI 숨김
   // 4-B: 스캔 기록 패널, 저장 시 기존 항목 갱신 안내
@@ -107,6 +108,7 @@ export default function Home() {
   const [cleanupBusy, setCleanupBusy] = useState(false);
   const [cleanupError, setCleanupError] = useState(null);
   const [cleanupDone, setCleanupDone] = useState({}); // query → true
+  const [scanPending, setScanPending] = useState(0); // 4-D2: 판정 재계산 청크 남은 수
   const [copied, setCopied] = useState(null);
   const [editing, setEditing] = useState(null); // { id, status, purposes, memo }
   const [thinking, setThinking] = useState(false); // 첫 텍스트 도착 전(모델 thinking 구간)
@@ -222,10 +224,11 @@ export default function Home() {
     if (!session) return;
     setVerdictLoading(true);
     try {
-      const res = await fetch("/api/verdict/batch", { method: "POST", headers: { "Content-Type": "application/json", ...(await authHeader()) }, body: JSON.stringify({ storageMode: mode }) });
+      const res = await fetch("/api/verdict/batch", { method: "POST", headers: { "Content-Type": "application/json", ...(await authHeader()) }, body: JSON.stringify(mode ? { storageMode: mode } : {}) });
       const data = await res.json();
       if (!res.ok) { setCollError(`판정 실패: ${data.error || res.status}`); return; }
       setVerdicts(data.verdicts || {}); setVerdictMeta({ ...data.meta, ms: data.ms, count: data.count });
+      if (!mode && data.meta?.storageMode && RULES.STORAGE_HOLD_LIMIT[data.meta.storageMode] !== undefined) setStorageMode(data.meta.storageMode); // 서버 저장값 반영
     } catch (e) { setCollError(`판정 요청 오류: ${e.message}`); }
     finally { setVerdictLoading(false); }
   };
@@ -238,7 +241,7 @@ export default function Home() {
     if (!selectedPokemon) { setAnalysisVerdict(null); return; }
     setAnalysisVerdict({ loading: true });
     try {
-      const body = { species_id: selectedPokemon.id, form: selectedPokemon.form || "Normal", cp: parseInt(cp) || null, ivs: { atk: atkIv, def: defIv, sta: staIv }, fast_move: fastMove || null, charged_moves: chargedMove ? [chargedMove] : [], is_shadow: isShadow, is_shiny: isShiny, storageMode };
+      const body = { species_id: selectedPokemon.id, form: selectedPokemon.form || "Normal", cp: parseInt(cp) || null, ivs: { atk: atkIv, def: defIv, sta: staIv }, fast_move: fastMove || null, charged_moves: chargedMove ? [chargedMove] : [], is_shadow: isShadow, is_shiny: isShiny, ...(storageMode ? { storageMode } : {}) };
       const res = await fetch("/api/verdict", { method: "POST", headers: { "Content-Type": "application/json", ...(await authHeader()) }, body: JSON.stringify(body) });
       const data = await res.json();
       if (!res.ok) { setAnalysisVerdict({ error: data.error || `HTTP ${res.status}` }); return; }
@@ -264,7 +267,7 @@ export default function Home() {
       const res = await fetch("/api/scan", { headers: { ...(await authHeader()) } });
       const data = await res.json();
       if (!res.ok) { setScanError(data.error || `HTTP ${res.status}`); return; }
-      setScans(data.items || []); setScanSessions(data.sessions || []);
+      setScans(data.items || []); setScanSessions(data.sessions || []); setScanPending(data.pending || 0);
     } catch (e) { setScanError(e.message); } finally { setScanBusy(false); }
   };
   const scanAction = async (action, ids, extra = {}) => {
@@ -278,7 +281,7 @@ export default function Home() {
         setSaveNotice(`스캔 ${(data.results || []).length - err}건 저장 (기존 항목 갱신 ${upd}건${err ? `, 실패 ${err}건` : ""})`);
         await reloadCollection();
       }
-      if (action === "dismiss_before") setSaveNotice(`이전 기록 ${data.count ?? 0}건 숨김 (${fmtStamp(data.before)} 이전)`);
+      if (action === "dismiss_untrusted") setSaveNotice(`구버전 앱 기록 ${data.count ?? 0}건 숨김 (앱 ${data.minTrusted} 미만 또는 버전 없음)`);
       if (action === "restore_dismissed") setSaveNotice(`숨긴 기록 ${data.count ?? 0}건 복구`);
       await loadScans();
     } catch (e) { setScanError(e.message); } finally { setScanBusy(false); }
@@ -1371,7 +1374,7 @@ export default function Home() {
                     {v.tags.map((t) => <div key={"r" + t.name} style={{ fontSize: 10, color: "#8899aa", marginTop: 3 }}>· {t.name}: {t.reason}</div>)}
                     {v.event && <div style={{ fontSize: 11, color: "#ffd93d", marginTop: 4 }}>{v.event.note}</div>}
                     {v.warnings?.length > 0 && <div style={{ fontSize: 10, color: "#ffd93d", marginTop: 4 }}>⚠️ {v.warnings.join(" · ")}</div>}
-                    <div style={{ fontSize: 9, color: "#576574", marginTop: 6 }}>결정적 계산(AI 미사용) · 보관함 {STORAGE_MODE_LABELS[storageMode]} · 내 목록 {analysisVerdict.meta?.myRows ?? 0}마리 비교{analysisVerdict.meta?.authenticated ? "" : " (로그인 없음)"} · 기준값 README "판정 기준"</div>
+                    <div style={{ fontSize: 9, color: "#576574", marginTop: 6 }}>결정적 계산(AI 미사용) · 보관함 {STORAGE_MODE_LABELS[storageMode || analysisVerdict.meta?.storageMode] || "서버 설정"} · 내 목록 {analysisVerdict.meta?.myRows ?? 0}마리 비교{analysisVerdict.meta?.authenticated ? "" : " (로그인 없음)"} · 기준값 README "판정 기준"</div>
                   </>
                 ); })()}
               </div>
@@ -1962,6 +1965,7 @@ export default function Home() {
             </div>
             <div style={{ ...s.sourceNotice, marginBottom: 10 }}>⚠️ {cleanup?.note || "예상 수는 앱이 아는 개체(스캔 기록 + 내 목록) 기준입니다. 앱이 모르는 같은 종·HP 개체가 게임에 있으면 결과가 더 나옵니다 — 게임 결과 수가 예상과 다르면 보내지 마세요."}</div>
             {cleanup?.protectNote && <div style={{ ...s.sourceNotice, marginBottom: 10 }}>🛡 {cleanup.protectNote}</div>}
+            {cleanup?.pending > 0 && <div style={{ ...s.sourceNotice, marginBottom: 8 }}>⏳ 판정 갱신 중 — {cleanup.pending}건은 아직 옛 규칙 판정으로 묶였습니다. 🔄 로 이어서 갱신한 뒤 사용하세요</div>}
             {cleanup?.backfill?.ran && <div style={{ fontSize: 10, color: "#4ecdc4", marginBottom: 8 }}>🧹 스캔 기록 정리 1회 실행: 대체된 과거 기록 {cleanup.backfill.superseded}건 · 재스캔 필요 표시 {cleanup.backfill.conflicts ?? 0}건(충돌) + {cleanup.backfill.suspects ?? 0}건(오판독 의심) (규칙 {cleanup.backfill.version})</div>}
             {cleanupError && <div style={s.error}>{cleanupError}</div>}
             {cleanupBusy && !cleanup && <div style={{ fontSize: 12, color: "#8899aa" }}>계산 중…</div>}
@@ -2001,13 +2005,14 @@ export default function Home() {
             </div>
             <div style={{ fontSize: 11, color: "#8899aa", lineHeight: 1.6, marginBottom: 10 }}>앱의 연속 스캔(평가 화면을 넘기기만)으로 기록된 개체입니다. 자동 저장되지 않으며, 여기서 검토 후 저장합니다. 저장 시 기존 항목(종·개체값·포획일 또는 종·CP·HP 일치)은 갱신됩니다. 14일 후 자동 삭제.</div>
             {scanError && <div style={s.error}>{scanError}</div>}
+            {scanPending > 0 && <div style={{ ...s.sourceNotice, marginBottom: 8 }}>⏳ 판정 갱신 중 — {scanPending}건 남음 (한 번에 100건씩, 🔄 로 이어서)</div>}
             {scans.length > 0 && (
               <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 10 }}>
                 <button onClick={() => scanAction("save", scans.map((x) => x.id))} disabled={scanBusy} style={{ ...s.keepBtn, width: "auto", padding: "8px 12px" }}>✅ 추천대로 전부 저장 ({scans.length})</button>
                 <button onClick={() => scanAction("save", scans.filter((x) => x.verdict?.tier !== "transfer").map((x) => x.id))} disabled={scanBusy} style={{ ...s.chip, fontSize: 11 }}>보관 추천만 저장 ({scans.filter((x) => x.verdict?.tier !== "transfer").length})</button>
                 <button onClick={() => { if (window.confirm("스캔 기록을 모두 지웁니다 (내 목록은 그대로). 계속할까요?")) scanAction("clear", []); }} disabled={scanBusy} style={{ ...s.chip, fontSize: 11, color: "#ff6b6b" }}>전부 지우기</button>
                 {/* 4-D: 전체 스캔 세션 이전 기록 숨김(복구 가능) — 최신 세션 기준 */}
-                <button onClick={() => { const sid = scans[0]?.session_id; if (!sid) return; if (window.confirm(`세션 ${sid} 의 첫 기록보다 오래된 스캔 기록을 모두 숨깁니다(내 목록은 그대로, "숨김 복구" 로 되돌릴 수 있음). 계속할까요?`)) scanAction("dismiss_before", [], { session_id: sid }); }} disabled={scanBusy} style={{ ...s.chip, fontSize: 11, color: "#ffd93d" }}>이 세션 이전 기록 모두 숨김</button>
+                <button onClick={() => { if (window.confirm("구버전 앱(0.1.38 미만 또는 버전 없음)으로 기록된 스캔 기록을 모두 숨깁니다(내 목록은 그대로, \"숨김 복구\" 로 되돌릴 수 있음). 계속할까요?")) scanAction("dismiss_untrusted", []); }} disabled={scanBusy} style={{ ...s.chip, fontSize: 11, color: "#ffd93d" }}>구버전 앱 기록 숨김</button>
                 <button onClick={() => scanAction("restore_dismissed", [])} disabled={scanBusy} style={{ ...s.chip, fontSize: 11, color: "#8899aa" }}>숨김 복구</button>
               </div>
             )}
