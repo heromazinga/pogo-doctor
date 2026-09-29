@@ -57,6 +57,8 @@ const PURPOSES = ["raid", "great", "ultra", "master"];
 const isInt = (v) => Number.isInteger(v);
 const optInt = (v, min, max) => v === null || v === undefined || (isInt(v) && v >= min && v <= max);
 const optStr = (v, max) => v === null || v === undefined || (typeof v === "string" && v.length <= max);
+export const validTags = (t) => Array.isArray(t) && t.length <= 8 && t.every((x) => typeof x === "string" && x.trim().length >= 1 && x.length <= 24);
+export const validDate = (d) => typeof d === "string" && /^\d{4}-\d{2}-\d{2}$/.test(d) && !Number.isNaN(Date.parse(d));
 
 export function validatePokemonBody(b) {
   const errors = [];
@@ -75,6 +77,10 @@ export function validatePokemonBody(b) {
   if (b.purposes !== undefined && !(Array.isArray(b.purposes) && b.purposes.every((p) => PURPOSES.includes(p)))) errors.push("purposes 는 raid|great|ultra|master 배열");
   if (!optStr(b.memo, 200)) errors.push("memo 는 200자 이하");
   if (b.level !== undefined && b.level !== null && !(typeof b.level === "number" && b.level >= 1 && b.level <= 51)) errors.push("level 은 1~51 숫자 또는 null");
+  // 4-A: 태그(최대 8개, 각 1~24자), HP(10~999), 포획일(YYYY-MM-DD). 포획 장소는 받지 않는다
+  if (b.tags !== undefined && b.tags !== null && !validTags(b.tags)) errors.push("tags 는 1~24자 문자열 최대 8개");
+  if (!optInt(b.hp, 10, 999)) errors.push("hp 는 10~999 정수 또는 null");
+  if (b.caught_on !== undefined && b.caught_on !== null && !validDate(b.caught_on)) errors.push("caught_on 은 YYYY-MM-DD");
   if (errors.length) return { errors };
   return {
     errors: [],
@@ -90,6 +96,9 @@ export function validatePokemonBody(b) {
       is_shadow: Boolean(b.is_shadow), is_shiny: Boolean(b.is_shiny), is_lucky: Boolean(b.is_lucky), is_purified: Boolean(b.is_purified),
       status: b.status || "keep",
       purposes: b.purposes || [],
+      tags: Array.isArray(b.tags) ? b.tags.map((t) => t.trim()).filter(Boolean) : [],
+      hp: b.hp ?? null,
+      caught_on: b.caught_on || null,
       memo: b.memo ? String(b.memo).trim() || null : null,
       source: "overlay",
     },

@@ -1,0 +1,325 @@
+// 4-A 용도별 보관 판정 엔진 — 결정적 계산(AI 미사용), 저장하지 않고 볼 때마다 계산
+// 입력(computeVerdict 의 input): { species_id, form, ivs?{atk,def,sta}, ivCandidates?[{level,atk,def,sta}], level?, levelRange?[lo,hi],
+//   cp, hp, fast_move, charged_moves[], is_shadow, is_purified, is_shiny, is_lucky, candy?, storageMode?, id? }
+// 컨텍스트(ctx): { dataset, leagueRankings(getLeagueRankings 결과), eventTargets(extractEventTargets 결과), myRows(내 목록 행), storageMode, now, maxLeagueLevel }
+// 출력: { tier, tags:[{name,tier,reason,metrics}], collect:[{reason}], event?, confident, basis:"server", summary, candidates, warnings, disabled }
+import { TYPES, TYPE_NAMES_KR } from "./typeChart.js";
+import { cpmForLevel, levels, calcCP, estimateLevel } from "./cpm.js";
+import { findPokemon } from "./pokemonData.js";
+import { RULES, TAG, TIER_LABEL, purposesFromTags } from "./verdictRules.js";
+import { getRankings, raidRankOf, gymRankOf, raidScoreForType, finalForms, familyIds, isLegendaryClass } from "./speciesRankings.js";
+import { leagueRankOf } from "./pvpokeRankings.js";
+import { ivCandidates, ivPercent, calcHP } from "./ivCalc.js";
+import { matchEvents } from "./eventTargets.js";
+
+const TIER_ORDER = { main: 3, hold: 2, transfer: 1, need_appraisal: 0 };
+const better = (a, b) => (TIER_ORDER[a] >= TIER_ORDER[b] ? a : b);
+
+// ─── 리그 스탯곱 순위 (종·리그·레벨 상한별 4096 조합, 메모) ───
+const productMemo = new Map();
+export function leagueProductTable(p, cap, maxLevel) {
+  const key = `${p.id}:${p.form}:${cap}:${maxLevel}`;
+  if (productMemo.has(key)) return productMemo.get(key);
+  const base = { atk: p.baseAttack, def: p.baseDefense, sta: p.baseStamina };
+  const lvs = levels().filter((l) => l <= maxLevel);
+  const rows = [];
+  for (let a = 0; a <= 15; a++) for (let d = 0; d <= 15; d++) for (let s = 0; s <= 15; s++) {
+    const ivs = { atk: a, def: d, sta: s };
+    // CP ≤ cap 인 최고 레벨 (레벨에 대해 CP 단조 증가 → 이분 탐색)
+    let lo = 0, hi = lvs.length - 1, best = -1;
+    while (lo <= hi) { const mid = (lo + hi) >> 1; if (calcCP(base, ivs, lvs[mid]) <= cap) { best = mid; lo = mid + 1; } else hi = mid - 1; }
+    if (best < 0) { rows.push({ a, d, s, level: null, cp: null, product: 0 }); continue; }
+    const lv = lvs[best], cpm = cpmForLevel(lv);
+    const product = (base.atk + a) * cpm * (base.def + d) * cpm * Math.floor((base.sta + s) * cpm);
+    rows.push({ a, d, s, level: lv, cp: calcCP(base, ivs, lv), product });
+  }
+  rows.sort((x, y) => y.product - x.product);
+  const rank = new Map();
+  rows.forEach((r, i) => rank.set(`${r.a},${r.d},${r.s}`, { rank: i + 1, level: r.level, cp: r.cp, product: r.product }));
+  const out = { rank, top: rows[0] };
+  productMemo.set(key, out);
+  return out;
+}
+
+// ─── 개체값 후보 정규화 ───
+function normalizeCandidates(input, p) {
+  const base = { atk: p.baseAttack, def: p.baseDefense, sta: p.baseStamina };
+  const clampL = (l) => Math.max(1, Math.min(51, Math.round(l * 2) / 2));
+  if (Array.isArray(input.ivCandidates) && input.ivCandidates.length) {
+    return input.ivCandidates
+      .filter((c) => [c.atk, c.def, c.sta].every((v) => Number.isInteger(v) && v >= 0 && v <= 15))
+      .map((c) => ({ atk: c.atk, def: c.def, sta: c.sta, level: c.level != null ? clampL(c.level) : (input.cp ? estimateLevel(input.cp, base, c).level : (input.level || RULES.RAID_MEMBER_LEVEL)) }))
+      .slice(0, 4096);
+  }
+  const ivs = input.ivs || (Number.isInteger(input.atk_iv) ? { atk: input.atk_iv, def: input.def_iv, sta: input.sta_iv } : null);
+  if (ivs && [ivs.atk, ivs.def, ivs.sta].every((v) => Number.isInteger(v) && v >= 0 && v <= 15)) {
+    let level = input.level != null ? clampL(input.level) : null;
+    if (level == null && input.cp) level = estimateLevel(input.cp, base, ivs).level;
+    if (level == null) level = RULES.RAID_MEMBER_LEVEL;
+    return [{ ...ivs, level }];
+  }
+  if (input.cp) {
+    const maxLevel = Array.isArray(input.levelRange) && input.levelRange[1] ? clampL(input.levelRange[1]) : 51;
+    const minLevel = Array.isArray(input.levelRange) && input.levelRange[0] ? clampL(input.levelRange[0]) : 1;
+    const cands = ivCandidates(base, input.cp, input.hp || null, { maxLevel }).filter((c) => c.level >= minLevel);
+    return cands.length ? cands : [];
+  }
+  return [];
+}
+
+// ─── 내 목록 안 개체 순위 ───
+function rowsOfSpecies(myRows, p, shadow, selfId) {
+  return (myRows || []).filter((r) => r.species_id === p.id && (r.form || "Normal") === p.form && Boolean(r.is_shadow) === shadow && r.id !== selfId && r.status !== "transfer");
+}
+function rowLevel(r, p) {
+  if (r.level) return r.level;
+  if (r.cp && Number.isInteger(r.atk_iv)) return estimateLevel(r.cp, { atk: p.baseAttack, def: p.baseDefense, sta: p.baseStamina }, { atk: r.atk_iv, def: r.def_iv, sta: r.sta_iv }).level || 0;
+  return 0;
+}
+// 공격 IV 우선, 동률 시 레벨 — 나보다 앞서는 행 수 + 1
+function indivRankBy(rows, p, keyFn, mine) {
+  let ahead = 0;
+  for (const r of rows) {
+    const k = keyFn(r);
+    if (k.primary > mine.primary || (k.primary === mine.primary && k.level > mine.level)) ahead++;
+  }
+  return ahead + 1;
+}
+
+// ─── 한 후보(개체값·레벨 확정)에 대한 태그 평가 ───
+function evaluateCandidate(p, cand, input, ctx, rankings, { forEvolve = false } = {}) {
+  const tags = [];
+  const warnings = [];
+  const shadow = Boolean(input.is_shadow);
+  const moveStats = ctx.dataset.moveStats || {};
+  const myRows = ctx.myRows || [];
+  const sameSpecies = rowsOfSpecies(myRows, p, shadow, input.id);
+  const pct = ivPercent(cand);
+  const hasMoves = Boolean(input.fast_move) || (Array.isArray(input.charged_moves) && input.charged_moves.length > 0);
+
+  // 1) 타입별 레이드
+  for (const t of TYPES) {
+    const sp = raidRankOf(rankings, t, p.id, p.form, shadow);
+    if (!sp || sp.rank > RULES.RAID_MID_RANK) continue;
+    const top = sp.rank <= RULES.RAID_TOP_RANK;
+    const indiv = indivRankBy(sameSpecies, p, (r) => ({ primary: Number.isInteger(r.atk_iv) ? r.atk_iv : -1, level: rowLevel(r, p) }), { primary: cand.atk, level: cand.level });
+    const tier = top && indiv <= RULES.RAID_MAIN_INDIV_RANK ? "main" : "hold";
+    const kr = TYPE_NAMES_KR[t];
+    const notes = [];
+    let myScore = null;
+    if (hasMoves && !forEvolve) {
+      const mine = raidScoreForType(p, t, moveStats, { shadow, fastOnly: input.fast_move ? [input.fast_move] : null, chargedOnly: input.charged_moves?.length ? input.charged_moves : null });
+      if (mine) {
+        myScore = mine.score;
+        if (sp.usesSpecial && (mine.fast !== sp.fast || mine.charged !== sp.charged)) notes.push(`특수 기술머신 필요(${moveName(ctx.dataset, sp.fast)}/${moveName(ctx.dataset, sp.charged)})`);
+      } else {
+        notes.push(sp.usesSpecial ? `특수 기술머신 필요(${moveName(ctx.dataset, sp.charged)})` : `${kr} 기술로 변경 필요`);
+      }
+    } else if (!forEvolve) {
+      notes.push("기술 확인 필요(최적 기술 가정)");
+    }
+    const reason = `${kr} ${sp.rank}위${shadow ? "(섀도)" : ""}·공격 ${cand.atk}, 내 ${p.nameKr} 중 ${indiv}위${notes.length ? " · " + notes.join(", ") : ""}`;
+    tags.push({ name: TAG.raid(kr), tier, reason, metrics: { type: t, speciesRank: sp.rank, top, indivRank: indiv, atkIv: cand.atk, level: cand.level, speciesScore: sp.score, myScore, bestMoves: [sp.fast, sp.charged], usesSpecial: sp.usesSpecial, notes } });
+  }
+
+  // 2) 체육관 방어
+  const gym = !isLegendaryClass(p) ? gymRankOf(rankings, p.id, p.form) : null;
+  if (gym && gym.rank <= RULES.GYM_TOP_RANK) {
+    const indiv = indivRankBy(sameSpecies, p, (r) => ({ primary: Number.isInteger(r.def_iv) ? r.def_iv + r.sta_iv : -1, level: rowLevel(r, p) }), { primary: cand.def + cand.sta, level: cand.level });
+    const tier = indiv <= RULES.GYM_MAIN_INDIV_RANK ? "main" : "hold";
+    tags.push({ name: TAG.gym, tier, reason: `내구 ${gym.rank}위·방어 ${cand.def}/HP ${cand.sta}, 내 ${p.nameKr} 중 ${indiv}위`, metrics: { speciesRank: gym.rank, indivRank: indiv } });
+  }
+
+  // 3) 슈퍼리그 / 하이퍼리그
+  for (const league of ["great", "ultra"]) {
+    const lr = ctx.leagueRankings?.leagues?.[league];
+    if (!lr) { warnings.push(`${TAG[league]}: 데이터 없음(PvPoke 순위 미수신)`); continue; }
+    const sp = leagueRankOf(ctx.leagueRankings, league, p.pvpokeId, shadow);
+    if (!sp || sp.rank > RULES.LEAGUE_MID_RANK) continue;
+    const cap = RULES.LEAGUE_CAPS[league];
+    const top = sp.rank <= RULES.LEAGUE_TOP_RANK;
+    const table = leagueProductTable(p, cap, ctx.maxLeagueLevel || RULES.LEAGUE_MAX_LEVEL);
+    const me = table.rank.get(`${cand.atk},${cand.def},${cand.sta}`);
+    if (!me || me.level == null) continue;
+    const currentCp = input.cp && !forEvolve ? input.cp : calcCP({ atk: p.baseAttack, def: p.baseDefense, sta: p.baseStamina }, cand, cand.level);
+    if (currentCp > cap || cand.level > me.level) {
+      tags.push({ name: TAG[league], tier: "none", reason: `현재 CP ${currentCp} > 상한 ${cap} → 불가`, metrics: { speciesRank: sp.rank, productRank: me.rank, over: true } });
+      continue;
+    }
+    let tier = null;
+    if (top && me.rank <= RULES.LEAGUE_MAIN_PRODUCT_RANK) tier = "main";
+    else if ((top && me.rank <= RULES.LEAGUE_HOLD_PRODUCT_RANK) || (!top && me.rank <= RULES.LEAGUE_MID_HOLD_PRODUCT_RANK)) tier = "hold";
+    if (!tier) continue;
+    tags.push({ name: TAG[league], tier, reason: `PvPoke ${sp.rank}위·스탯곱 ${me.rank}/4096위 (L${me.level} CP${me.cp})`, metrics: { speciesRank: sp.rank, top, productRank: me.rank, levelAtCap: me.level, cpAtCap: me.cp } });
+  }
+
+  // 4) 마스터리그
+  {
+    const lr = ctx.leagueRankings?.leagues?.master;
+    if (!lr) warnings.push(`${TAG.master}: 데이터 없음(PvPoke 순위 미수신)`);
+    else {
+      const sp = leagueRankOf(ctx.leagueRankings, "master", p.pvpokeId, shadow);
+      if (sp && sp.rank <= RULES.MASTER_TOP_RANK) {
+        const tier = pct >= RULES.MASTER_MAIN_PCT ? "main" : pct >= RULES.MASTER_HOLD_PCT ? "hold" : null;
+        if (tier) tags.push({ name: TAG.master, tier, reason: `PvPoke ${sp.rank}위·개체값 ${pct}%`, metrics: { speciesRank: sp.rank, pct } });
+      }
+    }
+  }
+
+  // 5) 진화 대기(→최종형): 최종형 기준으로 위 태그 평가(후보 동일, 기술은 미정)
+  if (!forEvolve) {
+    for (const f of finalForms(ctx.dataset, p)) {
+      const sub = evaluateCandidate(f.species, cand, { ...input, cp: null, fast_move: null, charged_moves: [] }, ctx, rankings, { forEvolve: true });
+      const useful = sub.tags.filter((t) => t.tier === "main" || t.tier === "hold");
+      if (!useful.length) continue;
+      const tier = useful.reduce((a, t) => better(a, t.tier), "hold");
+      const candy = Number.isInteger(input.candy) ? (input.candy >= f.candiesFromHere ? `진화 가능(사탕 ${input.candy}/${f.candiesFromHere})` : `사탕 ${input.candy}/${f.candiesFromHere}`) : `사탕 ${f.candiesFromHere}개 필요`;
+      tags.push({ name: TAG.evolve(f.species.nameKr), tier, reason: `${f.species.nameKr} 기준: ${useful.map((t) => `${t.name} ${TIER_LABEL[t.tier]}`).join(", ")} · ${candy}`, metrics: { finalId: f.species.id, finalForm: f.species.form, candiesNeeded: f.candiesFromHere, candy: input.candy ?? null, finalTags: useful.map((t) => ({ name: t.name, tier: t.tier })) } });
+    }
+  }
+  return { tags, warnings, pct };
+}
+
+function moveName(dataset, m) { return dataset.moveNamesKr?.[m] || m; }
+
+// ─── 보관함 여유 적용 ───
+function applyStorage(tags, p, input, ctx) {
+  const mode = RULES.STORAGE_HOLD_LIMIT[input.storageMode || ctx.storageMode] !== undefined ? (input.storageMode || ctx.storageMode) : RULES.STORAGE_DEFAULT;
+  const limit = RULES.STORAGE_HOLD_LIMIT[mode];
+  const shadow = Boolean(input.is_shadow);
+  const same = rowsOfSpecies(ctx.myRows, p, shadow, input.id);
+  return tags.map((t) => {
+    if (t.tier !== "hold") return t;
+    if (limit === Infinity) return t;
+    if (limit === 0) return { ...t, tier: "transfer", reason: `${t.reason} · 보관함 빠듯: 보류는 박사행 권장` };
+    const held = same.filter((r) => Array.isArray(r.tags) && r.tags.includes(t.name)).length;
+    if (held >= limit) return { ...t, tier: "transfer", reason: `${t.reason} · 보관함 보통: 같은 종·태그 이미 ${held}마리 → 박사행 권장` };
+    return t;
+  });
+}
+
+// ─── 메인 ───
+export function computeVerdict(input, ctx) {
+  const dataset = ctx.dataset;
+  const p = findPokemon(dataset, { id: input.species_id, form: input.form || "Normal" });
+  if (!p) return { tier: "need_appraisal", tags: [], collect: [], confident: false, basis: "server", summary: "❔ 종을 찾지 못했습니다", warnings: ["species_id 가 데이터셋에 없음"], disabled: [] };
+  const rankings = getRankings(dataset);
+  const cands = normalizeCandidates(input, p);
+  const disabled = RULES.LUCKY_TRADE_YEAR == null ? ["lucky_trade_year"] : [];
+  const shadow = Boolean(input.is_shadow);
+
+  if (!cands.length) {
+    return { tier: "need_appraisal", tags: [], collect: collectFor(p, input, null, false), confident: false, basis: "server", species: { id: p.id, form: p.form, nameKr: p.nameKr },
+      summary: `${TIER_LABEL.need_appraisal}: 개체값·CP 를 읽지 못했습니다`, candidates: 0, warnings: ["개체값 후보 없음"], disabled };
+  }
+
+  // 후보별 평가 → 태그별 단계 비교
+  const evals = cands.map((c) => ({ cand: c, ...evaluateCandidate(p, c, input, ctx, rankings) }));
+  const byName = new Map();
+  for (const e of evals) {
+    e.tags = applyStorage(e.tags, p, input, ctx);
+    for (const t of e.tags) { if (!byName.has(t.name)) byName.set(t.name, []); byName.get(t.name).push(t); }
+  }
+  let confident = true;
+  const tags = [];
+  for (const [name, list] of byName) {
+    const tiers = new Set(list.map((t) => t.tier));
+    if (list.length < evals.length) tiers.add("none");
+    const best = list.reduce((a, t) => (TIER_ORDER[t.tier] > TIER_ORDER[a.tier] ? t : a), list[0]);
+    if (tiers.size > 1 && (tiers.has("main") || tiers.has("hold"))) { confident = false; tags.push({ ...best, tier: "need_appraisal", reason: `${best.reason} (후보 ${evals.length}개 중 판정 불일치: ${[...tiers].join("/")})` }); }
+    else if (best.tier === "none") continue;
+    else tags.push(best);
+  }
+  const overallOf = (list) => list.reduce((a, t) => (t.tier === "main" || t.tier === "hold" ? better(a, t.tier) : a), "transfer");
+  const overallSet = new Set(evals.map((e) => overallOf(e.tags)));
+  if (overallSet.size > 1) confident = false;
+  let tier = confident ? overallOf(tags) : "need_appraisal";
+  const warnings = [...new Set(evals.flatMap((e) => e.warnings))];
+
+  // 이벤트 연동: 박사행 → 보류 상향
+  let event = null;
+  if (ctx.eventTargets?.length) {
+    const fam = [...familyIds(dataset, p)].map((id) => findPokemon(dataset, { id })?.name).filter(Boolean);
+    const hits = matchEvents(ctx.eventTargets, p.name, fam);
+    if (hits.length) {
+      const h = hits.sort((a, b) => a.start - b.start)[0];
+      const date = new Date(h.start).toISOString().slice(0, 10);
+      event = { name: h.name, label: h.label, type: h.type, date, start: h.start, end: h.end, link: h.link, note: `📅 ${date} ${h.label} 대상 — 박사행 보류(이벤트 때 진화하면 전용 기술)` };
+      if (tier === "transfer") tier = "hold";
+    }
+  }
+
+  // 전설·환상·UB: 개체 무관 보관 권장(낮은 개체는 교환용) → 박사행이면 보류로 상향
+  let legendaryHold = false;
+  if (tier === "transfer" && isLegendaryClass(p)) { tier = "hold"; legendaryHold = true; }
+
+  const allSame = evals.every((e) => e.cand.atk === evals[0].cand.atk && e.cand.def === evals[0].cand.def && e.cand.sta === evals[0].cand.sta);
+  const collect = collectFor(p, input, allSame ? evals[0].cand : null, !legendaryHold && (tier === "main" || tier === "hold"));
+  const summary = buildSummary(tier, tags, collect, event, evals[0].cand, allSame, legendaryHold);
+  return {
+    tier, tags, collect, event, confident, basis: "server", summary, disabled, warnings,
+    species: { id: p.id, form: p.form, name: p.name, nameKr: p.nameKr, legendary: isLegendaryClass(p), pokemonClass: p.pokemonClass || null },
+    candidates: evals.length,
+    ivs: allSame ? { ...evals[0].cand, pct: evals[0].pct } : null,
+    levelRange: [Math.min(...evals.map((e) => e.cand.level)), Math.max(...evals.map((e) => e.cand.level))],
+    recommendedTags: tags.filter((t) => t.tier === "main" || t.tier === "hold").map((t) => t.name),
+    purposes: purposesFromTags(tags.filter((t) => t.tier === "main" || t.tier === "hold").map((t) => t.name)),
+  };
+}
+
+function collectFor(p, input, cand, kept) {
+  const out = [];
+  if (input.is_shiny) out.push({ reason: "이로치" });
+  if (input.is_lucky) out.push({ reason: "반짝반짝(럭키)" });
+  if (cand) {
+    const pct = ivPercent(cand);
+    if (pct >= RULES.COLLECT_HUNDO_PCT) out.push({ reason: "개체값 100%" });
+    if (cand.atk + cand.def + cand.sta === RULES.COLLECT_NUNDO_SUM) out.push({ reason: "개체값 0%(0/0/0)" });
+  }
+  if (isLegendaryClass(p)) {
+    if (input.is_shadow || input.is_purified) out.push({ reason: `${input.is_shadow ? "섀도" : "정화"} 전설·환상 — 보관 권장` });
+    else if (kept) out.push({ reason: "전설·환상 — 보관 권장" });
+    else out.push({ reason: "교환용(전설·환상, 교환 시 개체값 재설정)" });
+  }
+  return out;
+}
+
+function buildSummary(tier, tags, collect, event, cand, allSame, legendaryHold) {
+  const kept = tags.filter((t) => t.tier === tier && (tier === "main" || tier === "hold"));
+  let s;
+  if (tier === "need_appraisal") s = `${TIER_LABEL.need_appraisal}${tags.length ? ": " + tags.map((t) => t.name).join(", ") : ""}`;
+  else if (tier === "transfer") s = TIER_LABEL.transfer;
+  else if (kept.length) s = `${TIER_LABEL[tier]}: ${kept[0].name} (${kept[0].reason})${kept.length > 1 ? " 외 " + (kept.length - 1) : ""}`;
+  else s = `${TIER_LABEL[tier]}`;
+  if (event && tier === "hold" && !kept.length) s = `${TIER_LABEL.hold}: ${event.note}`;
+  else if (legendaryHold && !kept.length) s = `${TIER_LABEL.hold}: 전설·환상(용도 태그 없음)`;
+  if (collect.length) s += ` → 💎 수집 추천: ${collect.map((c) => c.reason).join(", ")}`;
+  if (cand && allSame) s += ` [${cand.atk}/${cand.def}/${cand.sta} L${cand.level}]`;
+  return s;
+}
+
+// my_pokemon 행 → 입력
+export function inputFromRow(r, storageMode) {
+  return {
+    id: r.id, species_id: r.species_id, form: r.form || "Normal", cp: r.cp || null, hp: r.hp || null, level: r.level || null,
+    ivs: Number.isInteger(r.atk_iv) ? { atk: r.atk_iv, def: r.def_iv, sta: r.sta_iv } : null,
+    fast_move: r.fast_move || null, charged_moves: r.charged_moves || [],
+    is_shadow: Boolean(r.is_shadow), is_purified: Boolean(r.is_purified), is_shiny: Boolean(r.is_shiny), is_lucky: Boolean(r.is_lucky),
+    storageMode,
+  };
+}
+
+// 입력 검증 (API 공용)
+export function validateVerdictInput(b) {
+  const errors = [];
+  if (!b || typeof b !== "object") return { errors: ["본문이 객체가 아닙니다"] };
+  if (!Number.isInteger(b.species_id) || b.species_id < 1 || b.species_id > 2000) errors.push("species_id 는 1~2000 정수");
+  if (b.cp != null && !(Number.isInteger(b.cp) && b.cp >= 10 && b.cp <= 9999)) errors.push("cp 는 10~9999 정수");
+  if (b.hp != null && !(Number.isInteger(b.hp) && b.hp >= 10 && b.hp <= 999)) errors.push("hp 는 10~999 정수");
+  if (b.ivCandidates != null && !(Array.isArray(b.ivCandidates) && b.ivCandidates.length <= 4096)) errors.push("ivCandidates 는 배열(≤4096)");
+  if (b.storageMode != null && !(b.storageMode in RULES.STORAGE_HOLD_LIMIT)) errors.push("storageMode 는 relaxed|normal|tight");
+  if (b.candy != null && !(Number.isInteger(b.candy) && b.candy >= 0 && b.candy <= 99999)) errors.push("candy 는 0~99999 정수");
+  return { errors };
+}
+
+export { calcHP };

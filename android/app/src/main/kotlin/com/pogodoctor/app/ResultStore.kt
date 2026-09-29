@@ -14,6 +14,9 @@ object ResultStore {
             val stars: Int? = null,               // 평가 별 개수 (합계 범위 제약)
             val levels: List<Double>? = null,     // 강화 비용으로 좁힌 레벨 목록
             val barDetail: String? = null,        // 막대 판독 상세 (디버그)
+            val verdict: VerdictClient.Verdict? = null, // 4-A 서버 판정 (없으면 간이 판정 표시)
+            val verdictError: String? = null,     // 서버 판정 실패 사유 (오프라인 등)
+            val verdictLoading: Boolean = false,
         ) : Result()
         data class Blocked(val brightness: Double) : Result()   // 검은 화면(캡처 차단)
         data class Error(val message: String) : Result()

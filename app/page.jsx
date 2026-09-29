@@ -5,6 +5,11 @@ import { listMyPokemon, insertMyPokemon, updateMyPokemon, deleteMyPokemon, migra
 import { usageDate } from "./lib/aiUsage";
 import { getAccountState, requestLinkEmail, verifyLinkEmail, snapshotAnonymousRows, requestSignInEmail, verifySignInEmail, mergeRowsIntoCurrent, signOutAccount, loginWithAppCode } from "./lib/account";
 import { listDevices, revokeDevice, listDebugLogs, debugImageUrl, deleteDebugLog } from "./lib/devices";
+import { TIER_LABEL, RULES, purposesFromTags } from "./lib/verdictRules";
+
+// 4-A 보관함 여유 설정 (기기 로컬 저장, 판정 API 에 전달)
+const STORAGE_MODE_LABELS = { relaxed: "여유", normal: "보통", tight: "빠듯" };
+const TIER_COLORS = { main: "#4ecdc4", hold: "#ffd93d", transfer: "#ff6b6b", need_appraisal: "#a890f0" };
 
 // 이메일 계정 연결 UI 는 기본 숨김 (Supabase 기본 발송은 템플릿 수정 불가·발송 제약 → 사용 안 함). 코드는 유지.
 const EMAIL_LINK_ENABLED = process.env.NEXT_PUBLIC_ENABLE_EMAIL_LINK === "true";
@@ -12,7 +17,7 @@ const EMAIL_LINK_ENABLED = process.env.NEXT_PUBLIC_ENABLE_EMAIL_LINK === "true";
 // my_pokemon 행 → 화면/AI 용 항목 (판정은 저장하지 않으므로 없음)
 function toEntry(r) {
   const ivs = [r.atk_iv, r.def_iv, r.sta_iv];
-  const raw = { id: r.id, species_id: r.species_id, form: r.form, name_kr: r.name_kr, cp: r.cp, atk_iv: r.atk_iv, def_iv: r.def_iv, sta_iv: r.sta_iv, level: r.level, fast_move: r.fast_move, charged_moves: r.charged_moves || [], is_shadow: !!r.is_shadow, is_purified: !!r.is_purified, is_shiny: !!r.is_shiny, is_lucky: !!r.is_lucky, status: r.status, purposes: r.purposes || [], source: r.source, memo: r.memo, created_at: r.created_at, updated_at: r.updated_at };
+  const raw = { id: r.id, species_id: r.species_id, form: r.form, name_kr: r.name_kr, cp: r.cp, atk_iv: r.atk_iv, def_iv: r.def_iv, sta_iv: r.sta_iv, level: r.level, fast_move: r.fast_move, charged_moves: r.charged_moves || [], is_shadow: !!r.is_shadow, is_purified: !!r.is_purified, is_shiny: !!r.is_shiny, is_lucky: !!r.is_lucky, status: r.status, purposes: r.purposes || [], tags: r.tags || [], hp: r.hp ?? null, caught_on: r.caught_on || null, source: r.source, memo: r.memo, created_at: r.created_at, updated_at: r.updated_at };
   const hasIv = ivs.every((v) => Number.isInteger(v));
   return {
     id: r.id, pokemonId: r.species_id, form: r.form || "Normal",
@@ -22,7 +27,7 @@ function toEntry(r) {
     ivPercent: hasIv ? Math.round(((r.atk_iv + r.def_iv + r.sta_iv) / 45) * 100) : null,
     fastMove: r.fast_move || "", chargedMove: (r.charged_moves || [])[0] || "",
     isShiny: !!r.is_shiny, isShadow: !!r.is_shadow, isPurified: !!r.is_purified, isLucky: !!r.is_lucky,
-    status: r.status || "keep", purposes: r.purposes || [], memo: r.memo || "", source: r.source || "web",
+    status: r.status || "keep", purposes: r.purposes || [], tags: r.tags || [], memo: r.memo || "", source: r.source || "web",
     raw,
   };
 }
@@ -74,11 +79,20 @@ export default function Home() {
   const [debugUrls, setDebugUrls] = useState({});
   const [debugError, setDebugError] = useState(null);
   const [usageCount, setUsageCount] = useState(null);
-  const [saveOpts, setSaveOpts] = useState({ open: false, status: "keep", purposes: [], memo: "" });
+  const [saveOpts, setSaveOpts] = useState({ open: false, status: "keep", purposes: [], tags: [], memo: "" });
   const [saving, setSaving] = useState(false);
   const [collError, setCollError] = useState(null);
   const [collStatusFilter, setCollStatusFilter] = useState("all");
   const [collPurposeFilter, setCollPurposeFilter] = useState("all");
+  // 4-A 판정 (저장하지 않고 볼 때마다 서버 계산)
+  const [verdicts, setVerdicts] = useState({}); // id → verdict
+  const [verdictMeta, setVerdictMeta] = useState(null);
+  const [verdictLoading, setVerdictLoading] = useState(false);
+  const [collTierFilter, setCollTierFilter] = useState("all");
+  const [collTagFilter, setCollTagFilter] = useState("all");
+  const [storageMode, setStorageMode] = useState("normal");
+  const [analysisVerdict, setAnalysisVerdict] = useState(null); // 분석 화면 판정 { verdict, meta } | { error }
+  const [inApp, setInApp] = useState(false); // 앱 내 WebView(UA PogoDoctorApp): 코드 발급·앱 코드 로그인·이메일 UI 숨김
   const [editing, setEditing] = useState(null); // { id, status, purposes, memo }
   const [thinking, setThinking] = useState(false); // 첫 텍스트 도착 전(모델 thinking 구간)
   const [pendingReanalyze, setPendingReanalyze] = useState(false);
@@ -172,7 +186,9 @@ export default function Home() {
   const filteredCollection = collection
     .filter((item) =>
       (collStatusFilter === "all" || item.status === collStatusFilter) &&
-      (collPurposeFilter === "all" || (item.purposes || []).includes(collPurposeFilter))
+      (collPurposeFilter === "all" || (item.purposes || []).includes(collPurposeFilter)) &&
+      (collTierFilter === "all" || (verdicts[item.id]?.tier || "none") === collTierFilter) &&
+      (collTagFilter === "all" || (item.tags || []).includes(collTagFilter) || (verdicts[item.id]?.recommendedTags || []).includes(collTagFilter))
     )
     .sort((a, b) => (a.ivPercent === null ? 0 : 1) - (b.ivPercent === null ? 0 : 1) || a.pokemonId - b.pokemonId);
   const ivMissingCount = collection.filter((i) => i.ivPercent === null).length;
@@ -181,10 +197,49 @@ export default function Home() {
   const collectionForAI = () => collection.map((c) => ({ name: c.name, pokemonId: c.pokemonId, cp: c.cp, ivPercent: c.ivPercent, status: c.status, purposes: c.purposes, isShiny: c.isShiny, isShadow: c.isShadow }));
 
   const reloadCollection = async () => {
-    const { rows, error } = await listMyPokemon();
+    const { rows, error, legacy } = await listMyPokemon();
     if (error && error !== "미설정") setCollError(`목록 불러오기 실패: ${error}`);
-    else { setCollError(null); setCollection(rows.map(toEntry)); }
+    else { setCollError(legacy ? "마이그레이션 0004 미적용: 태그·HP 컬럼 없이 동작 중 (Supabase SQL Editor 에서 supabase/migrations/0004_verdict_tags.sql 실행)" : null); setCollection(rows.map(toEntry)); }
   };
+
+  // ─── 4-A 판정: 내 목록 일괄 (POST /api/verdict/batch) ───
+  const loadVerdicts = async (mode = storageMode) => {
+    if (!session) return;
+    setVerdictLoading(true);
+    try {
+      const res = await fetch("/api/verdict/batch", { method: "POST", headers: { "Content-Type": "application/json", ...(await authHeader()) }, body: JSON.stringify({ storageMode: mode }) });
+      const data = await res.json();
+      if (!res.ok) { setCollError(`판정 실패: ${data.error || res.status}`); return; }
+      setVerdicts(data.verdicts || {}); setVerdictMeta({ ...data.meta, ms: data.ms, count: data.count });
+    } catch (e) { setCollError(`판정 요청 오류: ${e.message}`); }
+    finally { setVerdictLoading(false); }
+  };
+  const changeStorageMode = (m) => { setStorageMode(m); try { localStorage.setItem("pogo-storage-mode", m); } catch {} loadVerdicts(m); };
+  useEffect(() => { try { const m = localStorage.getItem("pogo-storage-mode"); if (m && RULES.STORAGE_HOLD_LIMIT[m] !== undefined) setStorageMode(m); } catch {} try { setInApp(/PogoDoctorApp/.test(navigator.userAgent)); } catch {} }, []);
+  useEffect(() => { if (showCollection && session) loadVerdicts(); }, [showCollection, session, collection.length]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // 분석 화면 판정 (POST /api/verdict) — Gemini 는 코멘트만
+  const fetchAnalysisVerdict = async () => {
+    if (!selectedPokemon) { setAnalysisVerdict(null); return; }
+    setAnalysisVerdict({ loading: true });
+    try {
+      const body = { species_id: selectedPokemon.id, form: selectedPokemon.form || "Normal", cp: parseInt(cp) || null, ivs: { atk: atkIv, def: defIv, sta: staIv }, fast_move: fastMove || null, charged_moves: chargedMove ? [chargedMove] : [], is_shadow: isShadow, is_shiny: isShiny, storageMode };
+      const res = await fetch("/api/verdict", { method: "POST", headers: { "Content-Type": "application/json", ...(await authHeader()) }, body: JSON.stringify(body) });
+      const data = await res.json();
+      if (!res.ok) { setAnalysisVerdict({ error: data.error || `HTTP ${res.status}` }); return; }
+      setAnalysisVerdict({ verdict: data.verdict, meta: data.meta });
+      setSaveOpts((o) => ({ ...o, tags: data.verdict.recommendedTags || [], status: data.verdict.tier === "transfer" ? "transfer" : "keep" }));
+    } catch (e) { setAnalysisVerdict({ error: e.message }); }
+  };
+  // 목록 항목: 추천 태그로 저장 (status keep + tags + 파생 purposes)
+  const applyRecommended = async (item) => {
+    const v = verdicts[item.id]; if (!v) return;
+    const tags = v.recommendedTags || [];
+    const { row, error } = await updateMyPokemon(item.id, { status: v.tier === "transfer" ? "transfer" : "keep", tags, purposes: purposesFromTags(tags) });
+    if (error) { setCollError(`저장 실패: ${error}`); return; }
+    setCollection((prev) => prev.map((e) => (e.id === row.id ? toEntry(row) : e)));
+  };
+  const toggleTag = (list, t) => (list.includes(t) ? list.filter((x) => x !== t) : list.length < 8 ? [...list, t] : list);
   const refreshUsage = async () => { const n = await getTodayUsage(usageDate()); if (n !== null) setUsageCount(n); };
 
   // ─── 포켓몬 데이터 로드 ───
@@ -495,6 +550,7 @@ export default function Home() {
     if (!pokemonName.trim()) { setError("포켓몬 이름을 입력해주세요!"); return; }
     if (ivMissing) { setError("개체값 미입력 — 공격/방어/HP 를 입력한 뒤 분석하세요"); return; }
     setLoading(true); setStreaming(true); setError(null); setResult(null); setCurrentKept(false); setUsedModel(""); setFallbackNotice(null);
+    fetchAnalysisVerdict();
 
     const pokemonData = selectedPokemon
       ? { name: selectedPokemon.name, nameKr: selectedPokemon.nameKr, id: selectedPokemon.id, form: selectedPokemon.form, types: selectedPokemon.types, baseAttack: selectedPokemon.baseAttack, baseDefense: selectedPokemon.baseDefense, baseStamina: selectedPokemon.baseStamina, fast: selectedPokemon.fast, charged: selectedPokemon.charged, eliteFast: selectedPokemon.eliteFast, eliteCharged: selectedPokemon.eliteCharged, signatureFast: selectedPokemon.signatureFast, signatureCharged: selectedPokemon.signatureCharged, unverifiedEliteFast: selectedPokemon.unverifiedEliteFast, unverifiedEliteCharged: selectedPokemon.unverifiedEliteCharged, unverifiedFast: selectedPokemon.unverifiedFast, unverifiedCharged: selectedPokemon.unverifiedCharged }
@@ -511,7 +567,7 @@ export default function Home() {
       () => { setLoading(false); setStreaming(false); },
       (err) => { setError(err); setLoading(false); setStreaming(false); }
     );
-  }, [pokemonName, cp, atkIv, defIv, staIv, ivPercent, fastMove, chargedMove, isShiny, isShadow, selectedPokemon, moveNamesKr, collection, ivMissing]);
+  }, [pokemonName, cp, atkIv, defIv, staIv, ivPercent, fastMove, chargedMove, isShiny, isShadow, selectedPokemon, moveNamesKr, collection, ivMissing, storageMode, session]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     if (pendingReanalyze && selectedPokemon) { setPendingReanalyze(false); analyze(); }
@@ -522,7 +578,7 @@ export default function Home() {
     setPokemonName(""); setCp(""); setAtkIv(15); setDefIv(15); setStaIv(15);
     setIvMissing(false); setFallbackNotice(null);
     setFastMove(""); setChargedMove(""); setIsShiny(false); setIsShadow(false);
-    setResult(null); setSelectedPokemon(null); setError(null); setCurrentKept(false); setUsedModel("");
+    setResult(null); setSelectedPokemon(null); setError(null); setCurrentKept(false); setUsedModel(""); setAnalysisVerdict(null);
     setStreaming(false); setLoading(false); setShowCompare(false); setCompareResult(null); setCompareTarget(null);
   };
 
@@ -598,14 +654,14 @@ export default function Home() {
       fast_move: fastMove || null,
       charged_moves: chargedMove ? [chargedMove] : [],
       is_shadow: isShadow, is_shiny: isShiny,
-      status: saveOpts.status, purposes: saveOpts.purposes, memo: saveOpts.memo.trim() || null,
+      status: saveOpts.status, purposes: [...new Set([...saveOpts.purposes, ...purposesFromTags(saveOpts.tags)])], tags: saveOpts.tags, memo: saveOpts.memo.trim() || null,
       source: "web",
     });
     setSaving(false);
     if (error) { setCollError(`저장 실패: ${error}`); return; }
     setCollection((prev) => [...prev, toEntry(row)].sort((a, b) => a.pokemonId - b.pokemonId));
     setCurrentKept(true);
-    setSaveOpts({ open: false, status: "keep", purposes: [], memo: "" });
+    setSaveOpts({ open: false, status: "keep", purposes: [], tags: [], memo: "" });
   };
 
   // 내 목록 JSON 백업 다운로드 (서버 목록 기준, 가져오기는 범위 밖)
@@ -640,7 +696,7 @@ export default function Home() {
     const cpVal = cpRaw === "" ? null : Number(cpRaw);
     if (cpRaw !== "" && (!Number.isInteger(cpVal) || cpVal < 10 || cpVal > 9999)) { setCollError("CP 는 10~9999 정수로 입력하세요"); return; }
     const { row, error } = await updateMyPokemon(editing.id, {
-      status: editing.status, purposes: editing.purposes, memo: editing.memo.trim() || null,
+      status: editing.status, purposes: [...new Set([...editing.purposes, ...purposesFromTags(editing.tags || [])])], tags: editing.tags || [], memo: editing.memo.trim() || null,
       cp: cpVal, atk_iv: anyIv ? ivs[0] : null, def_iv: anyIv ? ivs[1] : null, sta_iv: anyIv ? ivs[2] : null,
       // 기술: 빠른기술 1 + 차징기술 최대 2 (빈 값은 미입력)
       fast_move: editing.fast || null,
@@ -1025,7 +1081,7 @@ export default function Home() {
           <span>{usageCount === null ? (session ? "오늘 AI 사용 —회" : "AI 사용 횟수 기록 안 됨") : `오늘 AI 사용 ${usageCount}회`}{fallbackNotice ? <span style={{ color: "#ffd93d", marginLeft: 8 }}>· {fallbackNotice}</span> : null}</span>
           <span style={{ opacity: 0.7, display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
             {sessionNotice || (session ? (account && !account.anonymous ? `계정 연결됨 · ${account.email}` : "이 기기에 저장됨 · 브라우저 데이터를 지우면 목록이 사라질 수 있음") : "")}
-            {session && EMAIL_LINK_ENABLED && <button onClick={() => { setShowAccount(true); setAcct({ mode: null, email: "", code: "", step: "email", busy: false, error: null, info: null }); }} style={s.linkBtn}>{account && !account.anonymous ? "👤 계정" : "🔗 계정 연결"}</button>}
+            {session && EMAIL_LINK_ENABLED && !inApp && <button onClick={() => { setShowAccount(true); setAcct({ mode: null, email: "", code: "", step: "email", busy: false, error: null, info: null }); }} style={s.linkBtn}>{account && !account.anonymous ? "👤 계정" : "🔗 계정 연결"}</button>}
             {session && <button onClick={openDevices} style={s.linkBtn}>📱 기기 연결</button>}
           </span>
         </div>
@@ -1204,6 +1260,24 @@ export default function Home() {
               ))}
               <div style={{ ...s.ivSumItem, borderRight: "none" }}><span style={{ fontSize: 11, opacity: 0.6 }}>IV</span><span style={{ fontWeight: 700, color: getIvColor() }}>{ivPercent}%</span></div>
             </div>
+            {analysisVerdict && (
+              <div style={{ margin: "12px 20px 0", padding: "10px 12px", borderRadius: 10, background: "rgba(255,255,255,0.03)", border: `1px solid ${TIER_COLORS[analysisVerdict.verdict?.tier] || "#2a3a5c"}55` }}>
+                {analysisVerdict.loading ? <div style={{ fontSize: 12, color: "#8899aa" }}>📌 보관 판정 계산 중…</div>
+                : analysisVerdict.error ? <div style={{ fontSize: 12, color: "#ff6b6b" }}>📌 보관 판정 실패: {analysisVerdict.error}</div>
+                : (() => { const v = analysisVerdict.verdict; return (
+                  <>
+                    <div style={{ fontSize: 13, fontWeight: 700, color: TIER_COLORS[v.tier] || "#e0e0e0" }}>📌 {v.summary}</div>
+                    <div style={{ display: "flex", gap: 4, flexWrap: "wrap", marginTop: 6 }}>
+                      {v.tags.map((t) => <span key={t.name} title={t.reason} style={{ ...s.tagBadge, fontSize: 10, color: TIER_COLORS[t.tier] || "#8899aa", border: `1px solid ${TIER_COLORS[t.tier] || "#2a3a5c"}44` }}>{TIER_LABEL[t.tier]?.slice(0, 2) || "·"} {t.name}</span>)}
+                    </div>
+                    {v.tags.map((t) => <div key={"r" + t.name} style={{ fontSize: 10, color: "#8899aa", marginTop: 3 }}>· {t.name}: {t.reason}</div>)}
+                    {v.event && <div style={{ fontSize: 11, color: "#ffd93d", marginTop: 4 }}>{v.event.note}</div>}
+                    {v.warnings?.length > 0 && <div style={{ fontSize: 10, color: "#ffd93d", marginTop: 4 }}>⚠️ {v.warnings.join(" · ")}</div>}
+                    <div style={{ fontSize: 9, color: "#576574", marginTop: 6 }}>결정적 계산(AI 미사용) · 보관함 {STORAGE_MODE_LABELS[storageMode]} · 내 목록 {analysisVerdict.meta?.myRows ?? 0}마리 비교{analysisVerdict.meta?.authenticated ? "" : " (로그인 없음)"} · 기준값 README "판정 기준"</div>
+                  </>
+                ); })()}
+              </div>
+            )}
             <div style={s.resultContent}>
               {streaming && thinking && <div style={s.thinking}>🧠 박사가 생각 중…</div>}
               {formatResult(result)}
@@ -1238,10 +1312,17 @@ export default function Home() {
                     <button key={k} onClick={() => setSaveOpts((o) => ({ ...o, status: k }))} style={saveOpts.status === k ? s.chipActive : s.chip}>{label}</button>
                   ))}
                 </div>
+                <div style={s.saveRowLabel}>추천 태그 (게임에서 그대로 사용)</div>
+                <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                  {[...new Set([...(analysisVerdict?.verdict?.tags || []).map((t) => t.name), ...saveOpts.tags])].map((t) => (
+                    <button key={t} onClick={() => setSaveOpts((o) => ({ ...o, tags: toggleTag(o.tags, t) }))} style={saveOpts.tags.includes(t) ? s.chipActive : s.chip}>{t}</button>
+                  ))}
+                  {!(analysisVerdict?.verdict?.tags || []).length && !saveOpts.tags.length && <span style={{ fontSize: 11, color: "#576574" }}>추천 태그 없음</span>}
+                </div>
                 <div style={s.saveRowLabel}>용도 (복수 선택)</div>
                 <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
                   {Object.entries(PURPOSE_LABELS).map(([k, label]) => (
-                    <button key={k} onClick={() => setSaveOpts((o) => ({ ...o, purposes: togglePurpose(o.purposes, k) }))} style={saveOpts.purposes.includes(k) ? s.chipActive : s.chip}>{label}</button>
+                    <button key={k} onClick={() => setSaveOpts((o) => ({ ...o, purposes: togglePurpose(o.purposes, k) }))} style={saveOpts.purposes.includes(k) || purposesFromTags(saveOpts.tags).includes(k) ? s.chipActive : s.chip}>{label}</button>
                   ))}
                 </div>
                 <input style={{ ...s.input, marginTop: 8, fontSize: 13 }} placeholder="메모 (선택)" value={saveOpts.memo} onChange={(e) => setSaveOpts((o) => ({ ...o, memo: e.target.value }))} />
@@ -1599,13 +1680,23 @@ export default function Home() {
                 {collection.length > 0 && (
                   <button onClick={exportCollection} style={{ background: "none", border: "1px solid #2a3a5c", borderRadius: 8, color: "#8899aa", fontSize: 11, padding: "4px 8px", cursor: "pointer", fontFamily: "'Outfit',sans-serif" }}>📤 내보내기</button>
                 )}
-                <button style={s.collClose} onClick={() => { setShowCollection(false); setEditing(null); setCollStatusFilter("all"); setCollPurposeFilter("all"); }}>✕</button>
+                <button style={s.collClose} onClick={() => { setShowCollection(false); setEditing(null); setCollStatusFilter("all"); setCollPurposeFilter("all"); setCollTierFilter("all"); setCollTagFilter("all"); }}>✕</button>
               </div>
             </div>
             {sessionNotice && <div style={s.sourceNotice}>{sessionNotice}</div>}
             {collError && <div style={s.error}>{collError}</div>}
 
             {ivMissingCount > 0 && <div style={s.sourceNotice}>개체값 미입력 {ivMissingCount}건이 목록 위쪽에 있습니다 — ✏️ 로 개체값·CP 를 입력하세요</div>}
+            <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap", marginBottom: 10, fontSize: 11, color: "#8899aa" }}>
+              <span>📦 보관함 여유</span>
+              {Object.entries(STORAGE_MODE_LABELS).map(([k, label]) => (
+                <button key={k} onClick={() => changeStorageMode(k)} style={storageMode === k ? s.chipActive : s.chip}>{label}</button>
+              ))}
+              <span style={{ marginLeft: "auto", fontSize: 10, color: "#576574" }}>
+                {verdictLoading ? "판정 계산 중…" : verdictMeta ? `판정 ${verdictMeta.count}건 ${verdictMeta.ms}ms · PvPoke ${verdictMeta.pvpoke?.leagues?.length || 0}/3 리그 · 이벤트 대상 ${verdictMeta.events?.targets ?? 0}` : ""}
+              </span>
+              <button onClick={() => loadVerdicts()} disabled={verdictLoading} style={{ ...s.chip, fontSize: 10 }}>🔄 다시 판정</button>
+            </div>
             {collection.length > 0 && (
               <div style={s.collFilterRow}>
                 {[["all", "전체"], ["keep", "보관"], ["transfer", "보낼 예정"]].map(([k, label]) => (
@@ -1621,6 +1712,21 @@ export default function Home() {
                     <span style={{ fontSize: 10, opacity: 0.5 }}>{k === "all" ? collection.length : collection.filter((i) => (i.purposes || []).includes(k)).length}</span>
                   </button>
                 ))}
+              </div>
+            )}
+            {collection.length > 0 && Object.keys(verdicts).length > 0 && (
+              <div style={s.collFilterRow}>
+                {[["all", "판정 전체"], ...Object.entries(TIER_LABEL)].map(([k, label]) => (
+                  <button key={k} onClick={() => setCollTierFilter(k)} style={collTierFilter === k ? s.collFilterActive : s.collFilterBtn}>
+                    <span style={{ fontSize: 11 }}>{label}</span>
+                    <span style={{ fontSize: 10, opacity: 0.5 }}>{k === "all" ? collection.length : collection.filter((i) => verdicts[i.id]?.tier === k).length}</span>
+                  </button>
+                ))}
+                <span style={{ width: 1, background: "#2a3a5c", margin: "0 2px" }} />
+                <select style={{ ...s.select, fontSize: 11, padding: "6px 28px 6px 8px", width: "auto" }} value={collTagFilter} onChange={(e) => setCollTagFilter(e.target.value)}>
+                  <option value="all">태그 전체</option>
+                  {[...new Set(collection.flatMap((i) => [...(i.tags || []), ...(verdicts[i.id]?.recommendedTags || [])]))].sort().map((t) => <option key={t} value={t}>{t}</option>)}
+                </select>
               </div>
             )}
 
@@ -1649,12 +1755,20 @@ export default function Home() {
                         <div style={{ display: "flex", gap: 4, flexWrap: "wrap", marginTop: 3 }}>
                           <span style={{ ...s.tagBadge, color: item.status === "transfer" ? "#ff6b6b" : "#4ecdc4" }}>{STATUS_LABELS[item.status] || item.status}</span>
                           {(item.purposes || []).map((p) => <span key={p} style={{ ...s.tagBadge, color: "#a890f0" }}>{PURPOSE_LABELS[p] || p}</span>)}
+                          {(item.tags || []).map((t) => <span key={"t" + t} style={{ ...s.tagBadge, color: "#4ecdc4", border: "1px solid rgba(78,205,196,0.3)" }}>🏷 {t}</span>)}
                           {item.source === "import" && <span style={{ ...s.tagBadge, color: "#8899aa" }}>가져옴</span>}
                           {item.memo && <span style={{ ...s.tagBadge, color: "#ffd93d" }}>📝 {item.memo}</span>}
                         </div>
+                        {verdicts[item.id] && (() => { const v = verdicts[item.id]; const sameTags = JSON.stringify([...(item.tags || [])].sort()) === JSON.stringify([...(v.recommendedTags || [])].sort()) && (item.status === "transfer") === (v.tier === "transfer"); return (
+                          <div style={{ marginTop: 4 }}>
+                            <div style={{ fontSize: 11, color: TIER_COLORS[v.tier] || "#8899aa", whiteSpace: "pre-wrap" }} title={(v.tags || []).map((t) => `${t.name}: ${t.reason}`).join("\n")}>{v.summary}</div>
+                            {v.event && <div style={{ fontSize: 10, color: "#ffd93d" }}>{v.event.note}</div>}
+                            {!sameTags && <button onClick={() => applyRecommended(item)} style={{ ...s.chip, fontSize: 10, marginTop: 3, padding: "3px 8px" }}>{v.tier === "transfer" ? "박사행으로 표시" : `추천 태그로 저장 (${(v.recommendedTags || []).join(", ") || "태그 없음"})`}</button>}
+                          </div>
+                        ); })()}
                       </div>
                       <button style={s.collIconBtn} title="다시 분석" onClick={() => reanalyzeEntry(item)}>🔄</button>
-                      <button style={s.collIconBtn} title="수정" onClick={() => setEditing(editing?.id === item.id ? null : { id: item.id, status: item.status, purposes: item.purposes || [], memo: item.memo || "", cp: item.cp || "", atk: Number.isInteger(item.atkIv) ? item.atkIv : "", def: Number.isInteger(item.defIv) ? item.defIv : "", sta: Number.isInteger(item.staIv) ? item.staIv : "", fast: item.raw.fast_move || "", charged: [item.raw.charged_moves?.[0] || "", item.raw.charged_moves?.[1] || ""] })}>✏️</button>
+                      <button style={s.collIconBtn} title="수정" onClick={() => setEditing(editing?.id === item.id ? null : { id: item.id, status: item.status, purposes: item.purposes || [], tags: item.tags || [], memo: item.memo || "", cp: item.cp || "", atk: Number.isInteger(item.atkIv) ? item.atkIv : "", def: Number.isInteger(item.defIv) ? item.defIv : "", sta: Number.isInteger(item.staIv) ? item.staIv : "", fast: item.raw.fast_move || "", charged: [item.raw.charged_moves?.[0] || "", item.raw.charged_moves?.[1] || ""] })}>✏️</button>
                       <button style={s.collRemove} onClick={() => removeFromCollection(item.id)}>🗑</button>
                     </div>
                     {editing?.id === item.id && (
@@ -1667,6 +1781,12 @@ export default function Home() {
                         <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
                           {Object.entries(PURPOSE_LABELS).map(([k, label]) => (
                             <button key={k} onClick={() => setEditing((e) => ({ ...e, purposes: togglePurpose(e.purposes, k) }))} style={editing.purposes.includes(k) ? s.chipActive : s.chip}>{label}</button>
+                          ))}
+                        </div>
+                        <div style={{ ...s.saveRowLabel, margin: "8px 0 4px" }}>태그</div>
+                        <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                          {[...new Set([...(verdicts[item.id]?.tags || []).map((t) => t.name), ...(editing.tags || [])])].map((t) => (
+                            <button key={t} onClick={() => setEditing((e) => ({ ...e, tags: toggleTag(e.tags || [], t) }))} style={(editing.tags || []).includes(t) ? s.chipActive : s.chip}>{t}</button>
                           ))}
                         </div>
                         <div style={{ display: "flex", gap: 6, marginTop: 8 }}>
@@ -1726,7 +1846,9 @@ export default function Home() {
               </div>
             </div>
             {devError && <div style={{ ...s.error, marginTop: 12 }}>{devError}</div>}
-            {pairCode ? (
+            {inApp ? (
+              <div style={{ ...s.collNote, marginTop: 12, marginBottom: 0 }}>앱 안에서 열린 화면입니다 — 이 기기는 이미 연결되어 있어 코드 발급이 필요 없습니다. 다른 기기(PC 브라우저)는 앱 첫 화면의 "웹 로그인 코드"로 로그인하세요.</div>
+            ) : pairCode ? (
               <div style={{ ...s.collAnalysis, marginTop: 12, textAlign: "center" }}>
                 <div style={{ fontSize: 11, color: "#8899aa" }}>연결 코드 (앱에 입력)</div>
                 <div style={{ fontSize: 30, fontWeight: 800, letterSpacing: 6, color: "#4ecdc4", margin: "6px 0", fontVariantNumeric: "tabular-nums" }}>{pairCode.code.slice(0, 4)} {pairCode.code.slice(4)}</div>
@@ -1749,6 +1871,7 @@ export default function Home() {
             ))}
             {devices.some((d) => d.revoked_at) && <div style={{ fontSize: 10, color: "#576574", marginTop: 6 }}>해제된 기기 {devices.filter((d) => d.revoked_at).length}대 (숨김)</div>}
 
+            {!inApp && <>
             <div style={{ ...s.saveRowLabel, marginTop: 18 }}>🔑 앱 코드로 로그인 (계정 복구)</div>
             <div style={{ fontSize: 11, color: "#8899aa", lineHeight: 1.6 }}>이 브라우저의 세션을 잃었을 때(브라우저 종료·시크릿 창 등) 앱 → "웹 로그인 코드" 로 받은 8자리 코드를 입력하면 앱이 연결된 계정으로 돌아옵니다.{account?.appLinked ? " 현재 이 브라우저는 앱 연결 계정입니다." : ""}</div>
             {appLoginInfo && <div style={{ ...s.collNote, marginTop: 8 }}>{appLoginInfo}</div>}
@@ -1764,6 +1887,7 @@ export default function Home() {
               </div>
             )}
             {collection.length > 0 && !appMerge && <div style={{ fontSize: 10, color: "#ffd93d", marginTop: 6 }}>이 브라우저의 목록 {collection.length}건은 로그인 후 합칠지 물어봅니다</div>}
+            </>}
 
             <div style={{ ...s.saveRowLabel, marginTop: 18 }}>🐞 디버그 캡처</div>
             <div style={{ fontSize: 11, color: "#8899aa" }}>앱 디버그 모드에서 올린 캡처(상태바 가림)·OCR 원문·판독값. 7일 후 자동 삭제.</div>

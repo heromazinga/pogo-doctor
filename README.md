@@ -212,6 +212,54 @@ Vercel 에서는 환경변수 `POGO_DISABLE_SOURCES` 를 Preview 환경에 잠�
 - 미사용 웹 코드는 발급 시 지우지 않는다(PC 용으로 받은 코드가 앱 웹 화면 열기로 무효화되지 않도록). 발급 제한 IP 당 10분 30회.
 - PC 브라우저는 계속 사용 가능(앱 → 웹 로그인 코드). "홈 화면에 추가" 는 앱 화면에 안내만.
 
+## 4-A: 용도별 보관 판정 (결정적 계산 · `POST /api/verdict`)
+
+### 사용자가 해야 하는 설정
+- Supabase SQL Editor 에서 `supabase/migrations/0004_verdict_tags.sql` 실행 (멱등): `my_pokemon.tags text[]`, `hp integer`, `caught_on date`. 미적용 상태에서는 웹이 구 컬럼으로 동작하며 목록 상단에 안내가 뜬다(태그 저장 불가).
+
+### 판정 기준 (`app/lib/verdictRules.js` 와 동일하게 유지)
+| 추천 태그 | 종족 조건 (자동 산출, 손목록 없음) | 개체 조건 → ✅ 주력 / 🟡 보류 |
+|---|---|---|
+| `{타입} 레이드` | 18 타입별 출시 종의 레이드 점수 순위(`app/lib/speciesRankings.js`: L40·15/15/15, 그 타입 빠른+차징 기술만, 중립 보스 250/200/220 L40 상대 DPS^0.775×TDO^0.225). **≤12위** 상위종, 13~30위 중위종. 섀도 별도 순위(공격×1.2·방어×0.833), 메가 제외 | 내 목록 같은 종·같은 섀도 여부 안에서 공격 IV(동률 시 레벨) 순위. 상위종 & ≤6위 → 주력, 그 외 → 보류. 캡처 기술로 계산해 종 최적 기술(전용기·레거시)이 없으면 "특수 기술머신 필요", 기술 미입력이면 "기술 확인 필요(최적 기술 가정)" |
+| `체육관 방어` | 전설·환상·UB 제외, (방어+15)×(HP+15) 내구 순위 ≤20 | 같은 종 내 방어+HP IV(동률 시 레벨) 상위 2 → 주력, 그 외 보류 |
+| `슈퍼리그` / `하이퍼리그` | PvPoke `rankings/all/overall/rankings-1500.json`·`-2500.json` ≤100위 상위종, 101~200 중위종 (섀도는 `_shadow` id) | CP 상한(1500/2500) 내 최고 레벨(상한 L50)의 스탯곱 순위(4096 중). 상위종 & ≤100 → 주력, 상위종 ≤500 또는 중위종 ≤100 → 보류. 현재 CP 가 상한 초과면 불가 |
+| `마스터리그` | `rankings-10000.json` ≤50위 | 개체값 % ≥96 → 주력, 91~95 → 보류 |
+| `진화 대기(→최종형)` | 진화 계열 최종형(분기는 각각) 기준으로 위 태그 평가 | 최종형 기준 주력/보류이면 부여. 사탕 수를 넘기면 "진화 가능(사탕 x/y)" |
+
+- **단계**: 태그 중 최고 단계가 전체 단계(주력 > 보류 > 박사행). 개체값 후보가 여러 개면 모든 후보에서 같을 때만 확정, 아니면 `need_appraisal`(❔ 평가 화면 캡처 필요).
+- **보관함 여유**(웹 목록·앱 설정, 기본 보통): 여유=보류 모두 보관 / 보통=같은 종·같은 태그 2마리까지(초과분 박사행 권장) / 빠듯=주력만.
+- **💎 수집 추천**: 이로치, 반짝반짝(럭키), 100%, 0/0/0, 전설·환상·UB(용도 없으면 보류로 상향 + "교환용"), 섀도·정화 전설.
+- **📅 이벤트 연동**: ScrapedDuck `events.min.json` 의 `community-day`(extraData.communityday.spawns[].name 또는 이름 "X Community Day") · `pokemon-spotlight-hour`("X Spotlight Hour") 중 30일 이내 시작·미종료 이벤트의 대상 종(진화 계열 포함)이면 박사행 → 보류 상향.
+- **교환 시 반짝반짝 확률 기준 연도**: 비활성(`LUCKY_TRADE_YEAR: null`). 공식 근거(niantic.helpshift.com, pokemongo.com/pokemongolive.com)가 이 환경에서 차단(curl 000 / EGRESS_BLOCKED)되어 확인 불가. 확인되면 상수만 채우면 된다.
+
+### 데이터 출처·갱신
+| 데이터 | URL | 갱신 |
+|---|---|---|
+| 종족값·기술·진화·클래스 | 기존 교차검증 데이터셋(`/api/pokemon-data`, pokemon-go-api / PokeMiners / pvpoke) | 6시간 |
+| 리그 순위 | `https://raw.githubusercontent.com/pvpoke/pvpoke/master/src/data/rankings/all/overall/rankings-{1500,2500,10000}.json` | 6시간, 장애 시 이전 캐시·해당 태그 "데이터 없음" 경고 |
+| 이벤트 | `https://raw.githubusercontent.com/bigfoott/ScrapedDuck/data/events.min.json` | 6시간 |
+| 종족 순위 | 데이터셋 `generatedAt` 별 메모(서버 프로세스 내) | 데이터셋 갱신 시 |
+
+### API
+- `POST /api/verdict` — 입력 `{species_id, form, ivs|ivCandidates[]|cp(+hp), level|levelRange, fast_move, charged_moves[], is_shadow, is_purified, is_shiny, is_lucky, candy?, storageMode?}` → `{verdict: {tier, tags:[{name,tier,reason,metrics}], collect:[{reason}], event?, confident, basis:"server", summary, recommendedTags, purposes, warnings, disabled}, meta}`. 인증 선택(웹 세션 JWT 또는 기기 토큰): 인증되면 내 목록과 개체 비교. IP 당 분당 240회.
+- `POST /api/verdict/batch` — 인증 필수, 내 목록 전체(≤500) 판정 `{verdicts: {id: verdict}}`. 분당 30회.
+- `GET /api/verdict` — 기준값·태그 문자열.
+
+### 화면
+- 웹 분석 결과 상단 "📌 보관 판정"(Gemini 는 코멘트만). 저장 시 추천 태그 선택 → `tags` + 파생 `purposes`. 내 목록: 항목마다 판정·추천 태그, 판정 단계·태그 필터, "추천 태그로 저장", 보관함 여유 설정(로컬 저장).
+- 앱 결과 화면: 서버 판정 요약·태그·사유·💎, 버튼 [보관(추천 태그 n)] [박사행] [닫기]. 오프라인이면 기기 내 "간이 판정(오프라인)" 표시. 앱 내 웹(UA `PogoDoctorApp`)에서는 연결 코드 발급·앱 코드 로그인·이메일 UI 를 숨기고 기기 목록·해제만 남긴다.
+
+### 앱 막대 판독 보정 (사용자 디버그 캡처 16장 근거, `android/core/BarReader.kt`·`ScreenParser.kt`)
+- 막대 위치: OCR 라벨(공격/방어/HP) 박스 기준, 라벨이 없으면 비율 위치(y 0.719H/0.760H/0.801H, x 0.119W~0.464W)로 대체. 둘 다 있고 값이 다르면 라벨 값 채택 + 디버그 표기.
+- 색: 채움 주황 ≈(238,167,78), 가득(15) 빨강 ≈(218,127,126), 빈칸 회색 ≈(226,226,224). 패널 테두리 분홍(232,182,181)·구간 사이 흰 틈은 제외. 값 = round(채움 비율×15). 단위 테스트 9건(마기라스 15/15/14 L31 등) 고정.
+- 화면 분류: "공격"+"방어"+"HP" 라벨이 함께 있으면 평가 화면(강화 비용 파싱 안 함). OCR 정규화: CP 의 c/C, 숫자 속 O→0, 자릿수 비정상(<100)이면 CP null + "잘림 의심". CP 없이도 막대 IV + HP 로 레벨 후보 산출.
+- 종 보정: 이름 유사 상위 후보 중 CP/HP(·막대)와 성립하는 종만 남기고, 여러 종이면 결과 화면에서 선택.
+- 디버그 업로드(4-D): 고정 영역 가림 폐지. 상태바(상단 6%) + 포획 장소·날짜 줄("…에서 잡았다", 날짜)의 OCR 박스만 가리고 그 텍스트는 업로드에서 제외. 포획 날짜만 기기에서 읽어 `caught_on` 으로 저장(장소 저장 없음).
+
+### 테스트
+- `npm test` — `tests/verdict.test.mjs`(합성 데이터셋 + 주입 순위: 에이스번 주력, 마릴리 0/15/15 슈퍼리그 주력, 약한 종 박사행+💎, 전설 보류+교환용, 진화 대기, need_appraisal, 보관함 3단계, 이벤트 상향·매칭 근거, 캡처 9건 CP/HP↔막대 일치).
+- `cd android && gradle :core:test` — `Phase4aTest`(막대 색·라벨/비율 판독 9건, 화면 분류, OCR 정규화, CP 없는 후보, 종 보정, 포획 줄 판별).
+
 ## 3-1c: 앱 → 웹 로그인 코드 · 평가/상세 병합 · 막대 재보정 · 디버그 캡처 업로드 · 강화 비용
 
 ### 사용자가 해야 하는 설정

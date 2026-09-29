@@ -101,6 +101,7 @@ class MainActivity : ComponentActivity() {
         var deviceName by remember { mutableStateOf(prefs.deviceName) }
         var debug by remember { mutableStateOf(prefs.debugMode) }
         var delayMs by remember { mutableStateOf(prefs.captureDelayMs.toString()) }
+        var storageMode by remember { mutableStateOf(prefs.storageMode) }
         var webCode by remember { mutableStateOf("") }
         var busy by remember { mutableStateOf(false) }
         var log by remember { mutableStateOf("") }
@@ -182,8 +183,14 @@ class MainActivity : ComponentActivity() {
                         OutlinedTextField(value = delayMs, onValueChange = { delayMs = it.filter { ch -> ch.isDigit() } }, label = { Text("타일 캡처 지연(ms, 100~5000)") }, modifier = Modifier.weight(1f))
                         OutlinedButton(modifier = Modifier.padding(top = 8.dp), onClick = { prefs.captureDelayMs = delayMs.toIntOrNull() ?: 800; delayMs = prefs.captureDelayMs.toString(); status = "캡처 지연 ${prefs.captureDelayMs}ms 저장" }) { Text("저장") }
                     }
+                    Text("📦 보관함 여유 (판정에서 🟡 보류 처리): 여유=모두 보관 · 보통=같은 종·태그 2마리까지 · 빠듯=주력만", fontSize = 12.sp, color = Color(0xFF8899AA))
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Text("디버그 모드 (인식 텍스트·결과를 기기에 기록 + 캡처를 서버에 업로드, 7일 보관)", fontSize = 13.sp, modifier = Modifier.padding(top = 12.dp))
+                        for ((k, label) in listOf("relaxed" to "여유", "normal" to "보통", "tight" to "빠듯")) {
+                            if (storageMode == k) Button(onClick = { }) { Text(label) } else OutlinedButton(onClick = { prefs.storageMode = k; storageMode = k; status = "보관함 여유: $label" }) { Text(label) }
+                        }
+                    }
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Text("디버그 모드 (인식 텍스트·결과를 기기에 기록 + 캡처를 서버에 업로드(포획 장소 줄 가림), 7일 보관)", fontSize = 13.sp, modifier = Modifier.padding(top = 12.dp))
                         Switch(checked = debug, onCheckedChange = { debug = it; prefs.debugMode = it })
                     }
                     if (debug) {

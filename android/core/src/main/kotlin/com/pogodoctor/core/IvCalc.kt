@@ -40,6 +40,21 @@ object IvCalc {
         return out
     }
 
+    // CP 가 가려진 경우: 막대 개체값(공/방/HP 확정) + HP 로 레벨 후보를 만든다. 막대가 하나라도 없으면 빈 목록
+    fun candidatesWithoutCp(base: Base, hp: Int?, bars: Appraisal?, maxLevel: Double = Cpm.MAX_LEVEL): List<Candidate> {
+        val a = bars?.atk ?: return emptyList(); val d = bars.def ?: return emptyList(); val s = bars.sta ?: return emptyList()
+        return Cpm.levels().filter { it <= maxLevel && (hp == null || Cpm.hp(base.sta, s, it) == hp) }.map { Candidate(it, a, d, s) }
+    }
+
+    // 종 후보가 CP/HP(및 막대)와 성립하는지: 후보가 하나라도 있으면 true
+    fun consistent(base: Base, cp: Int?, hp: Int?, bars: Appraisal?): Boolean {
+        if (cp == null) return true
+        val all = candidates(base, cp, hp)
+        if (all.isEmpty()) return false
+        if (bars == null || (bars.atk == null && bars.def == null && bars.sta == null)) return true
+        return filterByAppraisal(all, bars.atk, bars.def, bars.sta).isNotEmpty()
+    }
+
     fun summarize(cands: List<Candidate>): Summary {
         if (cands.isEmpty()) return Summary(cands, null, null, null, null, null)
         fun r(f: (Candidate) -> Int) = cands.minOf(f)..cands.maxOf(f)

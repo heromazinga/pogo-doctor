@@ -36,6 +36,11 @@ class Prefs(ctx: Context) {
         get() = plain.getInt("capture_delay_ms", 800).coerceIn(100, 5000)
         set(v) = plain.edit().putInt("capture_delay_ms", v.coerceIn(100, 5000)).apply()
 
+    // 4-A 보관함 여유: relaxed(여유) | normal(보통) | tight(빠듯). 판정 API 에 전달
+    var storageMode: String
+        get() = plain.getString("storage_mode", "normal")!!.takeIf { it in listOf("relaxed", "normal", "tight") } ?: "normal"
+        set(v) = plain.edit().putString("storage_mode", v).apply()
+
     var debugMode: Boolean
         get() = plain.getBoolean("debug", false)
         set(v) = plain.edit().putBoolean("debug", v).apply()

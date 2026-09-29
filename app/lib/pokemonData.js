@@ -212,12 +212,28 @@ function parsePokemonGoApi(json) {
       types: [normType(p.primaryType), normType(p.secondaryType)].filter(Boolean),
       fast, charged, eliteFast, eliteCharged,
       hasMoves: fast.length + charged.length > 0,
+      // 4-A: 전설/환상/UB 구분, 진화 목록(이름 → 아래에서 도감번호로 해석)
+      pokemonClass: p.pokemonClass ? String(p.pokemonClass).replace("POKEMON_CLASS_", "").toLowerCase() : null, // legendary | mythic | ultra_beast
+      evolutionsRaw: asList(p.evolutions).map((e) => ({ name: e.id, formId: e.formId, candies: e.candies ?? null })).filter((e) => e.name),
+      pgaId: p.id,
     });
   };
 
   for (const p of json) {
     addEntry(p);
     for (const rf of asList(p.regionForms)) addEntry(rf);
+  }
+  // 진화 이름(예: "CHARMELEON") → {id, form}. 지역 폼 진화는 formId 접미사로 폼 결정
+  const byPgaId = new Map();
+  for (const r of records.values()) if (r.pgaId && !byPgaId.has(r.pgaId)) byPgaId.set(r.pgaId, r);
+  for (const r of records.values()) {
+    r.evolutions = (r.evolutionsRaw || []).map((e) => {
+      const target = byPgaId.get(e.name);
+      if (!target) return null;
+      const form = formFromSuffix(e.formId || e.name, e.name) || target.form || "Normal";
+      return { id: target.id, form, candies: e.candies };
+    }).filter(Boolean);
+    delete r.evolutionsRaw;
   }
   return { records, moveNames, moveKinds };
 }
@@ -271,6 +287,7 @@ function parsePvpoke(json) {
       fast, charged, eliteFast, eliteCharged,
       hasMoves: fastAll.length + chargedAll.length > 0,
       released: typeof p.released === "boolean" ? p.released : null, // PvPoke 출시 여부
+      pvpokeId: p.speciesId, // PvPoke 랭킹 파일의 speciesId (4-A 리그 순위 매칭)
     });
   }
   return { records, moveNames, moveKinds, moveStats };
@@ -721,6 +738,10 @@ function crossValidate(loaded /* {sourceKey: {meta, parsed}} */) {
       // 출시 여부: PvPoke released 가 있으면 그 값. 없으면 기술이 자리표시(Splash/Struggle)뿐인 경우만 false, 그 외 null(출시 미확인)
       released: releasedRec ? releasedRec.rec.released : (isPlaceholderOnly(fastM, chM) ? false : null),
       sources: recs.map((x) => x.src),
+      // 4-A: 전설/환상 구분(pokemon-go-api), 진화 목록, PvPoke speciesId
+      pokemonClass: recs.find((x) => x.rec.pokemonClass)?.rec.pokemonClass || null,
+      evolutions: recs.find((x) => Array.isArray(x.rec.evolutions) && x.rec.evolutions.length)?.rec.evolutions || [],
+      pvpokeId: recs.find((x) => x.rec.pvpokeId)?.rec.pvpokeId || null,
     });
   }
   counts.stat = statDisputes;

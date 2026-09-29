@@ -3,7 +3,7 @@
 // publishable key 만 사용. 비밀값 없음.
 import { getSupabase } from "./supabaseClient";
 
-const COLUMNS = "id,species_id,form,name_kr,cp,atk_iv,def_iv,sta_iv,level,fast_move,charged_moves,is_shadow,is_purified,is_shiny,is_lucky,status,purposes,source,memo";
+const COLUMNS = "id,species_id,form,name_kr,cp,atk_iv,def_iv,sta_iv,level,fast_move,charged_moves,is_shadow,is_purified,is_shiny,is_lucky,status,purposes,tags,hp,caught_on,source,memo";
 
 // 현재 계정 상태
 export async function getAccountState() {
