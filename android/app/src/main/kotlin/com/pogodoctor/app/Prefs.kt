@@ -49,6 +49,10 @@ class Prefs(ctx: Context) {
     var scanStableMs: Int
         get() = plain.getInt("scan_stable_ms", 400).coerceIn(200, 3000)
         set(v) = plain.edit().putInt("scan_stable_ms", v.coerceIn(200, 3000)).apply()
+    // 디버그 모드 세션당 실패·대기 프레임 업로드 상한 (4-B4: 이번 테스트 기본 50, 검증 후 20 으로 복귀 예정)
+    var scanDebugMax: Int
+        get() = plain.getInt("scan_debug_max", 50).coerceIn(0, 200)
+        set(v) = plain.edit().putInt("scan_debug_max", v.coerceIn(0, 200)).apply()
     var scanVibrate: Boolean
         get() = plain.getBoolean("scan_vibrate", true)
         set(v) = plain.edit().putBoolean("scan_vibrate", v).apply()

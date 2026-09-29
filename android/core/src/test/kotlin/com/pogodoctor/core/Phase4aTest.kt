@@ -64,7 +64,7 @@ class Phase4aTest {
             val src = screen(c.atk, c.def, c.sta)
             val r = BarReader.readAppraisal(src, W, H, labels)
             assertEquals(Appraisal(c.atk, c.def, c.sta), r.appraisal, "${c.name} 라벨 기준: ${r.detail}")
-            assertFalse(r.fromRatio)
+            assertFalse(r.mismatch, "라벨 y 판독과 비율 판독이 일치 (4-B4: 비율이 기본값)")
         }
     }
 
