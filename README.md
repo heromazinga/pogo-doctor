@@ -212,6 +212,17 @@ Vercel 에서는 환경변수 `POGO_DISABLE_SOURCES` 를 Preview 환경에 잠�
 - 미사용 웹 코드는 발급 시 지우지 않는다(PC 용으로 받은 코드가 앱 웹 화면 열기로 무효화되지 않도록). 발급 제한 IP 당 10분 30회.
 - PC 브라우저는 계속 사용 가능(앱 → 웹 로그인 코드). "홈 화면에 추가" 는 앱 화면에 안내만.
 
+## 4-D: 전체 스캔(470마리) 실DB 결과 반영 — 조회 상한 제거 · 신뢰 기록 우선 · 리그 후보 축소 · 진화 후보 단일 태그 · 스캔 모드
+
+실측(세션 20260929-2152-7818): 새 기록 478(superseded 11, 활성 467 ≈ 보유 470), 판독 741, mismatch 3, noCp 114, noSpecies 6. 활성 전체 518 = 새 467 + 수정 전 앱 기록 51.
+
+1. **[치명] 조회 상한 300 제거**: `/api/scan`·`/api/cleanup`·`/api/verdict/stats`·기기 조회가 `limit(300)` 으로 활성 518건 중 300건만 써서 population 303 → 예상 수·보호 판단 오류. `app/lib/scanQuery.js fetchActiveScanItems`(range 페이지네이션, 1000건씩, 상한 3000, 응답 `truncated`). 테스트 `tests/scanQuery.test.mjs`(518건 3페이지, 3000 상한, 오류).
+2. **이전 기록 정리**: 마이그레이션 **0011**(`scan_items.app_version`, `is_purified`, `dismissed_reason`). 앱이 `app_version` 을 보내고(`BuildConfig.VERSION_NAME`), **≥0.1.38 = 신뢰 기록**(`app/lib/appVersion.js`, 라벨행 채택 폐지 이후). 같은 종·CP·HP(개체값 다름) 또는 같은 종·개체값 충돌 시 신뢰 기록이 미신뢰(구 앱) 기록을 superseded 로 대체(insert 시 `/api/device/scan`, 백필 `planConflicts.supersede`·`planSupersede ②'`). 신뢰 기록끼리 갈릴 때만 둘 다 재확인. 신뢰 기록은 오판독 의심 휴리스틱 대상 아님. 웹 스캔 기록 패널 **[이 세션 이전 기록 모두 숨김]**(최신 세션의 첫 기록보다 오래된 활성 기록 → `dismissed=true, dismissed_reason='before_session'`, 확인창) + **[숨김 복구]**(`restore_dismissed`).
+3. **리그 후보(D) 축소**: 조건 = 그 리그 PvPoke 순위 ≤300(`LEAGUE_CANDIDATE_SPECIES_RANK`) AND 스탯곱 ≤41 AND **상한 도달**(상한 레벨 < 50 AND 상한 레벨 CP ≥ 상한×0.97, `LEAGUE_CAP_REACH_PCT`). 일반 리그 보류도 상한 미도달 개체는 제외(주력 조건은 그대로). 약한 종(도치마론 1080위·롱스톤 906위)은 L50 에도 상한 미도달이라 고개체가 스탯곱 1위였던 문제 해소. 회귀 테스트: 찌르꼬 0/15/14(찌르호크 하이퍼 L36 CP2497) 유지, 도치마론 15/15/12 제외, PvPoke 301위 제외.
+4. **진화 후보 태그 단일화**: `TAG.evolve()` = "진화 후보" 하나(카테고리 50개+ 방지). 진화형·사탕은 사유("→찌르호크 기준: … · 사탕 125개 필요"), `metrics.finalKr`. 최종형이 여럿(이브이)이면 등급 → 사탕 순 하나만 태그로, 나머지는 "(다른 진화형 n: …)"·`metrics.alternatives`. 같은 이름 태그가 여러 개 생겨 need_appraisal 이 되는 것 방지.
+5. **스캔 모드**(앱, **새 APK 필요**): 연속 스캔 시작 전 일반/섀도/정화 선택(`Prefs.scanMode`, 앱 화면 버튼, 타일·알림 시작에도 적용). 세션 동안 고정, 알림 제목·안내 줄에 표시. 섀도 모드는 `is_shadow=true` 로 기록(섀도 판정·중복 키), 정화 모드는 `is_purified=true`. 사용자는 게임 검색("섀도"/"정화")으로 먼저 거른 뒤 스캔 — 한국어판 검색어 동작은 사용자 확인 후. 이로치·배경·XXL 은 박사행 보호 조건으로 충분(모드 없음), 코스튬은 사용자 태그.
+- `RULES_VERSION` 2026-09-30.1 → 판정 재계산·백필 재실행.
+
 ## 4-C.4: 실DB 검증(136건) 반영 — 라벨행 값 채택 경로 폐지(막대 절반 판독 원인), 과거 기록 의심 표시, 찌르꼬 진화 후보
 
 ### 1. 방어·HP 막대 절반 판독(충돌 30건) — 원인 코드 경로

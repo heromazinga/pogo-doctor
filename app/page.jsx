@@ -278,6 +278,8 @@ export default function Home() {
         setSaveNotice(`스캔 ${(data.results || []).length - err}건 저장 (기존 항목 갱신 ${upd}건${err ? `, 실패 ${err}건` : ""})`);
         await reloadCollection();
       }
+      if (action === "dismiss_before") setSaveNotice(`이전 기록 ${data.count ?? 0}건 숨김 (${fmtStamp(data.before)} 이전)`);
+      if (action === "restore_dismissed") setSaveNotice(`숨긴 기록 ${data.count ?? 0}건 복구`);
       await loadScans();
     } catch (e) { setScanError(e.message); } finally { setScanBusy(false); }
   };
@@ -2004,6 +2006,9 @@ export default function Home() {
                 <button onClick={() => scanAction("save", scans.map((x) => x.id))} disabled={scanBusy} style={{ ...s.keepBtn, width: "auto", padding: "8px 12px" }}>✅ 추천대로 전부 저장 ({scans.length})</button>
                 <button onClick={() => scanAction("save", scans.filter((x) => x.verdict?.tier !== "transfer").map((x) => x.id))} disabled={scanBusy} style={{ ...s.chip, fontSize: 11 }}>보관 추천만 저장 ({scans.filter((x) => x.verdict?.tier !== "transfer").length})</button>
                 <button onClick={() => { if (window.confirm("스캔 기록을 모두 지웁니다 (내 목록은 그대로). 계속할까요?")) scanAction("clear", []); }} disabled={scanBusy} style={{ ...s.chip, fontSize: 11, color: "#ff6b6b" }}>전부 지우기</button>
+                {/* 4-D: 전체 스캔 세션 이전 기록 숨김(복구 가능) — 최신 세션 기준 */}
+                <button onClick={() => { const sid = scans[0]?.session_id; if (!sid) return; if (window.confirm(`세션 ${sid} 의 첫 기록보다 오래된 스캔 기록을 모두 숨깁니다(내 목록은 그대로, "숨김 복구" 로 되돌릴 수 있음). 계속할까요?`)) scanAction("dismiss_before", [], { session_id: sid }); }} disabled={scanBusy} style={{ ...s.chip, fontSize: 11, color: "#ffd93d" }}>이 세션 이전 기록 모두 숨김</button>
+                <button onClick={() => scanAction("restore_dismissed", [])} disabled={scanBusy} style={{ ...s.chip, fontSize: 11, color: "#8899aa" }}>숨김 복구</button>
               </div>
             )}
             {scanSessions.length > 0 && (

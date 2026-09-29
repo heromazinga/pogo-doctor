@@ -63,6 +63,9 @@ await check("0009 storage_mode 잘못된 값 거부", `update public.user_settin
 await check("0009 scan_backfill_version 저장", `update public.user_settings set scan_backfill_version = '2026-09-29.4' where user_id = '${UID}'`, true);
 // 0010 recheck_reason
 await check("0010 recheck_reason 저장", `update public.scan_items set recheck = true, recheck_reason = '같은 CP·HP 다른 개체값 — 재스캔 필요' where session_id = 's3'`, true);
+// 0011 app_version / is_purified / dismissed_reason
+await check("0011 app_version·is_purified 저장", `insert into public.scan_items(user_id,session_id,scan_key,species_id,name_kr,app_version,is_purified) values ('${UID}','s4','k4',396,'찌르꼬','0.1.38',true)`, true);
+await check("0011 dismissed_reason 저장", `update public.scan_items set dismissed = true, dismissed_reason = 'before_session' where session_id = 's4'`, true);
 const idx = await db.query(`select indexname from pg_indexes where tablename='my_pokemon' and indexname like '%tags%'`);
 console.log("tags index:", idx.rows.map((r) => r.indexname).join(", ") || "없음");
 console.log(failed ? `FAILED ${failed}` : "ALL OK");

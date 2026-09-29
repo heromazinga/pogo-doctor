@@ -48,6 +48,9 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
+// 4-D 스캔 모드 표시명
+private fun scanModeLabel(m: String) = when (m) { "shadow" -> "섀도"; "purified" -> "정화"; else -> "일반" }
+
 // 설정 화면: 기기 연결(코드 입력), 서버 주소, 오버레이·캡처 시작/중지, 데이터 갱신, 디버그 로그
 class MainActivity : ComponentActivity() {
     private lateinit var prefs: Prefs
@@ -171,7 +174,15 @@ class MainActivity : ComponentActivity() {
                     Text(if (scanning) "📷 연속 스캔 중" else "📷 연속 스캔 (4-B)", fontSize = 16.sp)
                     Text("포켓몬GO 평가 화면(막대 3개)을 켜 둔 채 좌우로 넘기기만 하면 자동으로 읽어 서버 \"스캔 기록\" 에 남깁니다(자동 저장 없음 — 웹 내 목록 → 📷 스캔 기록에서 검토 후 저장). 결과 창을 띄우지 않고 알림 한 줄만 갱신합니다(상단 띠는 설정에서 켤 수 있음). CP 가 배너에 가려져도 막대+HP 로 기록하고 이후 CP 를 읽으면 그 기록을 보완합니다. 켜기/끄기: 여기, 알림의 \"연속 스캔\", 빠른 설정 타일 \"포고박사 연속 스캔\".", fontSize = 12.sp, color = Color(0xFF8899AA))
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Button(enabled = running && paired, onClick = { startService(Intent(this@MainActivity, CaptureService::class.java).setAction(CaptureService.ACTION_SCAN_TOGGLE)); scanning = !scanning; status = if (scanning) "연속 스캔 시작 — 포켓몬GO 평가 화면으로" else "연속 스캔 중지" }) { Text(if (scanning) "스캔 중지" else "연속 스캔 시작") }
+                        Button(enabled = running && paired, onClick = { startService(Intent(this@MainActivity, CaptureService::class.java).setAction(CaptureService.ACTION_SCAN_TOGGLE)); scanning = !scanning; status = if (scanning) "연속 스캔 시작(${scanModeLabel(prefs.scanMode)}) — 포켓몬GO 평가 화면으로" else "연속 스캔 중지" }) { Text(if (scanning) "스캔 중지" else "연속 스캔 시작") }
+                    }
+                    // 4-D 스캔 모드: 게임 검색("섀도"/"정화")으로 먼저 거른 뒤 그 모드로 스캔. 섀도 모드는 is_shadow=true 로 기록(섀도 판정). 타일·알림으로 시작해도 이 설정을 쓴다
+                    var scanMode by remember { mutableStateOf(prefs.scanMode) }
+                    Text("스캔 모드(시작 전 선택): 게임 검색으로 섀도/정화만 거른 뒤 해당 모드로 스캔하세요. 이로치·배경·XXL 은 박사행 보호 조건이 지키고, 코스튬은 태그로 보호. 한국어판 \"섀도\"·\"정화\" 검색어 동작은 확인 필요", fontSize = 11.sp, color = Color(0xFF8899AA))
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        for ((k, label) in listOf("normal" to "일반", "shadow" to "섀도", "purified" to "정화")) {
+                            if (scanMode == k) Button(onClick = { }) { Text(label) } else OutlinedButton(enabled = !scanning, onClick = { prefs.scanMode = k; scanMode = k; status = "스캔 모드: $label" }) { Text(label) }
+                        }
                         OutlinedButton(onClick = { startActivity(Intent(this@MainActivity, WebActivity::class.java)) }) { Text("스캔 기록 보기(웹)") }
                     }
                     if (!paired) Text("스캔 기록은 서버에 남으므로 기기 연결이 필요합니다", fontSize = 11.sp, color = Color(0xFFFF6B6B))

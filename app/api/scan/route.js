@@ -4,6 +4,7 @@ import { rateLimit, clientIp } from "../../lib/deviceAuth";
 import { resolveUser, buildVerdictContext } from "../../lib/verdictContext";
 import { fillMissingVerdicts, isStaleVerdict } from "../../lib/scanVerdict";
 import { backfillSuperseded } from "../../lib/scanBackfill";
+import { fetchActiveScanItems } from "../../lib/scanQuery";
 import { upsertMyPokemon } from "../../lib/savePokemonServer";
 
 export const dynamic = "force-dynamic";
@@ -15,10 +16,9 @@ export async function GET(req) {
   if (!sb) return NextResponse.json({ error: "서버 Supabase 미설정" }, { status: 503 });
   const user = await resolveUser(req);
   if (!user) return NextResponse.json({ error: "로그인이 필요합니다" }, { status: 401 });
-  // 4-C: 강화·진화로 대체된(superseded) 기록은 제외 (마이그레이션 0008)
-  const { data, error } = await sb.from("scan_items").select("*").eq("user_id", user.userId).eq("dismissed", false).eq("superseded", false).order("created_at", { ascending: false }).limit(300);
-  if (error) return NextResponse.json({ error: error.message }, { status: 500 });
-  let items = data || [];
+  // 4-C: 강화·진화로 대체된(superseded) 기록은 제외 (마이그레이션 0008). 4-D: 상한 300 → 페이지네이션으로 활성 전부(≤3000)
+  let items, truncated;
+  try { ({ items, truncated } = await fetchActiveScanItems(sb, user.userId)); } catch (e) { return NextResponse.json({ error: e.message }, { status: 500 }); }
   // 4-B2: 앱 기록 시점에 판정이 아직 없는 항목(after() 미완료·실패)은 여기서 한 번의 컨텍스트로 계산해 저장
   let filled = 0, backfill = null;
   // 4-B6.2: 규칙 버전이 다른(낡은) 판정도 다시 계산 (isStaleVerdict). 4-C.2: 그때 superseded 백필도 1회(버전 플래그)
@@ -28,7 +28,7 @@ export async function GET(req) {
     if (items.some((it) => isStaleVerdict(it.verdict))) filled = await fillMissingVerdicts(sb, items, ctx);
   } catch (e) { console.warn(`[scan] 판정 보충 실패: ${e.message}`); }
   const { data: sessions } = await sb.from("scan_sessions").select("session_id,metrics,started_at,ended_at,created_at").eq("user_id", user.userId).order("created_at", { ascending: false }).limit(20);
-  return NextResponse.json({ items, sessions: sessions || [], filled, backfill: backfill ? { ran: backfill.ran, superseded: backfill.superseded, conflicts: backfill.conflicts, suspects: backfill.suspects, version: backfill.version } : null });
+  return NextResponse.json({ items, truncated, sessions: sessions || [], filled, backfill: backfill ? { ran: backfill.ran, superseded: backfill.superseded, conflicts: backfill.conflicts, suspects: backfill.suspects, version: backfill.version } : null });
 }
 
 export async function POST(req) {
@@ -48,6 +48,20 @@ export async function POST(req) {
     const { error } = await q;
     if (error) return NextResponse.json({ error: error.message }, { status: 500 });
     return NextResponse.json({ ok: true });
+  }
+  // 4-D: 전체 스캔 세션 이전 기록 모두 숨김(복구 가능: dismissed_reason='before_session'). session_id 의 첫 기록 시각보다 오래된 활성 기록이 대상
+  if (b.action === "dismiss_before") {
+    if (typeof b.session_id !== "string" || !b.session_id) return NextResponse.json({ error: "session_id 필요" }, { status: 400 });
+    const { data: first } = await sb.from("scan_items").select("created_at").eq("user_id", user.userId).eq("session_id", String(b.session_id)).order("created_at", { ascending: true }).limit(1);
+    if (!first?.length) return NextResponse.json({ error: "세션 기록 없음" }, { status: 404 });
+    const { data: rows, error } = await sb.from("scan_items").update({ dismissed: true, dismissed_reason: "before_session" }).eq("user_id", user.userId).eq("dismissed", false).lt("created_at", first[0].created_at).neq("session_id", String(b.session_id)).select("id");
+    if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+    return NextResponse.json({ ok: true, count: (rows || []).length, before: first[0].created_at });
+  }
+  if (b.action === "restore_dismissed") {
+    const { data: rows, error } = await sb.from("scan_items").update({ dismissed: false, dismissed_reason: null }).eq("user_id", user.userId).eq("dismissed", true).eq("dismissed_reason", "before_session").select("id");
+    if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+    return NextResponse.json({ ok: true, count: (rows || []).length });
   }
   if (b.action === "dismiss") {
     if (!ids.length) return NextResponse.json({ error: "ids 필요" }, { status: 400 });
@@ -78,5 +92,5 @@ export async function POST(req) {
     }
     return NextResponse.json({ ok: true, results });
   }
-  return NextResponse.json({ error: "action 은 save|dismiss|clear" }, { status: 400 });
+  return NextResponse.json({ error: "action 은 save|dismiss|clear|dismiss_before|restore_dismissed" }, { status: 400 });
 }

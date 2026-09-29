@@ -59,10 +59,27 @@ test("백필 ⓪: 종·CP·HP·개체값이 모두 같은 기록(다른 세션 �
 test("개체값 충돌(planConflicts): 같은 종·CP·HP 인데 개체값이 다른 기록은 모두 재확인 대상 (괴력몬 2634/163 15/12/14 vs 15/6/8, 냐오불 577/83 사례)", () => {
   const x = { ...item("x", 68, [15, 12, 14], 31), cp: 2634, hp: 163 }, y = { ...item("y", 68, [15, 6, 8], 33), cp: 2634, hp: 163 };
   const z = { ...item("z", 68, [15, 12, 14], 31), cp: 2634, hp: 163, session_id: "s2" }; // x 와 같은 개체값 → 충돌 아님(재기록)
-  assert.deepEqual(planConflicts([x, y]).sort(), ["x", "y"]);
-  assert.deepEqual(planConflicts([x, z]), []);
-  assert.deepEqual(planConflicts([x, { ...y, hp: 150 }]), [], "HP 다르면 다른 개체");
-  assert.deepEqual(planConflicts([x, { ...y, cp: null }]), [], "CP 없으면 판단 불가");
+  assert.deepEqual(planConflicts([x, y]).recheck.sort(), ["x", "y"]);
+  assert.deepEqual(planConflicts([x, z]).recheck, []);
+  assert.deepEqual(planConflicts([x, { ...y, hp: 150 }]).recheck, [], "HP 다르면 다른 개체");
+  assert.deepEqual(planConflicts([x, { ...y, cp: null }]).recheck, [], "CP 없으면 판단 불가");
+});
+
+test("4-D 신뢰 기록 우선: 충돌 쌍에 앱 ≥0.1.38 기록이 있으면 구 앱 기록은 대체(recheck 아님), 신뢰 기록끼리 갈릴 때만 recheck", () => {
+  const old = { ...item("old", 68, [15, 6, 8], 33), cp: 2634, hp: 163, app_version: "0.1.30" };
+  const neu = { ...item("new", 68, [15, 12, 14], 31), cp: 2634, hp: 163, app_version: "0.1.38" };
+  const r = planConflicts([old, neu]);
+  assert.deepEqual(r.supersede, [{ id: "old", superseded_by: "new" }]); assert.deepEqual(r.recheck, []);
+  const noVer = { ...old, id: "nover", app_version: null };
+  assert.deepEqual(planConflicts([noVer, neu]).supersede, [{ id: "nover", superseded_by: "new" }], "버전 없음 = 미신뢰");
+  const neu2 = { ...item("new2", 68, [15, 7, 9], 32), cp: 2634, hp: 163, app_version: "0.1.39" };
+  const r2 = planConflicts([old, neu, neu2]);
+  assert.deepEqual(r2.supersede.map((p) => p.id), ["old"]); assert.deepEqual(r2.recheck.sort(), ["new", "new2"], "신뢰 기록끼리 갈리면 둘 다 재확인");
+  // 같은 종·개체값(다른 CP): 신뢰 기록이 오면 미신뢰 이전 기록은 레벨과 무관하게 대체
+  const a = { ...item("a", 4, [15, 14, 13], 25), app_version: "0.1.30" }, b = { ...item("b", 4, [15, 14, 13], 20), app_version: "0.1.38" };
+  assert.deepEqual(planSupersede([a, b], dataset), [{ id: "a", superseded_by: "b" }], "레벨이 낮아져도 신뢰 기록이 남음");
+  // 신뢰 기록은 오판독 의심 휴리스틱 대상이 아님
+  assert.deepEqual(planSuspects([{ id: "s", atk_iv: 15, def_iv: 6, sta_iv: 8, app_version: "0.1.38" }, { id: "t", atk_iv: 15, def_iv: 6, sta_iv: 8, app_version: "0.1.30" }]), ["t"]);
 });
 
 test("백필 ③: CP 가 개체값·HP 와 맞지 않는 기록(괴력몬 2634 vs 263) → 검증된 기록으로 대체", () => {
