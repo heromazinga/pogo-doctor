@@ -241,16 +241,21 @@ class CaptureService : Service() {
         var info = parser.parse(lines)
         val now = System.currentTimeMillis()
         if (info.kind == ScreenInfo.Kind.APPRAISAL) {
-            // 평가 화면: 라벨 기준 상대 좌표로 막대 3개 + 별 개수 판독 (기술·사탕은 가려지므로 미인식이 정상)
-            val labels = lines.filter { l -> val t = l.text.replace(" ", ""); t.contains("공격") || t.contains("방어") || t == "HP" || t.contains("체력") }
+            // 평가 화면("공격"+"방어"+"HP" 라벨): 라벨 기준(없으면 비율 위치)으로 막대 3개 + 별 판독. 강화 비용은 읽지 않는다(4-A 보정).
+            // 평가 화면에도 CP·이름·HP 가 보이므로 그 자체로 판정 가능하고, 직전 상세 화면이 있으면 기술만 합친다.
+            val labels = lines.filter { ScreenParser.isLabelLine(it) }
             val reading = withContext(Dispatchers.Default) { BarReader.readAppraisal({ x, y -> if (x in 0 until bmp.width && y in 0 until bmp.height) bmp.getPixel(x, y) else 0 }, bmp.width, bmp.height, labels) }
-            info = parser.parse(lines, reading.appraisal)
+            info = parser.parse(lines, reading.appraisal) // 막대까지 반영해 종 후보를 CP/HP·막대와 성립하는 종으로 좁힌다
             lastAppraisal = reading.appraisal; lastStars = reading.stars
             val mergeable = Merge.canMerge(lastDetail, lastDetailAt, info, now)
-            val summary = "막대 ${reading.detail} · 병합=${mergeable}${if (!mergeable && lastDetail != null) " (직전 상세 CP${lastDetail?.cp} ${(now - lastDetailAt) / 1000}초 전)" else ""}"
+            val summary = "막대 ${reading.detail}${if (reading.fromRatio) " (비율 위치)" else ""} · CP${info.cp} HP${info.hp} 종=${info.species?.nameKr ?: "?"} 후보=${info.speciesCandidates.map { it.nameKr }} · 병합=${mergeable}${if (!mergeable && lastDetail != null) " (직전 상세 CP${lastDetail?.cp} ${(now - lastDetailAt) / 1000}초 전)" else ""}"
             if (prefs.debugMode) { DebugLog.add(this, "appraisal", lines.map { it.text }, summary); uploadDebug(if (mergeable) "merged" else "appraisal", lines, summary, bmp) }
-            if (mergeable) show(ResultStore.Result.Screen(lastDetail, reading.appraisal, chosenSpecies, merged = true, stars = reading.stars, levels = lastLevels, barDetail = reading.detail), viaActivity)
-            else show(ResultStore.Result.Screen(null, reading.appraisal, null, stars = reading.stars, barDetail = reading.detail), viaActivity)
+            val screen = when {
+                mergeable -> { val d = lastDetail!!; ResultStore.Result.Screen(info.copy(moves = d.moves.ifEmpty { info.moves }, species = info.species ?: d.species, caughtOn = info.caughtOn ?: d.caughtOn), reading.appraisal, chosenSpecies ?: info.species, merged = true, stars = reading.stars, levels = lastLevels, barDetail = reading.detail) }
+                info.cp != null || info.species != null -> ResultStore.Result.Screen(info, reading.appraisal, info.species, stars = reading.stars, barDetail = reading.detail)
+                else -> ResultStore.Result.Screen(null, reading.appraisal, null, stars = reading.stars, barDetail = reading.detail)
+            }
+            show(screen, viaActivity)
             return
         }
         if (info.kind == ScreenInfo.Kind.UNKNOWN) {
@@ -263,12 +268,13 @@ class CaptureService : Service() {
         lastDetail = info; lastDetailAt = now; lastLevels = levels; chosenSpecies = info.species
         // 새 상세 화면(다른 CP)이면 이전 평가 판독은 버린다
         lastAppraisal = null; lastStars = null
-        val summary = "CP${info.cp} HP${info.hp} 종=${info.species?.nameKr ?: "?"}(${(info.nameScore * 100).toInt()}%) 기술=${info.moves.joinToString("/") { it.nameKr }} 강화=${pu.stardust}/${pu.candy}/${pu.xlCandy}XL → L${levels?.joinToString(",") ?: "?"}"
+        val summary = "CP${info.cp}${if (info.cpTruncated) "(잘림)" else ""} HP${info.hp} 종=${info.species?.nameKr ?: "?"}(${(info.nameScore * 100).toInt()}%) 후보=${info.speciesCandidates.map { it.nameKr }} 기술=${info.moves.joinToString("/") { it.nameKr }} 강화=${pu.stardust}/${pu.candy}/${pu.xlCandy}XL → L${levels?.joinToString(",") ?: "?"} 포획일=${info.caughtOn ?: "?"}"
         if (prefs.debugMode) { DebugLog.add(this, "detail", lines.map { it.text }, summary); uploadDebug("detail", lines, summary, bmp) }
         show(ResultStore.Result.Screen(info, null, chosenSpecies, levels = levels), viaActivity)
     }
 
-    // ─── 디버그 업로드: 상단 상태바(6%)·트레이너 영역(하단 좌측 28%×22%) 가림 → 폭 720 축소 → JPEG 75 → 서버 (기기 토큰) ───
+    // ─── 디버그 업로드 (4-D): 상단 상태바(6%) + 포획 장소·날짜 줄의 OCR 박스만 가림(고정 영역 가림 폐지 — HP 막대를 덮었음).
+    //     해당 줄 텍스트는 업로드 OCR 목록에서 제외한다. 폭 720 축소 → JPEG 75 → 서버 (기기 토큰) ───
     private fun uploadDebug(kind: String, lines: List<com.pogodoctor.core.OcrLine>, result: String, bmp: Bitmap) {
         if (!prefs.isPaired) return
         scope.launch(Dispatchers.IO) {
@@ -278,16 +284,23 @@ class CaptureService : Service() {
                 val small = Bitmap.createScaledBitmap(bmp, w, h, true).copy(Bitmap.Config.ARGB_8888, true)
                 val canvas = Canvas(small); val paint = Paint().apply { color = Color.BLACK }
                 canvas.drawRect(0f, 0f, w.toFloat(), h * 0.06f, paint)                       // 상태바(시계·알림)
-                canvas.drawRect(0f, h * 0.78f, w * 0.28f, h.toFloat(), paint)               // 평가 화면 트레이너 아바타·이름 영역
+                val caught = lines.filter { ScreenParser.isCaughtLine(it) }
+                for (l in caught) {
+                    val pad = maxOf(6, l.height / 2)
+                    canvas.drawRect(0f, ((l.top - pad) * scale).toFloat(), w.toFloat(), ((l.bottom + pad) * scale).toFloat(), paint) // 포획 장소·날짜 줄 (가로 전체)
+                }
+                val ocr = lines.filter { !ScreenParser.isCaughtLine(it) }.map { it.text }
                 val out = java.io.ByteArrayOutputStream(); small.compress(Bitmap.CompressFormat.JPEG, 75, out)
                 val b64 = Base64.encodeToString(out.toByteArray(), Base64.NO_WRAP)
-                Api(prefs).uploadDebug(kind, lines.map { it.text }, result, b64)
+                Api(prefs).uploadDebug(kind, ocr, result + (if (caught.isNotEmpty()) " · 포획 줄 ${caught.size}개 가림" else ""), b64)
             } catch (e: Exception) { DebugLog.add(this@CaptureService, "upload-error", emptyList(), kind, e.toString()) }
         }
     }
 
     private fun show(result: ResultStore.Result, viaActivity: Boolean) {
         ResultStore.publish(result)
+        // 4-A: 서버 판정 비동기 요청 → 결과 화면 갱신 (액티비티는 ResultStore 리스너로, 오버레이 카드는 다시 그린다)
+        if (result is ResultStore.Result.Screen && result.info != null) VerdictFetch.start(scope, this, repo, prefs, result) { if (!viaActivity && card != null) showCard() }
         if (viaActivity) {
             hideCard()
             // 포그라운드 서비스 + SYSTEM_ALERT_WINDOW 권한이 있어 백그라운드 액티비티 시작이 허용된다
@@ -300,13 +313,13 @@ class CaptureService : Service() {
         hideCard()
         val card = ResultCard(this, repo, prefs.isPaired)
         val view = card.build(ResultStore.current, object : ResultCard.Actions {
-            override fun onChooseSpecies(sp: SpeciesRef) { chosenSpecies = sp; val cur = ResultStore.current as? ResultStore.Result.Screen ?: return; ResultStore.current = cur.copy(chosen = sp); showCard() }
-            override fun onSave(info: ScreenInfo, sp: SpeciesRef, c: ResultCard.Computed, status: String) {
-                val row = card.buildRow(info, sp, c, status)
+            override fun onChooseSpecies(sp: SpeciesRef) { chosenSpecies = sp; val cur = ResultStore.current as? ResultStore.Result.Screen ?: return; val next = cur.copy(chosen = sp, verdict = null, verdictError = null); ResultStore.current = next; showCard(); VerdictFetch.start(scope, this@CaptureService, repo, prefs, next) { if (this@CaptureService.card != null) showCard() } }
+            override fun onSave(info: ScreenInfo, sp: SpeciesRef, c: ResultCard.Computed, status: String, tags: List<String>, purposes: List<String>) {
+                val row = card.buildRow(info, sp, c, status, tags, purposes)
                 scope.launch {
                     try {
                         withContext(Dispatchers.IO) { Api(prefs).savePokemon(row) }
-                        toast(if (status == "keep") "보관에 저장했습니다 — 웹 내 목록에 표시됩니다" else "박사행으로 저장했습니다")
+                        toast(if (status == "keep") (if (tags.isNotEmpty()) "보관 저장 · 태그: ${tags.joinToString(", ")}" else "보관에 저장했습니다 — 웹 내 목록에 표시됩니다") else "박사행으로 저장했습니다")
                         hideCard(); lastDetail = null; lastAppraisal = null; lastStars = null; lastLevels = null; chosenSpecies = null; ResultStore.current = null
                     } catch (e: Exception) {
                         DebugLog.add(this@CaptureService, "save-error", emptyList(), row.toString(), e.toString())

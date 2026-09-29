@@ -68,6 +68,9 @@ class Api(private val prefs: Prefs) {
         return request("POST", "/api/device/debug", body, token, timeoutMs = 40000)
     }
 
+    // 4-A 서버 판정. 기기 토큰이 있으면 내 목록과 비교(인증 선택), 없으면 종·개체만으로 판정
+    fun verdict(body: JSONObject): JSONObject = request("POST", "/api/verdict", body, prefs.deviceToken, timeoutMs = 15000)
+
     fun savePokemon(row: JSONObject): JSONObject {
         val token = prefs.deviceToken ?: throw ApiException(401, "기기 연결 필요")
         try { return request("POST", "/api/device/pokemon", row, token) }

@@ -44,14 +44,16 @@ class ResultActivity : Activity() {
         container.addView(card.build(ResultStore.current, object : ResultCard.Actions {
             override fun onChooseSpecies(sp: SpeciesRef) {
                 val cur = ResultStore.current as? ResultStore.Result.Screen ?: return
-                ResultStore.publish(cur.copy(chosen = sp))
+                val next = cur.copy(chosen = sp, verdict = null, verdictError = null)
+                ResultStore.publish(next)
+                VerdictFetch.start(scope, this@ResultActivity, repo, prefs, next) { }
             }
-            override fun onSave(info: ScreenInfo, sp: SpeciesRef, c: ResultCard.Computed, status: String) {
-                val row = card.buildRow(info, sp, c, status)
+            override fun onSave(info: ScreenInfo, sp: SpeciesRef, c: ResultCard.Computed, status: String, tags: List<String>, purposes: List<String>) {
+                val row = card.buildRow(info, sp, c, status, tags, purposes)
                 scope.launch {
                     try {
                         withContext(Dispatchers.IO) { api.savePokemon(row) }
-                        Toast.makeText(this@ResultActivity, if (status == "keep") "보관에 저장했습니다 — 웹 내 목록에 표시됩니다" else "박사행으로 저장했습니다", Toast.LENGTH_LONG).show()
+                        Toast.makeText(this@ResultActivity, if (status == "keep") (if (tags.isNotEmpty()) "보관 저장 · 태그: ${tags.joinToString(", ")}" else "보관에 저장했습니다 — 웹 내 목록에 표시됩니다") else "박사행으로 저장했습니다", Toast.LENGTH_LONG).show()
                         ResultStore.current = null
                         finish()
                     } catch (e: Exception) {
