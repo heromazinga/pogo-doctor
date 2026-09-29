@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { getServiceClient } from "../../lib/supabaseServer";
 import { rateLimit, clientIp } from "../../lib/deviceAuth";
 import { resolveUser, buildVerdictContext } from "../../lib/verdictContext";
-import { fillMissingVerdicts } from "../../lib/scanVerdict";
+import { fillMissingVerdicts, isStaleVerdict } from "../../lib/scanVerdict";
 import { upsertMyPokemon } from "../../lib/savePokemonServer";
 
 export const dynamic = "force-dynamic";
@@ -19,7 +19,8 @@ export async function GET(req) {
   const items = data || [];
   // 4-B2: 앱 기록 시점에 판정이 아직 없는 항목(after() 미완료·실패)은 여기서 한 번의 컨텍스트로 계산해 저장
   let filled = 0;
-  if (items.some((it) => !it.verdict || it.verdict.error)) {
+  // 4-B6.2: 규칙 버전이 다른(낡은) 판정도 다시 계산 (isStaleVerdict)
+  if (items.some((it) => isStaleVerdict(it.verdict))) {
     try { const { ctx } = await buildVerdictContext(req, { myRows: undefined }); filled = await fillMissingVerdicts(sb, items, ctx); } catch (e) { console.warn(`[scan] 판정 보충 실패: ${e.message}`); }
   }
   const { data: sessions } = await sb.from("scan_sessions").select("session_id,metrics,started_at,ended_at,created_at").eq("user_id", user.userId).order("created_at", { ascending: false }).limit(20);
@@ -64,7 +65,7 @@ export async function POST(req) {
         species_id: it.species_id, form: it.form || "Normal", name_kr: it.name_kr, cp: it.cp, hp: it.hp,
         atk_iv: it.atk_iv, def_iv: it.def_iv, sta_iv: it.sta_iv, level: it.level != null ? Number(it.level) : null,
         fast_move: null, charged_moves: [], is_shadow: Boolean(it.is_shadow), is_purified: false, is_shiny: false, is_lucky: false,
-        status, purposes: status === "keep" ? (v.purposes || []) : [], tags, caught_on: it.caught_on, memo: "연속 스캔", source: "overlay",
+        status, purposes: status === "keep" ? (v.purposes || []) : [], tags, caught_on: it.caught_on, game_tags: it.game_tags || [], memo: "연속 스캔", source: "overlay",
       };
       const r = await upsertMyPokemon(sb, user.userId, row);
       if (r.error) { results.push({ id: it.id, error: r.error }); continue; }

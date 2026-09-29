@@ -64,6 +64,11 @@ class Prefs(ctx: Context) {
     var cleanupMaxLen: Int
         get() = plain.getInt("cleanup_max_len", 200).coerceIn(60, 400)
         set(v) = plain.edit().putInt("cleanup_max_len", v.coerceIn(60, 400)).apply()
+    // 4-B6.2 사용자 게임 태그 이름(쉼표 구분). 추천 태그 이름(GameTags.RECOMMENDED)은 항상 인식하고, 여기 목록을 더한다. 기본값 = 사용자 기존 태그
+    var gameTagNames: String
+        get() = plain.getString("game_tag_names", null) ?: com.pogodoctor.core.GameTags.USER_DEFAULT.joinToString(", ")
+        set(v) = plain.edit().putString("game_tag_names", v).apply()
+    val gameTagList: List<String> get() = gameTagNames.split(",", "\n").map { it.trim() }.filter { it.length in 1..24 }.distinct()
     var lastScanReport: String
         get() = plain.getString("last_scan_report", "")!!
         set(v) = plain.edit().putString("last_scan_report", v).apply()

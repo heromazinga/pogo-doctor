@@ -43,6 +43,16 @@
             android:launchMode="singleTask"
             android:noHistory="true" />
 
+        <!-- 4-B6 태그 선택 목록: 반투명 대화상자 (결과 화면과 같은 설정) -->
+        <activity
+            android:name=".CleanupActivity"
+            android:exported="false"
+            android:theme="@android:style/Theme.Material.Dialog.NoActionBar"
+            android:excludeFromRecents="true"
+            android:taskAffinity="com.pogodoctor.app.result"
+            android:launchMode="singleTask"
+            android:noHistory="true" />
+
         <!-- 트램펄린: 타일·알림에서 시작 → 알림창 닫힘 → 지연 캡처 요청 → 즉시 종료 -->
         <activity
             android:name=".TrampolineActivity"

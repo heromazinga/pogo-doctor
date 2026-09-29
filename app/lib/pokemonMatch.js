@@ -36,6 +36,8 @@ export function mergePatch(existing, incoming) {
     is_shiny: Boolean(incoming.is_shiny || existing.is_shiny), is_lucky: Boolean(incoming.is_lucky || existing.is_lucky),
   };
   if (incoming.source) patch.source = incoming.source;
+  // 4-B6 게임 태그: 새로 읽은 값이 있으면 합집합(사용자가 게임에서 단 태그는 없어지지 않는다고 가정), 없으면 기존 유지
+  if (Array.isArray(incoming.game_tags) && incoming.game_tags.length) patch.game_tags = [...new Set([...(existing.game_tags || []), ...incoming.game_tags])].slice(0, 8);
   return patch;
 }
 

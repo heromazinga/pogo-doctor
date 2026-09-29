@@ -1,6 +1,10 @@
 // 4-A 용도별 보관 판정 기준값 — 한 곳에서 관리 (README "판정 기준" 표와 동일하게 유지)
 // 판정은 결정적 계산이며 AI 를 쓰지 않는다. 저장하지 않고 볼 때마다 계산한다.
 
+// 4-B6.2 판정 규칙 버전: 저장된 판정(scan_items.verdict.rulesVersion)이 이 값과 다르면 조회 시 다시 계산해 저장한다.
+// 기준값(RULES)이나 판정 로직을 바꿀 때 반드시 올린다 (실DB 검증: 규칙 변경이 정리 도우미에 반영되지 않던 결함).
+export const RULES_VERSION = "2026-09-29.2";
+
 export const RULES = {
   // 종족 순위 (자동 산출) — 타입별 레이드: teamScore 의 DPS^0.775 × TDO^0.225, 그 타입 기술만 사용, 중립 보스 가정
   RAID_TOP_RANK: 12,        // 12위 이내 = 상위종
@@ -8,6 +12,8 @@ export const RULES = {
   RAID_TOP_SCORE_PCT: 75,   // 4-A2: 상위종 = 순위 조건 AND 점수 ≥ 그 타입 1위(전설 포함 전체 1위) 점수의 75%
   RAID_MID_SCORE_PCT: 65,   // 중위종 = 순위 ≤30 AND ≥65% (공격수가 적은 타입에서 약한 종이 순위만으로 들어오는 것 방지)
   RAID_MAIN_INDIV_RANK: 6,  // 내 목록 같은 종·같은 용도 안에서 공격 스탯 순위 ≤ 6 → 주력 (상위종일 때)
+  RAID_MIN_ATK_IV: 10,      // 4-B6: 공격 IV 미만이면 레이드 태그 없음 (실측: 저승갓숭 공격 0 이 격투 레이드 묶음에 포함됨)
+  RAID_MAIN_MIN_ATK_IV: 12, // 4-B6: 주력 등급의 최소 공격 IV (섀도도 같은 기준)
   RAID_BOSS: { baseAttack: 250, baseDefense: 200, baseStamina: 220 }, // 중립 보스 가정(타입 없음, L40·15/15/15)
   RAID_MEMBER_LEVEL: 40,    // 종족 순위 산출 시 개체 가정: L40, 15/15/15
 
@@ -21,8 +27,10 @@ export const RULES = {
   LEAGUE_CAPS: { great: 1500, ultra: 2500 },
   LEAGUE_MAX_LEVEL: 50,     // 스탯곱 계산 레벨 상한 (51 옵션)
   LEAGUE_MAIN_PRODUCT_RANK: 100,  // 스탯곱 4096 중 순위: 상위종 & ≤100 → 주력
-  LEAGUE_HOLD_PRODUCT_RANK: 500,  // 상위종 ≤500 → 보류
-  LEAGUE_MID_HOLD_PRODUCT_RANK: 100, // 중위종 ≤100 → 보류
+  LEAGUE_HOLD_PRODUCT_RANK: 800,  // 4-B6.2: 상위종 ≤800 → 보류 (실DB 검증: 저승갓숭 0/11/14 스탯곱 594위가 박사행이 됨. 가방 여유·박사행 비가역)
+  LEAGUE_MID_HOLD_PRODUCT_RANK: 200, // 4-B6.2: 중위종 ≤200 → 보류
+  LEAGUE_HOLD_PRODUCT_RANK_TIGHT: 500,  // 보관함 "빠듯" 이면 기존 기준 유지
+  LEAGUE_MID_HOLD_PRODUCT_RANK_TIGHT: 100,
   MASTER_TOP_RANK: 50,
   MASTER_MAIN_PCT: 96,      // 전체 % ≥ 96 → 주력
   MASTER_HOLD_PCT: 91,      // 91~95 → 보류

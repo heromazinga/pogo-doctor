@@ -81,6 +81,7 @@ export function validatePokemonBody(b) {
   if (b.tags !== undefined && b.tags !== null && !validTags(b.tags)) errors.push("tags 는 1~24자 문자열 최대 8개");
   if (!optInt(b.hp, 10, 999)) errors.push("hp 는 10~999 정수 또는 null");
   if (b.caught_on !== undefined && b.caught_on !== null && !validDate(b.caught_on)) errors.push("caught_on 은 YYYY-MM-DD");
+  if (b.game_tags !== undefined && b.game_tags !== null && !validTags(b.game_tags)) errors.push("game_tags 는 1~24자 문자열 최대 8개");
   if (errors.length) return { errors };
   return {
     errors: [],
@@ -99,6 +100,7 @@ export function validatePokemonBody(b) {
       tags: Array.isArray(b.tags) ? b.tags.map((t) => t.trim()).filter(Boolean) : [],
       hp: b.hp ?? null,
       caught_on: b.caught_on || null,
+      game_tags: Array.isArray(b.game_tags) ? b.game_tags.map((t) => t.trim()).filter(Boolean) : [],
       memo: b.memo ? String(b.memo).trim() || null : null,
       source: "overlay",
     },

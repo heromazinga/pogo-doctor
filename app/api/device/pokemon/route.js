@@ -4,7 +4,7 @@ import { validatePokemonBody, rateLimit, clientIp } from "../../../lib/deviceAut
 import { userFromDeviceToken } from "../../../lib/deviceServer";
 import { upsertMyPokemon } from "../../../lib/savePokemonServer";
 
-const COLUMNS = "id,species_id,form,name_kr,cp,atk_iv,def_iv,sta_iv,level,fast_move,charged_moves,is_shadow,is_purified,is_shiny,is_lucky,status,purposes,tags,hp,caught_on,source,memo,created_at,updated_at";
+const COLUMNS = "id,species_id,form,name_kr,cp,atk_iv,def_iv,sta_iv,level,fast_move,charged_moves,is_shadow,is_purified,is_shiny,is_lucky,status,purposes,tags,hp,caught_on,game_tags,source,memo,created_at,updated_at";
 
 // 앱 → my_pokemon 저장 (source='overlay'). 본문의 user_id/id/source 는 무시하고 서버가 정한다.
 // 4-B: 기존 행과 매칭(①종 계열·폼·개체값·포획일 ②종·폼·CP·HP)되면 새 행 대신 갱신하고 updated:true (memo·tags·status 는 유지)

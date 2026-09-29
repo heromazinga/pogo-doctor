@@ -108,6 +108,7 @@ class MainActivity : ComponentActivity() {
         var stableMs by remember { mutableStateOf(prefs.scanStableMs.toString()) }
         var scanVibrate by remember { mutableStateOf(prefs.scanVibrate) }
         var debugMax by remember { mutableStateOf(prefs.scanDebugMax.toString()) }
+        var gameTagNames by remember { mutableStateOf(prefs.gameTagNames) }
         var webCode by remember { mutableStateOf("") }
         var busy by remember { mutableStateOf(false) }
         var log by remember { mutableStateOf("") }
@@ -196,12 +197,13 @@ class MainActivity : ComponentActivity() {
 
             Card(Modifier.fillMaxWidth()) {
                 Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text("🧹 정리 도우미 (4-B5)", fontSize = 16.sp)
-                    Text("판정 결과를 포켓몬GO 검색어로 만들어 복사합니다(게임 조작 없음). 검색창에 붙여넣고 결과 수가 \"예상 N마리\"와 같을 때만 전체 선택 → 박사에게 보내기/태그. 박사행은 되돌릴 수 없으니 수가 다르면 진행하지 마세요. 스캔 중에는 알림의 \"박사행 복사\"/\"태그 복사\" 로도 됩니다.", fontSize = 12.sp, color = Color(0xFF8899AA))
+                    Text("🧹 정리 도우미 (4-B5/4-B6)", fontSize = 16.sp)
+                    Text(CleanupCopier.note, fontSize = 12.sp, color = Color(0xFFFFC46B))
+                    Text("판정 결과를 포켓몬GO 검색어로 만들어 복사합니다(게임 조작 없음). 검색창에 붙여넣고 결과 수가 \"예상 N마리\"와 같을 때만 전체 선택 → 박사에게 보내기/태그. 박사행은 되돌릴 수 없으니 수가 다르면 진행하지 마세요. 게임에 이미 태그가 달린 개체(화면 칩 판독)는 대상에서 뺍니다. 스캔 중에는 알림의 \"박사행 복사\"/\"태그 선택\" 으로도 됩니다.", fontSize = 12.sp, color = Color(0xFF8899AA))
                     var cleanupStatus by remember { mutableStateOf(CleanupCopier.status()) }
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Button(enabled = paired && !busy, onClick = { busy = true; lifecycleScope.launch { withContext(Dispatchers.IO) { CleanupCopier.refresh(prefs, force = true) }; status = CleanupCopier.copyNext(this@MainActivity, "transfer"); cleanupStatus = CleanupCopier.status(); busy = false } }) { Text("박사행 검색어 복사") }
-                        OutlinedButton(enabled = paired && !busy, onClick = { busy = true; lifecycleScope.launch { withContext(Dispatchers.IO) { CleanupCopier.refresh(prefs) }; status = CleanupCopier.copyNext(this@MainActivity, "tag"); cleanupStatus = CleanupCopier.status(); busy = false } }) { Text("태그 검색어 복사") }
+                        Button(enabled = paired && !busy, onClick = { busy = true; lifecycleScope.launch { withContext(Dispatchers.IO) { CleanupCopier.refresh(prefs, force = true) }; status = CleanupCopier.copyNextTransfer(this@MainActivity); cleanupStatus = CleanupCopier.status(); busy = false } }) { Text("박사행 검색어 복사") }
+                        OutlinedButton(enabled = paired && !busy, onClick = { startActivity(Intent(this@MainActivity, CleanupActivity::class.java)) }) { Text("태그 선택") }
                     }
                     Text("묶음: $cleanupStatus · 자세한 목록·완료 처리는 웹 내 목록 → 🧹 정리 도우미", fontSize = 11.sp, color = Color(0xFF8899AA))
                 }
@@ -248,6 +250,11 @@ class MainActivity : ComponentActivity() {
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         OutlinedTextField(value = debugMax, onValueChange = { debugMax = it.filter { ch -> ch.isDigit() } }, label = { Text("디버그 업로드 상한(세션당, 0~200)") }, modifier = Modifier.weight(1f))
                         OutlinedButton(modifier = Modifier.padding(top = 8.dp), onClick = { prefs.scanDebugMax = debugMax.toIntOrNull() ?: 20; debugMax = prefs.scanDebugMax.toString(); status = "디버그 업로드 상한 ${prefs.scanDebugMax}장 저장" }) { Text("저장") }
+                    }
+                    // 4-B6.2 사용자 게임 태그 이름: 평가 화면 칩 판독에 쓰는 목록(띄어쓰기 무시 비교). 추천 태그 이름은 항상 인식
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        OutlinedTextField(value = gameTagNames, onValueChange = { gameTagNames = it }, label = { Text("내 게임 태그 이름 (쉼표 구분, 추천 태그 이름은 항상 인식)") }, modifier = Modifier.weight(1f))
+                        OutlinedButton(modifier = Modifier.padding(top = 8.dp), onClick = { prefs.gameTagNames = gameTagNames; gameTagNames = prefs.gameTagNames; status = "게임 태그 ${prefs.gameTagList.size}개 저장" }) { Text("저장") }
                     }
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         Text("연속 스캔 기록 시 진동 (새 기록에만)", fontSize = 13.sp, modifier = Modifier.padding(top = 12.dp))

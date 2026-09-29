@@ -2,8 +2,8 @@
 import { findMatch, mergePatch, familyOfFactory } from "./pokemonMatch.js";
 import { getPokemonDataset } from "./pokemonData.js";
 
-const COLUMNS = "id,species_id,form,name_kr,cp,hp,atk_iv,def_iv,sta_iv,level,fast_move,charged_moves,is_shadow,is_purified,is_shiny,is_lucky,status,purposes,tags,caught_on,source,memo,created_at,updated_at";
-const NEW_COLS = ["tags", "hp", "caught_on"];
+const COLUMNS = "id,species_id,form,name_kr,cp,hp,atk_iv,def_iv,sta_iv,level,fast_move,charged_moves,is_shadow,is_purified,is_shiny,is_lucky,status,purposes,tags,caught_on,game_tags,source,memo,created_at,updated_at";
+const NEW_COLS = ["tags", "hp", "caught_on", "game_tags"];
 const isColumnError = (e) => /column|schema cache/i.test(String(e?.message || ""));
 const strip = (o) => { const r = { ...o }; for (const k of NEW_COLS) delete r[k]; return r; };
 
@@ -25,12 +25,12 @@ export async function upsertMyPokemon(sb, userId, incoming) {
   if (m) {
     const patch = mergePatch(m.row, incoming);
     let { data, error } = await sb.from("my_pokemon").update(patch).eq("id", m.row.id).select(COLUMNS).single();
-    if (error && isColumnError(error)) ({ data, error } = await sb.from("my_pokemon").update(strip(patch)).eq("id", m.row.id).select(COLUMNS.replace("hp,", "").replace("tags,caught_on,", "")).single());
+    if (error && isColumnError(error)) ({ data, error } = await sb.from("my_pokemon").update(strip(patch)).eq("id", m.row.id).select(COLUMNS.replace("hp,", "").replace("tags,caught_on,game_tags,", "")).single());
     if (error) return { row: null, updated: false, error: error.message };
     return { row: data, updated: true, rule: m.rule };
   }
   let { data, error } = await sb.from("my_pokemon").insert({ ...incoming, user_id: userId }).select(COLUMNS).single();
-  if (error && isColumnError(error)) ({ data, error } = await sb.from("my_pokemon").insert({ ...strip(incoming), user_id: userId }).select(COLUMNS.replace("hp,", "").replace("tags,caught_on,", "")).single());
+  if (error && isColumnError(error)) ({ data, error } = await sb.from("my_pokemon").insert({ ...strip(incoming), user_id: userId }).select(COLUMNS.replace("hp,", "").replace("tags,caught_on,game_tags,", "")).single());
   if (error) return { row: null, updated: false, error: error.message };
   return { row: data, updated: false, rule: null };
 }

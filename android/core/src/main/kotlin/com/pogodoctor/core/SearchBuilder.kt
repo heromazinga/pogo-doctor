@@ -5,7 +5,7 @@ package com.pogodoctor.core
 object SearchBuilder {
     const val DEFAULT_MAX_LEN = 200
     data class Item(val id: String, val speciesId: Int, val hp: Int?, val cp: Int?, val cpVerified: Boolean, val isShadow: Boolean = false, val form: String = "Normal")
-    data class Group(val query: String, val expected: Int, val targetIds: List<String>, val withCp: Boolean)
+    data class Group(val query: String, val expected: Int, val targetIds: List<String>, val withCp: Boolean, val overlap: Int = 0)
     data class Skipped(val id: String, val reason: String)
     data class Result(val groups: List<Group>, val skipped: List<Skipped>)
 
@@ -28,7 +28,8 @@ object SearchBuilder {
         return q
     }
 
-    fun buildGroups(targets: List<Item>, population: List<Item>, maxLen: Int = DEFAULT_MAX_LEN): Result {
+    // strict=true(박사행): 충돌 묶음은 쪼개고 구분 불가 대상은 제외. strict=false(태그): 길이 상한만 지키고 overlap(잡히는 비대상 수)을 표기
+    fun buildGroups(targets: List<Item>, population: List<Item>, maxLen: Int = DEFAULT_MAX_LEN, strict: Boolean = true): Result {
         val targetIds = targets.map { it.id }.toSet()
         val skipped = ArrayList<Skipped>()
         val usable = targets.filter { if (it.hp == null) { skipped.add(Skipped(it.id, "HP 없음")); false } else true }
@@ -40,14 +41,25 @@ object SearchBuilder {
             if (q.length > maxLen) return false
             return nonTargets.none { matches(q, it) }
         }
+        fun overlapOf(members: List<Item>, withCp: Boolean) = nonTargets.count { matches(buildQuery(members, withCp), it) }
         for (list in usable.groupBy { "${if (it.isShadow) 1 else 0}|${it.form}" }.values) {
             val sorted = list.sortedWith(compareBy({ it.speciesId }, { it.hp ?: 0 }))
             var cur = ArrayList<Item>()
-            fun flush() { if (cur.isNotEmpty()) { val withCp = !safe(cur, false); groups.add(Group(buildQuery(cur, withCp), cur.size, cur.map { it.id }, withCp)); cur = ArrayList() } }
+            fun flush() {
+                if (cur.isEmpty()) return
+                val withCp = !safe(cur, false) && safe(cur, true)
+                groups.add(Group(buildQuery(cur, withCp), cur.size, cur.map { it.id }, withCp, if (strict) 0 else overlapOf(cur, withCp)))
+                cur = ArrayList()
+            }
             for (t in sorted) {
-                if (!safe(listOf(t), false) && !safe(listOf(t), true)) { skipped.add(Skipped(t.id, "같은 종·HP(·CP) 의 보관 개체와 구분 불가")); continue }
-                val next = cur + t
-                if (cur.isEmpty() || safe(next, false) || safe(next, true)) cur = ArrayList(next) else { flush(); cur = arrayListOf(t) }
+                if (strict) {
+                    if (!safe(listOf(t), false) && !safe(listOf(t), true)) { skipped.add(Skipped(t.id, "같은 종·HP(·CP) 의 보관 개체와 구분 불가")); continue }
+                    val next = cur + t
+                    if (cur.isEmpty() || safe(next, false) || safe(next, true)) cur = ArrayList(next) else { flush(); cur = arrayListOf(t) }
+                } else {
+                    val next = cur + t
+                    if (cur.isEmpty() || buildQuery(next, false).length <= maxLen) cur = ArrayList(next) else { flush(); cur = arrayListOf(t) }
+                }
             }
             flush()
         }
