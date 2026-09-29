@@ -62,6 +62,7 @@ class CaptureService : Service() {
         const val ACTION_STOP = "com.pogodoctor.app.STOP"
         const val ACTION_CAPTURE_DELAYED = "com.pogodoctor.app.CAPTURE_DELAYED"
         const val ACTION_SCAN_TOGGLE = "com.pogodoctor.app.SCAN_TOGGLE"   // 4-B 연속 스캔 켜기/끄기
+        const val ACTION_REFRESH_NOTIF = "com.pogodoctor.app.REFRESH_NOTIF" // 4-B5 알림 갱신(정리 복사 상태)
         @Volatile var scanning = false
         @Volatile var scanLine: String = ""
         private const val CHANNEL = "capture"
@@ -109,6 +110,7 @@ class CaptureService : Service() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
             ACTION_STOP -> { stopSelf(); return START_NOT_STICKY }
+            ACTION_REFRESH_NOTIF -> { if (projection != null) updateNotification(scanLine.ifBlank { getString(R.string.notif_text) }); return START_NOT_STICKY }
             ACTION_SCAN_TOGGLE -> {
                 if (projection == null) { toast("캡처 서비스가 실행 중이 아닙니다 — 앱에서 오버레이 시작"); return START_NOT_STICKY }
                 if (scanning) stopScan() else startScan()
@@ -147,16 +149,26 @@ class CaptureService : Service() {
         // "캡처" 는 트램펄린 액티비티로: 액티비티 시작이 알림창을 닫고, 서비스에 지연 캡처를 요청한다
         val capture = PendingIntent.getActivity(this, 3, Intent(this, TrampolineActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK), flags)
         val scanToggle = PendingIntent.getActivity(this, 4, Intent(this, TrampolineActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK).putExtra(TrampolineActivity.EXTRA_ACTION, "scan"), flags)
+        val copyTransfer = PendingIntent.getActivity(this, 5, Intent(this, TrampolineActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK).putExtra(TrampolineActivity.EXTRA_ACTION, "copy_transfer"), flags)
+        val copyTag = PendingIntent.getActivity(this, 6, Intent(this, TrampolineActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK).putExtra(TrampolineActivity.EXTRA_ACTION, "copy_tag"), flags)
         val icon = Icon.createWithResource(this, R.drawable.ic_notif)
         val title = if (scanning) "연속 스캔 중 — 평가 화면을 넘기세요" else getString(R.string.notif_title)
-        return Notification.Builder(this, CHANNEL)
+        val b = Notification.Builder(this, CHANNEL)
             .setSmallIcon(R.drawable.ic_notif).setContentTitle(title).setContentText(text ?: (if (scanning) scanLine else getString(R.string.notif_text)))
             .setStyle(Notification.BigTextStyle().bigText(text ?: (if (scanning) scanLine else getString(R.string.notif_text))))
-            .setContentIntent(open)
-            .addAction(Notification.Action.Builder(icon, "캡처", capture).build())
-            .addAction(Notification.Action.Builder(icon, if (scanning) "스캔 중지" else "연속 스캔", scanToggle).build())
-            .addAction(Notification.Action.Builder(icon, "중지", stop).build())
-            .setOnlyAlertOnce(true).setOngoing(true).build()
+            .setContentIntent(open).setOnlyAlertOnce(true).setOngoing(true)
+        // 알림 액션은 3개까지 표시된다. 스캔 중·스캔 기록이 있으면 4-B5 정리 복사 액션(박사행/태그 검색어)을 넣는다
+        val cleanupMode = scanning || (scan == null && hadScanRecords)
+        if (cleanupMode) {
+            b.addAction(Notification.Action.Builder(icon, if (scanning) "스캔 중지" else "연속 스캔", scanToggle).build())
+            b.addAction(Notification.Action.Builder(icon, "박사행 복사", copyTransfer).build())
+            b.addAction(Notification.Action.Builder(icon, "태그 복사", copyTag).build())
+        } else {
+            b.addAction(Notification.Action.Builder(icon, "캡처", capture).build())
+            b.addAction(Notification.Action.Builder(icon, "연속 스캔", scanToggle).build())
+            b.addAction(Notification.Action.Builder(icon, "중지", stop).build())
+        }
+        return b.build()
     }
     private fun updateNotification(text: String) { scanLine = text; getSystemService(NotificationManager::class.java).notify(NOTIF_ID, buildNotification(text)) }
 
@@ -166,6 +178,7 @@ class CaptureService : Service() {
     private fun batteryPct(): Int = try { getSystemService(BatteryManager::class.java).getIntProperty(BatteryManager.BATTERY_PROPERTY_CAPACITY) } catch (_: Exception) { -1 }
     private val queue: ScanQueue by lazy { ScanQueue(this, prefs).also { q -> q.onChange = { handler.post { if (scanning) refreshScanLine() } } } }
     private var scanStartedAt = 0L
+    private var hadScanRecords = false   // 4-B5: 스캔 종료 후에도 정리 복사 액션 유지
     private fun startScan() {
         val session = ScanSession(); session.metrics.batteryStart = batteryPct()
         scan = session; scanning = true; scanStartedAt = System.currentTimeMillis(); gate = ScanGate(prefs.scanStableMs.toLong(), 3, 300)
@@ -184,6 +197,7 @@ class CaptureService : Service() {
         session.metrics.queueSent = queue.sent; session.metrics.queuePending = queue.pending; session.metrics.queueFailed = queue.failedAttempts
         val report = session.metrics.report()
         prefs.lastScanReport = "${session.id}: $report"
+        hadScanRecords = hadScanRecords || session.metrics.recorded > 0
         DebugLog.add(this, "scan", emptyList(), "연속 스캔 종료 — $report")
         // 세션 측정값도 서버에 남긴다(대기열 경유, 웹 스캔 기록에서 표시)
         queue.enqueue("session", session.sessionBody()); queue.start(scope)
@@ -307,17 +321,20 @@ class CaptureService : Service() {
             session.metrics.failNoSpecies++
         }
         val spFinal: SpeciesRef = spResolved
-        val cp = info.cp
-        // CP 가 배너에 가려진 프레임도 막대+HP 로 레벨 범위 기록("CP 미확인"). 같은 개체를 이후 CP 까지 읽으면 서버가 그 기록을 갱신한다
+        val base = IvCalc.Base(spFinal.atk, spFinal.def, spFinal.sta)
+        // 4-B5 CP 정리: 이 프레임 OCR 값만 쓰고(이월 없음), 막대 IV+HP 로 가능한 레벨의 CP 와 일치할 때만 저장. 불일치면 null(재확인 아님)
+        val cpOcr = info.cp
+        val cp = IvCalc.validateCp(base, cpOcr, info.hp, ap)
+        if (cpOcr != null && cp == null) session.metrics.cpRejected++
+        // CP 가 배너에 가려진(또는 검증 실패) 프레임도 막대+HP 로 레벨 범위 기록("CP 미확인"). 같은 개체를 이후 CP 까지 읽으면 서버가 그 기록을 갱신한다
         if (cp == null) { session.metrics.skippedNoCp++; session.metrics.failNoCp++ }
         val key = ScanSession.scanKey(spFinal, cp, info.hp, ap, false)
         if (session.isDuplicate(key)) { g.close(); session.metrics.duplicates++; session.metrics.failDuplicate++; session.lastLine = "같은 개체(이미 기록)"; refreshScanLine(); return }
-        // CP/HP 로 레벨 교차 확인: 막대 개체값과 성립하는 후보가 없으면 "재확인 필요"
-        val base = IvCalc.Base(spFinal.atk, spFinal.def, spFinal.sta)
+        // 레벨 후보: 검증된 CP 가 있으면 CP+HP+막대, 없으면 막대+HP. "재확인 필요"는 막대와 HP 가 모순일 때(후보 0)만
         var cands: List<IvCalc.Candidate> = if (cp != null) IvCalc.filterByAppraisal(IvCalc.candidates(base, cp, info.hp), apA, apD, apS) else emptyList()
-        val recheck = forcedRecheck || (cp != null && cands.isEmpty())
-        if (recheck) session.metrics.failMismatch++
         if (cands.isEmpty()) cands = IvCalc.candidatesWithoutCp(base, info.hp, ap)
+        val recheck = forcedRecheck || cands.isEmpty()
+        if (recheck) session.metrics.failMismatch++
         val pct = Math.round((apA + apD + apS) * 100.0 / 45)
         val body = session.body(spFinal, info, ap, cands, reading.stars, recheck)
         // 로컬 확정 → 대기열 (서버 응답을 기다리지 않는다)
@@ -329,6 +346,21 @@ class CaptureService : Service() {
         if (!cpFill) vibrateShort()
         session.lastLine = "${if (cpFill) "CP 보완" else "방금"} ${spFinal.nameKr} ${pct}%${if (cp == null) " (CP 미확인)" else " CP$cp"}${if (recheck) " ⚠️재확인" else ""}${if (altUsed) " (라벨행 값 채택)" else ""}"
         refreshScanLine()
+        // 4-B5 실시간 판정: 서버 /api/verdict 비동기 → 띠·알림에 "❌ 박사행 / ✅ 주력: 불꽃 레이드 / 💎" (게임 부스터를 끄면 띠가 보임)
+        val recordedNow = session.metrics.recorded
+        scope.launch(Dispatchers.IO) {
+            try {
+                val vb = VerdictClient.body(spFinal, info.copy(cp = cp), cands, emptyList(), prefs.storageMode)
+                val v = VerdictClient.parse(Api(prefs).verdict(vb))
+                withContext(Dispatchers.Main) {
+                    if (scanning && scan === session) {
+                        val head = when (v.tier) { "transfer" -> "❌ 박사행"; "main" -> "✅ 주력: ${v.recommendedTags.firstOrNull() ?: ""}"; "hold" -> "🟡 보류: ${v.recommendedTags.firstOrNull() ?: ""}"; else -> "❔ 확인 필요" }
+                        session.lastLine = "$head${if (v.collect.isNotEmpty()) " 💎" else ""} · ${spFinal.nameKr} ${pct}%"
+                        refreshScanLine()
+                    }
+                }
+            } catch (e: Exception) { DebugLog.add(this@CaptureService, "verdict-live-error", emptyList(), spFinal.nameKr, e.toString()); if (recordedNow == 0) { /* 무시 */ } }
+        }
         if (prefs.debugMode) {
             DebugLog.add(this, "scan-item", lines.map { it.text }, "$key 막대 ${reading.detail} 서명 ${sig.atk}/${sig.def}/${sig.sta} 후보 ${cands.size} 재확인=$recheck")
             if (recheck && session.metrics.debugUploads < prefs.scanDebugMax) { session.metrics.debugUploads++; uploadDebug("scan-fail", lines, "막대-CP 모순 $key · ${reading.detail}", bmp) }
