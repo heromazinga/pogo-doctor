@@ -11,7 +11,8 @@ async function fetchLeague(league, fetchImpl) {
   const arr = await res.json();
   if (!Array.isArray(arr)) throw new Error("형식 오류");
   const map = new Map();
-  arr.forEach((r, i) => { if (r?.speciesId && !map.has(r.speciesId)) map.set(r.speciesId, { rank: i + 1, score: r.score, name: r.speciesName }); });
+  // 4-C: moveset(["FAST","CHARGED1","CHARGED2"] PvPoke ID)도 보관 → 리그 태그의 추천 기술 표시
+  arr.forEach((r, i) => { if (r?.speciesId && !map.has(r.speciesId)) map.set(r.speciesId, { rank: i + 1, score: r.score, name: r.speciesName, moveset: Array.isArray(r.moveset) ? r.moveset.slice(0, 3) : null }); });
   return map;
 }
 

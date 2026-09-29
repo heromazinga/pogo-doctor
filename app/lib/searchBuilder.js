@@ -7,14 +7,19 @@
 export const DEFAULT_MAX_LEN = 200;
 // 예상 수 한계 안내 (박사행 토스트·🧹 패널·앱 목록에 상시 표기)
 export const EXPECTED_LIMIT_NOTE = "예상 수는 앱이 아는 개체(스캔 기록 + 내 목록) 기준입니다. 앱이 모르는 같은 종·HP 개체가 게임에 있으면 결과가 더 나옵니다 — 게임 결과 수가 예상과 다르면 보내지 마세요.";
+// 4-C "&!#"(태그 없는 개체만) 옵션을 켰을 때의 안내: 태그 달린 개체는 검색에서 빠지므로 결과는 예상 이하
+export const NO_TAG_NOTE = "박사행 검색어에 &!#(태그 없는 개체만)이 붙어 있습니다. 게임 결과 ≤ 예상 N마리 — 적으면 태그 달린 개체가 빠진 것입니다. 앱이 모르는 같은 종·HP 개체가 있으면 더 나올 수 있으니 예상보다 많으면 보내지 마세요. (한국어판 !# 동작 확인 필요)";
 
 const key = (x) => `${x.species_id}|${x.hp ?? ""}|${x.cp ?? ""}|${x.is_shadow ? 1 : 0}`;
 
 // 검색식이 개체 x 를 잡는가 (도감번호 OR, hp OR, cp 범위 OR 로 판단. 폼·섀도는 검색식에 넣지 않으므로 잡힌다고 본다)
+// 4-C: "!#" 절(게임 검색: 태그 없는 개체만)은 game_tags 가 비어 있을 때 잡힌다고 본다 (한국어판 동작은 사용자 확인 필요, 기본 끔)
+export const NO_TAG_CLAUSE = "!#";
 export function matches(query, x) {
   const parts = query.split("&");
   return parts.every((clause) => clause.split(",").some((term) => {
     const t = term.trim();
+    if (t === NO_TAG_CLAUSE) return !(x.game_tags || []).length;
     if (/^\d+$/.test(t)) return String(x.species_id) === t;
     if (/^hp\d+$/.test(t)) return x.hp != null && `hp${x.hp}` === t;
     const m = t.match(/^cp(\d+)(?:-(\d+))?$/);
@@ -95,11 +100,14 @@ export function classify(items) {
 }
 
 // 전체 결과: [{category:"transfer"|"tag:불꽃 레이드"|"collect", label, groups, skipped}]
+// opts.noTag(4-C, 기본 false): 박사행 검색어 끝에 "&!#"(태그 없는 개체만)을 붙인다. 켜면 게임 결과 ≤ 예상 N마리(적으면 태그 달린 개체가 빠진 것)
 export function buildCleanup(items, population, opts = {}) {
+  const { noTag = false, ...gopts } = opts;
   const c = classify(items);
   const out = [];
-  const add = (category, label, list, strict) => { if (!list.length) return; const r = buildGroups(list, population, { ...opts, strict }); out.push({ category, label, count: list.length, strict, ...r }); };
+  const add = (category, label, list, strict) => { if (!list.length) return; const r = buildGroups(list, population, { ...gopts, strict }); out.push({ category, label, count: list.length, strict, ...r }); };
   add("transfer", "❌ 박사행", c.transfer, true);
+  if (noTag) for (const cat of out) if (cat.category === "transfer") { cat.noTag = true; for (const g of cat.groups) g.query = `${g.query}&${NO_TAG_CLAUSE}`; }
   for (const [tg, list] of [...c.tags.entries()].sort((a, b) => b[1].length - a[1].length)) add(`tag:${tg}`, `🏷 ${tg}`, list, false);
   add("collect", "💎 수집 추천(보관)", c.collect, false);
   return out;

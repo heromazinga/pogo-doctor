@@ -51,6 +51,12 @@ await check("scan_sessions upsert", `insert into public.scan_sessions(user_id,se
 await check("cleanup_scan_items() (세션 포함)", `select public.cleanup_scan_items()`, true);
 await check("0007 game_tags 저장", `insert into public.scan_items(user_id,session_id,scan_key,species_id,name_kr,game_tags) values ('${UID}','s2','k1',700,'님피아','{"슈퍼리그"}')`, true);
 await check("0007 game_tags 9개 거부", `insert into public.my_pokemon(user_id,species_id,form,name_kr,game_tags) values ('${UID}',1,'Normal','x','{"a","b","c","d","e","f","g","h","i"}')`, false);
+// 0008 superseded
+await check("0008 superseded 기본 false", `insert into public.scan_items(user_id,session_id,scan_key,species_id,name_kr) values ('${UID}','s3','k3',979,'저승갓숭')`, true);
+const sup = await db.query(`select superseded, superseded_by from public.scan_items where session_id='s3'`);
+console.log(`0008 superseded 기본값: ${sup.rows[0]?.superseded === false && sup.rows[0]?.superseded_by == null ? "OK" : "FAIL"}`); if (!(sup.rows[0]?.superseded === false)) failed++;
+await check("0008 superseded_by 자기참조", `update public.scan_items set superseded = true, superseded_by = (select id from public.scan_items where session_id='s2' limit 1) where session_id='s3'`, true);
+await check("0008 superseded_by 없는 id 거부", `update public.scan_items set superseded_by = '00000000-0000-0000-0000-00000000dead' where session_id='s3'`, false);
 const idx = await db.query(`select indexname from pg_indexes where tablename='my_pokemon' and indexname like '%tags%'`);
 console.log("tags index:", idx.rows.map((r) => r.indexname).join(", ") || "없음");
 console.log(failed ? `FAILED ${failed}` : "ALL OK");

@@ -73,6 +73,17 @@ test("4-B6 strict=false(태그): 충돌이 있어도 묶음 생성 + overlap 표
   assert.equal(c.find((x) => x.category.startsWith("tag:")).strict, false); assert.equal(c.find((x) => x.category === "transfer").strict, true);
 });
 
+test("4-C noTag 옵션: 박사행 검색어에만 '&!#' 추가, matches 는 game_tags 없는 개체만 잡음, 기본 끔", () => {
+  const items = [{ id: "a", species_id: 700, hp: 154, verdict: { tier: "transfer", recommendedTags: [] } }, { id: "b", species_id: 381, hp: 118, verdict: { tier: "main", recommendedTags: ["슈퍼리그"] } }];
+  const off = buildCleanup(items, items);
+  assert.equal(off.find((c) => c.category === "transfer").groups[0].query, "700&hp154"); assert.ok(!off[0].noTag);
+  const on = buildCleanup(items, items, { noTag: true });
+  assert.equal(on.find((c) => c.category === "transfer").groups[0].query, "700&hp154&!#"); assert.equal(on.find((c) => c.category === "transfer").noTag, true);
+  assert.equal(on.find((c) => c.category === "tag:슈퍼리그").groups[0].query, "381&hp118", "태그 묶음에는 붙이지 않음");
+  assert.ok(matches("700&hp154&!#", { species_id: 700, hp: 154, game_tags: [] }));
+  assert.ok(!matches("700&hp154&!#", { species_id: 700, hp: 154, game_tags: ["즐겨찾기"] }));
+});
+
 test("4-B6 게임 태그가 있는 개체는 박사행 대상 제외", () => {
   const c = classify([{ id: "1", species_id: 1, hp: 10, verdict: { tier: "transfer" }, game_tags: ["슈퍼리그"] }, { id: "2", species_id: 1, hp: 11, verdict: { tier: "transfer" }, game_tags: [] }]);
   assert.deepEqual(c.transfer.map((x) => x.id), ["2"]);

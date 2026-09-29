@@ -123,11 +123,11 @@ function evaluateCandidate(p, cand, input, ctx, rankings, { forEvolve = false } 
       } else {
         notes.push(sp.usesSpecial ? `특수 기술머신 필요(${moveName(ctx.dataset, sp.charged)})` : `${kr} 기술로 변경 필요`);
       }
-    } else if (!forEvolve) {
-      notes.push("기술 확인 필요(최적 기술 가정)");
     }
-    const reason = `${kr} ${sp.rank}위(1위 대비 ${sp.pct}%)${shadow ? "(섀도)" : ""}·공격 ${cand.atk}, 내 ${p.nameKr} 중 ${indiv}위${notes.length ? " · " + notes.join(", ") : ""}`;
-    tags.push({ name: TAG.raid(kr), tier, reason, metrics: { type: t, speciesRank: sp.rank, speciesPct: sp.pct, top, indivRank: indiv, atkIv: cand.atk, level: cand.level, speciesScore: sp.score, myScore, bestMoves: [sp.fast, sp.charged], usesSpecial: sp.usesSpecial, notes } });
+    // 4-C: 기술은 캡처하지 않는다(기술머신·이벤트로 바꾸므로). 태그마다 추천 기술(종 최적 조합)을 표시하고, 특수 기술머신이 필요하면 ⚠ 표기
+    const moves = recommendedMoves(ctx.dataset, p, sp.fast, sp.charged);
+    const reason = `${kr} ${sp.rank}위(1위 대비 ${sp.pct}%)${shadow ? "(섀도)" : ""}·공격 ${cand.atk}, 내 ${p.nameKr} 중 ${indiv}위 · ${moveLine(moves)}${notes.length ? " · " + notes.join(", ") : ""}`;
+    tags.push({ name: TAG.raid(kr), tier, reason, moves, metrics: { type: t, speciesRank: sp.rank, speciesPct: sp.pct, top, indivRank: indiv, atkIv: cand.atk, level: cand.level, speciesScore: sp.score, myScore, bestMoves: [sp.fast, sp.charged], usesSpecial: sp.usesSpecial, notes } });
   }
 
   // 2) 체육관 방어
@@ -162,7 +162,8 @@ function evaluateCandidate(p, cand, input, ctx, rankings, { forEvolve = false } 
     if (top && me.rank <= rule(ctx, "LEAGUE_MAIN_PRODUCT_RANK")) tier = "main";
     else if ((top && me.rank <= holdRank) || (!top && me.rank <= midHoldRank)) tier = "hold";
     if (!tier) continue;
-    tags.push({ name: TAG[league], tier, reason: `PvPoke ${sp.rank}위·스탯곱 ${me.rank}/4096위 (L${me.level} CP${me.cp})`, metrics: { speciesRank: sp.rank, top, productRank: me.rank, levelAtCap: me.level, cpAtCap: me.cp } });
+    const moves = movesFromPvpoke(ctx.dataset, p, sp.moveset);
+    tags.push({ name: TAG[league], tier, reason: `PvPoke ${sp.rank}위·스탯곱 ${me.rank}/4096위 (L${me.level} CP${me.cp})${moves ? " · " + moveLine(moves) : ""}`, moves, metrics: { speciesRank: sp.rank, top, productRank: me.rank, levelAtCap: me.level, cpAtCap: me.cp } });
   }
 
   // 4) 마스터리그
@@ -173,7 +174,8 @@ function evaluateCandidate(p, cand, input, ctx, rankings, { forEvolve = false } 
       const sp = leagueRankOf(ctx.leagueRankings, "master", p.pvpokeId, shadow);
       if (sp && sp.rank <= RULES.MASTER_TOP_RANK) {
         const tier = pct >= RULES.MASTER_MAIN_PCT ? "main" : pct >= RULES.MASTER_HOLD_PCT ? "hold" : null;
-        if (tier) tags.push({ name: TAG.master, tier, reason: `PvPoke ${sp.rank}위·개체값 ${pct}%`, metrics: { speciesRank: sp.rank, pct } });
+        const moves = movesFromPvpoke(ctx.dataset, p, sp.moveset);
+        if (tier) tags.push({ name: TAG.master, tier, reason: `PvPoke ${sp.rank}위·개체값 ${pct}%${moves ? " · " + moveLine(moves) : ""}`, moves, metrics: { speciesRank: sp.rank, pct } });
       }
     }
   }
@@ -187,13 +189,52 @@ function evaluateCandidate(p, cand, input, ctx, rankings, { forEvolve = false } 
       if (!useful.length) continue;
       const tier = "main";
       const candy = Number.isInteger(input.candy) ? (input.candy >= f.candiesFromHere ? `진화 가능(사탕 ${input.candy}/${f.candiesFromHere})` : `사탕 ${input.candy}/${f.candiesFromHere}`) : `사탕 ${f.candiesFromHere}개 필요`;
-      tags.push({ name: TAG.evolve(f.species.nameKr), tier, reason: `${f.species.nameKr} 기준: ${useful.map((t) => `${t.name} ${TIER_LABEL[t.tier]}`).join(", ")} · ${candy}`, metrics: { finalId: f.species.id, finalForm: f.species.form, candiesNeeded: f.candiesFromHere, candy: input.candy ?? null, finalTags: useful.map((t) => ({ name: t.name, tier: t.tier })) } });
+      // 4-C: 최종형의 추천 기술(첫 주력 태그 기준)을 함께 표시. 30일 내 이벤트 대상이면 computeVerdict 에서 "📅 이벤트 때 진화" 를 붙인다
+      const moves = useful.find((t) => t.moves)?.moves || null;
+      tags.push({ name: TAG.evolve(f.species.nameKr), tier, reason: `${f.species.nameKr} 기준: ${useful.map((t) => `${t.name} ${TIER_LABEL[t.tier]}`).join(", ")} · ${candy}${moves ? " · " + moveLine(moves) : ""}`, moves, metrics: { finalId: f.species.id, finalForm: f.species.form, candiesNeeded: f.candiesFromHere, candy: input.candy ?? null, finalTags: useful.map((t) => ({ name: t.name, tier: t.tier, moves: t.moves || null })) } });
     }
   }
   return { tags, warnings, pct };
 }
 
 function moveName(dataset, m) { return dataset.moveNamesKr?.[m] || m; }
+
+// ─── 4-C 추천 기술 (기술 캡처 없음: 기술머신·이벤트로 바꾸므로 종 최적 조합을 안내) ───
+// 반환 { fast, charged:[…], fastKr, chargedKr:[…], special:boolean(특수 기술머신 필요: 레거시·전용기) }
+function specialSet(p) { return new Set([...(p.eliteFast || []), ...(p.eliteCharged || []), ...(p.signatureFast || []), ...(p.signatureCharged || [])]); }
+export function recommendedMoves(dataset, p, fast, charged) {
+  if (!fast && !charged) return null;
+  const chargedList = (Array.isArray(charged) ? charged : [charged]).filter(Boolean);
+  const sp = specialSet(p);
+  return { fast: fast || null, charged: chargedList, fastKr: fast ? moveName(dataset, fast) : null, chargedKr: chargedList.map((m) => moveName(dataset, m)), special: [fast, ...chargedList].some((m) => m && sp.has(m)) };
+}
+// PvPoke moveset ID("FIRE_SPIN", "X_SCISSOR") → 데이터셋 기술명("Fire Spin", "X-Scissor"): 영숫자만 남겨 비교. 못 찾으면 ID 를 보기 좋게
+const moveIndexMemo = new WeakMap();
+function moveIndex(dataset) {
+  if (moveIndexMemo.has(dataset)) return moveIndexMemo.get(dataset);
+  const idx = new Map();
+  const norm = (s) => String(s).toLowerCase().replace(/[^a-z0-9]/g, "");
+  for (const k of [...Object.keys(dataset.moveStats || {}), ...Object.keys(dataset.moveNamesKr || {})]) if (!idx.has(norm(k))) idx.set(norm(k), k);
+  const out = { idx, norm };
+  moveIndexMemo.set(dataset, out);
+  return out;
+}
+export function pvpokeMoveToName(dataset, id) {
+  if (!id) return null;
+  const { idx, norm } = moveIndex(dataset);
+  return idx.get(norm(id)) || String(id).toLowerCase().split("_").map((w) => w.charAt(0).toUpperCase() + w.slice(1)).join(" ");
+}
+function movesFromPvpoke(dataset, p, moveset) {
+  if (!Array.isArray(moveset) || !moveset.length) return null;
+  const names = moveset.map((m) => pvpokeMoveToName(dataset, m));
+  return recommendedMoves(dataset, p, names[0], names.slice(1, 3));
+}
+// 표시용 한 줄: "추천 기술: 불꽃회오리/블라스트번 ⚠ 특수 기술머신"
+export function moveLine(m) {
+  if (!m) return "";
+  const parts = [m.fastKr || m.fast, ...(m.chargedKr?.length ? m.chargedKr : m.charged || [])].filter(Boolean);
+  return `추천 기술: ${parts.join("/")}${m.special ? " ⚠ 특수 기술머신" : ""}`;
+}
 
 // ─── 보관함 여유 적용 ───
 function applyStorage(tags, p, input, ctx) {
@@ -260,6 +301,8 @@ export function computeVerdict(input, ctx) {
       const date = new Date(h.start).toISOString().slice(0, 10);
       event = { name: h.name, label: h.label, type: h.type, date, start: h.start, end: h.end, link: h.link, note: `📅 ${date} ${h.label} 대상 — 박사행 보류(이벤트 때 진화하면 전용 기술)` };
       if (tier === "transfer") tier = "hold";
+      // 4-C: 진화 대기 태그에 "📅 이벤트 때 진화" (이벤트 진화로 전용 기술을 얻으면 특수 기술머신 불필요)
+      for (const t of tags) if (t.name.startsWith("진화 대기")) { t.evolveAtEvent = `📅 이벤트 때 진화(${date} ${h.label})`; t.reason += ` · ${t.evolveAtEvent}`; }
     }
   }
 
@@ -279,6 +322,8 @@ export function computeVerdict(input, ctx) {
     levelRange: [Math.min(...evals.map((e) => e.cand.level)), Math.max(...evals.map((e) => e.cand.level))],
     recommendedTags: tags.filter((t) => t.tier === "main" || t.tier === "hold").map((t) => t.name),
     purposes: purposesFromTags(tags.filter((t) => t.tier === "main" || t.tier === "hold").map((t) => t.name)),
+    // 4-C: 보관(주력/보류) 태그별 추천 기술 { 태그명: {fast, charged, fastKr, chargedKr, special} }
+    recommendedMoves: Object.fromEntries(tags.filter((t) => (t.tier === "main" || t.tier === "hold") && t.moves).map((t) => [t.name, t.moves])),
   };
 }
 

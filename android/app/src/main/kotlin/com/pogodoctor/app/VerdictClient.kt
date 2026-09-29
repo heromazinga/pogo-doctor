@@ -9,7 +9,8 @@ import org.json.JSONObject
 // 4-A 서버 판정(POST /api/verdict) 호출 + 응답 파싱. 오프라인이면 호출측이 기기 내 간이 판정으로 대체한다.
 // 보내는 것: 종·폼·개체값 후보(최대 300)·CP·HP·기술(영어 ID)·포획 날짜·보관함 여유. 포획 장소는 보내지 않는다.
 object VerdictClient {
-    data class Tag(val name: String, val tier: String, val reason: String)
+    // 4-C: moves = 추천 기술 한 줄("불꽃회오리/블라스트번"), special = 특수 기술머신 필요, evolveAtEvent = "📅 이벤트 때 진화(…)"
+    data class Tag(val name: String, val tier: String, val reason: String, val moves: String? = null, val special: Boolean = false, val evolveAtEvent: String? = null)
     data class Verdict(
         val tier: String, val summary: String, val tags: List<Tag>, val recommendedTags: List<String>, val purposes: List<String>,
         val collect: List<String>, val eventNote: String?, val confident: Boolean, val warnings: List<String>, val candidates: Int,
@@ -35,7 +36,16 @@ object VerdictClient {
         fun strs(a: JSONArray?) = (0 until (a?.length() ?: 0)).map { a!!.optString(it) }
         val tags = ArrayList<Tag>()
         val ta = v.optJSONArray("tags")
-        for (i in 0 until (ta?.length() ?: 0)) { val t = ta!!.getJSONObject(i); tags.add(Tag(t.optString("name"), t.optString("tier"), t.optString("reason"))) }
+        for (i in 0 until (ta?.length() ?: 0)) {
+            val t = ta!!.getJSONObject(i)
+            val mv = t.optJSONObject("moves")
+            val moves = mv?.let { m ->
+                val fast = m.optString("fastKr", m.optString("fast", "")).ifBlank { null }
+                val ch = m.optJSONArray("chargedKr") ?: m.optJSONArray("charged")
+                (listOfNotNull(fast) + strs(ch)).filter { it.isNotBlank() }.joinToString("/").ifBlank { null }
+            }
+            tags.add(Tag(t.optString("name"), t.optString("tier"), t.optString("reason"), moves, mv?.optBoolean("special", false) ?: false, t.optString("evolveAtEvent", "").ifBlank { null }))
+        }
         val collect = ArrayList<String>()
         val ca = v.optJSONArray("collect")
         for (i in 0 until (ca?.length() ?: 0)) collect.add(ca!!.getJSONObject(i).optString("reason"))

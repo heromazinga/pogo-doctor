@@ -4,15 +4,20 @@ package com.pogodoctor.core
 // 형식: "{도감번호 OR}&{hp OR}[&cp OR]" (CNF: & 절마다 , 는 OR). 알려진 전체 개체에서 대상 외 개체가 잡히면 묶음을 쪼갠다.
 object SearchBuilder {
     const val DEFAULT_MAX_LEN = 200
-    data class Item(val id: String, val speciesId: Int, val hp: Int?, val cp: Int?, val cpVerified: Boolean, val isShadow: Boolean = false, val form: String = "Normal")
+    data class Item(val id: String, val speciesId: Int, val hp: Int?, val cp: Int?, val cpVerified: Boolean, val isShadow: Boolean = false, val form: String = "Normal", val gameTags: List<String> = emptyList())
     data class Group(val query: String, val expected: Int, val targetIds: List<String>, val withCp: Boolean, val overlap: Int = 0)
     data class Skipped(val id: String, val reason: String)
     data class Result(val groups: List<Group>, val skipped: List<Skipped>)
+
+    // 4-C: 박사행 검색어에 붙이는 "태그 없는 개체만" 절 (한국어판 동작은 사용자 확인 필요, 기본 끔)
+    const val NO_TAG_CLAUSE = "!#"
+    fun withNoTag(query: String) = "$query&$NO_TAG_CLAUSE"
 
     fun matches(query: String, x: Item): Boolean = query.split("&").all { clause ->
         clause.split(",").any { term ->
             val t = term.trim()
             when {
+                t == NO_TAG_CLAUSE -> x.gameTags.isEmpty()
                 t.matches(Regex("\\d+")) -> x.speciesId.toString() == t
                 t.matches(Regex("hp\\d+")) -> x.hp != null && "hp${x.hp}" == t
                 else -> Regex("cp(\\d+)(?:-(\\d+))?").matchEntire(t)?.let { m -> val cp = x.cp ?: return@let false; val lo = m.groupValues[1].toInt(); val hi = m.groupValues[2].ifEmpty { m.groupValues[1] }.toInt(); cp in lo..hi } ?: false

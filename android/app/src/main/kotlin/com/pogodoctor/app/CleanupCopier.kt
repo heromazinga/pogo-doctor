@@ -23,6 +23,7 @@ object CleanupCopier {
     @Volatile var lastError: String? = null
     @Volatile var note: String = LIMIT_NOTE
     @Volatile var gameTagged: Int = 0
+    @Volatile var noTag: Boolean = false   // 4-C 서버가 박사행 검색어에 &!# 를 붙였는지
 
     fun status(): String = "박사행 ${if (transfer.isEmpty()) 0 else transferIdx + 1}/${transfer.size} · 태그 카테고리 ${tagCats.size}개" + (if (gameTagged > 0) " · 게임 태그 있음 $gameTagged 제외" else "")
     fun categories(): List<Category> = tagCats
@@ -32,7 +33,8 @@ object CleanupCopier {
     @Synchronized fun refresh(prefs: Prefs, force: Boolean = false): Boolean {
         if (!force && System.currentTimeMillis() - fetchedAt < 60_000 && (transfer.isNotEmpty() || tagCats.isNotEmpty())) return true
         return try {
-            val res = Api(prefs).cleanup(prefs.cleanupMaxLen)
+            val res = Api(prefs).cleanup(prefs.cleanupMaxLen, prefs.cleanupNoTag)
+            noTag = res.optBoolean("noTag", false)
             val names = res.optJSONObject("names") ?: JSONObject()
             val cats = res.optJSONArray("categories")
             val tr = ArrayList<Group>(); val tg = ArrayList<Category>()
@@ -62,7 +64,8 @@ object CleanupCopier {
 
     // 토스트 본문 형식: "[불꽃 레이드] 복사됨 · 예상 N마리 — 게임 결과 수가 같을 때만 전체 선택" (박사행: "[박사행 1/2] …")
     fun toastText(head: String, g: Group, withNote: Boolean): String {
-        val sb = StringBuilder("[$head] 복사됨 · 예상 ${g.expected}마리 — 게임 결과 수가 같을 때만 전체 선택")
+        // 4-C: &!# 옵션이 켜진 박사행 묶음은 "결과 ≤ 예상" (태그 달린 개체가 빠짐)
+        val sb = StringBuilder(if (noTag && g.category == "transfer") "[$head] 복사됨 · 게임 결과 ≤ 예상 ${g.expected}마리. 적으면 태그 달린 개체가 빠진 것 — 많으면 보내지 마세요" else "[$head] 복사됨 · 예상 ${g.expected}마리 — 게임 결과 수가 같을 때만 전체 선택")
         if (g.overlap > 0) sb.append("\n⚠️ 다른 개체 최대 ${g.overlap}마리 포함 가능(태그는 덮어써도 됨)")
         if (g.names.isNotBlank()) sb.append("\n(${g.names})")
         if (withNote) sb.append("\n$note")

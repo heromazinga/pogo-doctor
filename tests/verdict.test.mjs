@@ -2,7 +2,7 @@
 //   npm test  (node --test tests/*.test.mjs)
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { computeVerdict, leagueProductTable } from "../app/lib/verdict.js";
+import { computeVerdict, leagueProductTable, pvpokeMoveToName } from "../app/lib/verdict.js";
 import { getRankings } from "../app/lib/speciesRankings.js";
 import { extractEventTargets, matchEvents } from "../app/lib/eventTargets.js";
 import { ivCandidates } from "../app/lib/ivCalc.js";
@@ -88,9 +88,36 @@ test("에이스번에 블라스트번이 없으면 '특수 기술머신 필요' 
   assert.equal(t.metrics.speciesRank, tagOf(computeVerdict({ species_id: 815, ivs: { atk: 15, def: 14, sta: 14 }, level: 40 }, ctx()), TAG.raid("불꽃")).metrics.speciesRank);
 });
 
-test("기술 미입력 → '기술 확인 필요(최적 기술 가정)'", () => {
+test("4-C 추천 기술: 기술 미입력이어도 경고 없이 태그별 추천 기술(종 최적 조합)·특수 기술머신 표기, recommendedMoves, 리그는 PvPoke moveset", () => {
   const v = computeVerdict({ species_id: 815, ivs: { atk: 15, def: 14, sta: 14 }, level: 40 }, ctx());
-  assert.ok(tagOf(v, TAG.raid("불꽃")).metrics.notes.includes("기술 확인 필요(최적 기술 가정)"));
+  const t = tagOf(v, TAG.raid("불꽃"));
+  assert.ok(!t.reason.includes("기술 확인 필요"), t.reason);
+  assert.deepEqual(t.moves, { fast: "Fire Spin", charged: ["Blast Burn"], fastKr: "불꽃회오리", chargedKr: ["블라스트번"], special: true });
+  assert.ok(t.reason.includes("추천 기술: 불꽃회오리/블라스트번 ⚠ 특수 기술머신"), t.reason);
+  assert.deepEqual(v.recommendedMoves[TAG.raid("불꽃")], t.moves);
+  // 리자몽: 블라스트번이 일반 기술 → 특수 기술머신 아님
+  const c = tagOf(computeVerdict({ species_id: 6, ivs: { atk: 15, def: 15, sta: 15 }, level: 40 }, ctx()), TAG.raid("불꽃"));
+  assert.equal(c.moves.special, false); assert.ok(!c.reason.includes("⚠ 특수 기술머신"));
+  // 리그: PvPoke moveset ID → 데이터셋 기술명·한국어명
+  const lr = { ...leagueRankings, leagues: { ...leagueRankings.leagues, great: new Map([["azumarill", { rank: 1, score: 100, moveset: ["BUBBLE", "HYDRO_PUMP"] }]]) } };
+  const a = tagOf(computeVerdict({ species_id: 184, ivs: { atk: 0, def: 15, sta: 15 }, level: 20 }, ctx({ leagueRankings: lr })), TAG.great);
+  assert.deepEqual(a.moves, { fast: "Bubble", charged: ["Hydro Pump"], fastKr: "Bubble", chargedKr: ["Hydro Pump"], special: false });
+  assert.equal(pvpokeMoveToName(dataset, "X_SCISSOR"), "X Scissor", "데이터셋에 없으면 보기 좋게");
+  // 진화 대기: 최종형 추천 기술 + 30일 내 이벤트면 "📅 이벤트 때 진화"
+  const now = Date.now();
+  const targets = extractEventTargets([{ name: "Charmander Community Day", eventType: "community-day", start: new Date(now + 5 * 86400000).toISOString(), end: new Date(now + 5 * 86400000 + 3600000).toISOString(), extraData: { communityday: { spawns: [{ name: "Charmander" }] } } }], now);
+  const ev = computeVerdict({ species_id: 4, ivs: { atk: 15, def: 15, sta: 15 }, level: 20 }, ctx({ eventTargets: targets }));
+  const e = tagOf(ev, TAG.evolve("리자몽"));
+  assert.ok(e, ev.tags.map((x) => x.name).join());
+  assert.equal(e.moves?.fast, "Fire Spin");
+  assert.ok(e.evolveAtEvent?.startsWith("📅 이벤트 때 진화"), e.reason);
+});
+
+test("기술 미입력 → 경고 대신 추천 기술 (4-C 이전 '기술 확인 필요' 문구 폐지)", () => {
+  const v = computeVerdict({ species_id: 815, ivs: { atk: 15, def: 14, sta: 14 }, level: 40 }, ctx());
+  const t = tagOf(v, TAG.raid("불꽃"));
+  assert.equal(t.metrics.notes.length, 0, "경고 없음");
+  assert.ok(t.moves && t.reason.includes("추천 기술:"));
 });
 
 test("내 목록 같은 종 안에서 공격 IV 순위 7위 이상이면 보류", () => {

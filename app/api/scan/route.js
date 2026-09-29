@@ -14,7 +14,8 @@ export async function GET(req) {
   if (!sb) return NextResponse.json({ error: "서버 Supabase 미설정" }, { status: 503 });
   const user = await resolveUser(req);
   if (!user) return NextResponse.json({ error: "로그인이 필요합니다" }, { status: 401 });
-  const { data, error } = await sb.from("scan_items").select("*").eq("user_id", user.userId).eq("dismissed", false).order("created_at", { ascending: false }).limit(300);
+  // 4-C: 강화·진화로 대체된(superseded) 기록은 제외 (마이그레이션 0008)
+  const { data, error } = await sb.from("scan_items").select("*").eq("user_id", user.userId).eq("dismissed", false).eq("superseded", false).order("created_at", { ascending: false }).limit(300);
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
   const items = data || [];
   // 4-B2: 앱 기록 시점에 판정이 아직 없는 항목(after() 미완료·실패)은 여기서 한 번의 컨텍스트로 계산해 저장

@@ -69,6 +69,10 @@ class Prefs(ctx: Context) {
         get() = plain.getString("game_tag_names", null) ?: com.pogodoctor.core.GameTags.USER_DEFAULT.joinToString(", ")
         set(v) = plain.edit().putString("game_tag_names", v).apply()
     val gameTagList: List<String> get() = gameTagNames.split(",", "\n").map { it.trim() }.filter { it.length in 1..24 }.distinct()
+    // 4-C 박사행 검색어에 "&!#"(태그 없는 개체만) 추가. 기본 끔 — 한국어판 동작은 사용자 확인 후
+    var cleanupNoTag: Boolean
+        get() = plain.getBoolean("cleanup_no_tag", false)
+        set(v) = plain.edit().putBoolean("cleanup_no_tag", v).apply()
     var lastScanReport: String
         get() = plain.getString("last_scan_report", "")!!
         set(v) = plain.edit().putString("last_scan_report", v).apply()

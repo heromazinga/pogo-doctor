@@ -8,7 +8,7 @@ const isColumnError = (e) => /column|schema cache/i.test(String(e?.message || ""
 const strip = (o) => { const r = { ...o }; for (const k of NEW_COLS) delete r[k]; return r; };
 
 let familyOf = null, familyAt = null;
-async function getFamilyOf() {
+export async function getFamilyOf() {
   try {
     const d = await getPokemonDataset();
     if (!familyOf || familyAt !== d.generatedAt) { familyOf = familyOfFactory(d.pokemon); familyAt = d.generatedAt; }
@@ -22,7 +22,12 @@ export async function upsertMyPokemon(sb, userId, incoming) {
   if (e0) return { row: null, updated: false, error: e0.message };
   const fam = await getFamilyOf();
   const m = findMatch(rows || [], incoming, fam);
-  if (m) {
+  // 4-C 규칙 ③ 후보가 2개 이상: 병합하지 않고 새 행에 재확인 표시(memo)
+  if (m?.ambiguous) {
+    const note = `⚠ 같은 개체값 ${m.candidates.length}마리와 구분 불가(강화·진화 갱신 보류) — 재확인`;
+    incoming = { ...incoming, memo: incoming.memo ? `${incoming.memo} · ${note}` : note };
+  }
+  if (m && m.row) {
     const patch = mergePatch(m.row, incoming);
     let { data, error } = await sb.from("my_pokemon").update(patch).eq("id", m.row.id).select(COLUMNS).single();
     if (error && isColumnError(error)) ({ data, error } = await sb.from("my_pokemon").update(strip(patch)).eq("id", m.row.id).select(COLUMNS.replace("hp,", "").replace("tags,caught_on,game_tags,", "")).single());
@@ -32,5 +37,5 @@ export async function upsertMyPokemon(sb, userId, incoming) {
   let { data, error } = await sb.from("my_pokemon").insert({ ...incoming, user_id: userId }).select(COLUMNS).single();
   if (error && isColumnError(error)) ({ data, error } = await sb.from("my_pokemon").insert({ ...strip(incoming), user_id: userId }).select(COLUMNS.replace("hp,", "").replace("tags,caught_on,game_tags,", "")).single());
   if (error) return { row: null, updated: false, error: error.message };
-  return { row: data, updated: false, rule: null };
+  return { row: data, updated: false, rule: null, ambiguous: Boolean(m?.ambiguous) };
 }

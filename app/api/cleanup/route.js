@@ -3,7 +3,7 @@ import { getServiceClient } from "../../lib/supabaseServer";
 import { rateLimit, clientIp } from "../../lib/deviceAuth";
 import { resolveUser, buildVerdictContext } from "../../lib/verdictContext";
 import { fillMissingVerdicts } from "../../lib/scanVerdict";
-import { buildCleanup, DEFAULT_MAX_LEN, EXPECTED_LIMIT_NOTE } from "../../lib/searchBuilder";
+import { buildCleanup, DEFAULT_MAX_LEN, EXPECTED_LIMIT_NOTE, NO_TAG_NOTE } from "../../lib/searchBuilder";
 import { computeVerdict, inputFromRow } from "../../lib/verdict";
 import { isLegendaryClass } from "../../lib/speciesRankings";
 import { findPokemon } from "../../lib/pokemonData";
@@ -18,9 +18,11 @@ export async function GET(req) {
   if (!sb) return NextResponse.json({ error: "서버 Supabase 미설정" }, { status: 503 });
   const user = await resolveUser(req);
   if (!user) return NextResponse.json({ error: "로그인이 필요합니다" }, { status: 401 });
-  const maxLen = Math.min(400, Math.max(60, Number(new URL(req.url).searchParams.get("maxLen")) || DEFAULT_MAX_LEN));
+  const sp = new URL(req.url).searchParams;
+  const maxLen = Math.min(400, Math.max(60, Number(sp.get("maxLen")) || DEFAULT_MAX_LEN));
+  const noTag = sp.get("noTag") === "1"; // 4-C: 박사행 검색어에 "&!#"(태그 없는 개체만) 추가 (기본 끔, 한국어판 동작 확인 필요)
   const { ctx } = await buildVerdictContext(req);
-  const { data: scans } = await sb.from("scan_items").select("*").eq("user_id", user.userId).eq("dismissed", false).order("created_at", { ascending: false }).limit(300);
+  const { data: scans } = await sb.from("scan_items").select("*").eq("user_id", user.userId).eq("dismissed", false).eq("superseded", false).order("created_at", { ascending: false }).limit(300);
   const items = scans || [];
   try { await fillMissingVerdicts(sb, items, ctx); } catch {}
   const rows = ctx.myRows || [];
@@ -35,10 +37,10 @@ export async function GET(req) {
       verdict, recheck: v ? !v.confident : true, is_shiny: Boolean(r.is_shiny), is_lucky: Boolean(r.is_lucky), legendary: legendaryOf(r), name_kr: r.name_kr, game_tags: r.game_tags || [] };
   });
   const all = [...scanTargets, ...rowTargets];
-  const categories = buildCleanup(all, all, { maxLen });
+  const categories = buildCleanup(all, all, { maxLen, noTag });
   const names = Object.fromEntries(all.map((x) => [x.id, x.name_kr]));
   const gameTagged = all.filter((x) => (x.game_tags || []).length).length;
-  return NextResponse.json({ categories, names, population: all.length, gameTagged, maxLen, note: EXPECTED_LIMIT_NOTE, at: new Date().toISOString() });
+  return NextResponse.json({ categories, names, population: all.length, gameTagged, maxLen, noTag, note: noTag ? NO_TAG_NOTE : EXPECTED_LIMIT_NOTE, at: new Date().toISOString() });
 }
 
 export async function POST(req) {

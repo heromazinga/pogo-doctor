@@ -80,6 +80,15 @@ class Phase4b6Test {
         assertEquals(listOf("PVP용", "하이퍼리그"), info.gameTags)
     }
 
+    // 4-C: "!#" 절은 게임 태그 없는 개체만 잡는다 (웹 searchBuilder.js 와 동일)
+    @Test fun no_tag_clause_matches_only_untagged() {
+        val q = SearchBuilder.withNoTag("700&hp154")
+        assertEquals("700&hp154&!#", q)
+        assertTrue(SearchBuilder.matches(q, SearchBuilder.Item("a", 700, 154, null, false)))
+        assertTrue(!SearchBuilder.matches(q, SearchBuilder.Item("b", 700, 154, null, false, gameTags = listOf("즐겨찾기"))))
+        assertTrue(!SearchBuilder.matches(q, SearchBuilder.Item("c", 700, 120, null, false)))
+    }
+
     @Test fun search_builder_loose_mode_reports_overlap_and_strict_splits() {
         val t = { id: String, sp: Int, hp: Int -> SearchBuilder.Item(id, sp, hp, null, false) }
         val targets = listOf(t("a", 700, 154), t("b", 381, 118))

@@ -2,7 +2,8 @@ import { NextResponse, after } from "next/server";
 import { getServiceClient } from "../../../lib/supabaseServer";
 import { rateLimit, clientIp, validDate, validTags } from "../../../lib/deviceAuth";
 import { userFromDeviceToken } from "../../../lib/deviceServer";
-import { scanKey } from "../../../lib/pokemonMatch";
+import { scanKey, findSuperseded } from "../../../lib/pokemonMatch";
+import { getFamilyOf } from "../../../lib/savePokemonServer";
 import { buildVerdictContext } from "../../../lib/verdictContext";
 import { verdictForItem } from "../../../lib/scanVerdict";
 
@@ -54,10 +55,27 @@ export async function POST(req) {
     const { data: prev } = await q;
     if (prev?.length) { existing = prev[0]; cpFilled = true; }
   }
+  // 4-C 규칙 ③: 강화·진화 후 같은 개체(같은 계열·폼·섀도·개체값, 레벨/CP 비감소)의 과거 기록(다른 세션 포함)을 superseded 로 표시.
+  //   과거 후보가 서로 다른 2개 이상이면 대체하지 않고 새 기록에 recheck 표시
+  let superseded = 0;
+  if (!existing && anyIv) {
+    const fam = await getFamilyOf();
+    const famIds = fam ? [...fam(item.species_id)] : [item.species_id];
+    const { data: prior } = await sb.from("scan_items").select("id,species_id,form,cp,hp,level,atk_iv,def_iv,sta_iv,is_shadow,session_id").eq("user_id", auth.userId).eq("dismissed", false).eq("superseded", false)
+      .in("species_id", famIds).eq("form", item.form).eq("is_shadow", item.is_shadow).eq("atk_iv", item.atk_iv).eq("def_iv", item.def_iv).eq("sta_iv", item.sta_iv).limit(50);
+    const r = findSuperseded(prior || [], item, fam);
+    if (r.ambiguous) item.recheck = true;
+    else if (r.superseded.length) item._supersedes = r.superseded.map((x) => x.id);
+  }
+  const supersedes = item._supersedes || []; delete item._supersedes;
   let data, error;
   if (existing) ({ data, error } = await sb.from("scan_items").update(item).eq("id", existing.id).select("*").single());
   else ({ data, error } = await sb.from("scan_items").insert(item).select("*").single());
   if (error) return NextResponse.json({ error: `스캔 기록 실패: ${error.message}` }, { status: 500 });
+  if (supersedes.length) {
+    const { error: e2 } = await sb.from("scan_items").update({ superseded: true, superseded_by: data.id }).eq("user_id", auth.userId).in("id", supersedes);
+    if (!e2) superseded = supersedes.length; else console.warn(`[scan] superseded 표시 실패: ${e2.message}`);
+  }
   const ivCandidates = Array.isArray(b.ivCandidates) ? b.ivCandidates.slice(0, 300) : undefined;
   after(async () => {
     try {
@@ -68,7 +86,7 @@ export async function POST(req) {
       console.log(`[scan] verdict after-response ${Date.now() - t0}ms ${data.id}`);
     } catch (e) { console.warn(`[scan] 판정 후계산 실패: ${e.message}`); }
   });
-  return NextResponse.json({ item: data, duplicate: Boolean(existing) && !cpFilled, cpFilled, ms: Date.now() - started });
+  return NextResponse.json({ item: data, duplicate: Boolean(existing) && !cpFilled, cpFilled, superseded, ms: Date.now() - started });
 }
 
 // 앱 → 세션 스캔 기록 조회 (?session=… 없으면 최근 200)
@@ -78,7 +96,7 @@ export async function GET(req) {
   const auth = await userFromDeviceToken(sb, req);
   if (!auth) return NextResponse.json({ error: "기기 토큰이 없거나 해제되었습니다" }, { status: 401 });
   const session = new URL(req.url).searchParams.get("session");
-  let q = sb.from("scan_items").select("*").eq("user_id", auth.userId).eq("dismissed", false).order("created_at", { ascending: false }).limit(200);
+  let q = sb.from("scan_items").select("*").eq("user_id", auth.userId).eq("dismissed", false).eq("superseded", false).order("created_at", { ascending: false }).limit(200);
   if (session) q = q.eq("session_id", session);
   const { data, error } = await q;
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
