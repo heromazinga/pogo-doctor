@@ -11,7 +11,8 @@ object BarReader {
     fun interface PixelSource { fun argb(x: Int, y: Int): Int }
 
     data class BarResult(val value: Int?, val filledPx: Int, val totalPx: Int, val red: Boolean, val source: String = "")
-    data class Reading(val appraisal: Appraisal, val stars: Int?, val detail: String, val fromRatio: Boolean = false)
+    // appraisal = 기본값(비율 x 범위, 라벨은 y 보정에만 사용). alt = 라벨 y 행 판독값(다르면 CP/HP 역산으로 검증해 대체 후보). mismatch = 둘이 다름
+    data class Reading(val appraisal: Appraisal, val stars: Int?, val detail: String, val fromRatio: Boolean = false, val alt: Appraisal? = null, val mismatch: Boolean = false)
 
     // 비율 상수 (검증·대체용)
     const val Y_ATK = 0.719; const val Y_DEF = 0.760; const val Y_STA = 0.801
@@ -45,17 +46,20 @@ object BarReader {
         return BarResult(v, filled, total, isRedBar, source)
     }
 
-    // 라벨 하나에 대해 후보 행(아래 띠 + 오른쪽 같은 높이)을 훑어 막대 픽셀이 가장 많은 행의 값을 택한다
+    // 라벨 하나에 대해 후보 행(아래 띠 + 오른쪽 같은 높이)을 훑되, x 범위는 비율 고정(X_START~X_END)만 쓴다.
+    // 4-B4 버그 원인: 이전에는 라벨 왼쪽부터 화면 오른쪽 끝(width-8)까지 훑어 첫/마지막 "막대색 또는 빈칸 회색" 픽셀을 막대 양끝으로 삼았다.
+    //   빈칸 판정(isEmpty)이 무채색 밝은 회색이면 모두 통과하므로 막대 오른쪽의 패널·카드 배경까지 분모에 들어가 실제 막대(~370px@1080)의 약 2배(~737px)가 되었다.
+    //   → 실기기 디버그 24건 중 22건 "label≠ratio", label 값 폐기. 라벨은 y 위치에만 쓰고 x 는 고정한다.
     fun readForLabel(px: PixelSource, width: Int, height: Int, label: OcrLine): BarResult {
         val h = maxOf(8, label.height)
         val rows = ArrayList<Int>()
         var y = label.bottom + (h * 0.3).toInt(); val yEnd = minOf(height - 1, label.bottom + (h * 1.6).toInt())
         while (y <= yEnd) { rows.add(y); y += maxOf(1, h / 6) }
         for (dy in listOf(-h / 4, 0, h / 4)) rows.add((label.centerY + dy).coerceIn(0, height - 1))
+        val xs = maxOf(0, (width * X_START).toInt() - 6); val xe = minOf(width - 1, (width * X_END).toInt() + 6)
         var best: BarResult? = null
         for (yy in rows) {
-            val xs = if (yy > label.bottom) maxOf(0, label.left - h) else label.right + 4
-            val res = readRow(px, yy, xs, width - 8, "label")
+            val res = readRow(px, yy, xs, xe, "label")
             if (res.value != null && (best == null || res.totalPx > best.totalPx)) best = res
         }
         return best ?: BarResult(null, 0, 0, false, "label")
@@ -93,26 +97,32 @@ object BarReader {
         return if (!any) null else minOf(3, best)
     }
 
-    // 라벨 우선, 라벨이 없거나 판독 실패하면 비율 위치. 둘 다 있고 값이 다르면 detail 에 표기(라벨 값 채택)
+    // 4-B4: 비율(x 고정, y 비율) 판독을 기본값으로. 라벨 y 행 판독이 다르면 alt 로 함께 돌려주고 호출측이 CP/HP 역산으로 검증한다.
+    //   비율 판독이 없을 때(라벨 y 만 잡힌 경우)만 라벨 값을 기본값으로 쓴다.
     fun readAppraisal(px: PixelSource, width: Int, height: Int, labels: List<OcrLine>): Reading {
         fun find(keys: List<String>) = labels.firstOrNull { ln -> keys.any { ln.text.replace(" ", "").contains(it) } }
         val la = find(listOf("공격")); val ld = find(listOf("방어")); val ls = find(listOf("HP", "체력"))
-        fun pick(label: OcrLine?, yRatio: Double): BarResult {
-            val byLabel = label?.let { readForLabel(px, width, height, it) }
+        data class Pick(val primary: BarResult, val alt: BarResult?)
+        fun pick(label: OcrLine?, yRatio: Double): Pick {
             val byRatio = readByRatio(px, width, height, yRatio)
+            val byLabel = label?.let { readForLabel(px, width, height, it) }
             return when {
-                byLabel?.value != null && byRatio.value != null && byLabel.value != byRatio.value -> byLabel.copy(source = "label≠ratio(${byRatio.value})")
-                byLabel?.value != null -> byLabel
-                else -> byRatio
+                byRatio.value != null && byLabel?.value != null && byLabel.value != byRatio.value -> Pick(byRatio.copy(source = "ratio≠label(${byLabel.value})"), byLabel)
+                byRatio.value != null -> Pick(byRatio, null)
+                byLabel?.value != null -> Pick(byLabel, null)
+                else -> Pick(byRatio, null)
             }
         }
-        val ra = pick(la, Y_ATK); val rd = pick(ld, Y_DEF); val rs = pick(ls, Y_STA)
+        val pa = pick(la, Y_ATK); val pd = pick(ld, Y_DEF); val ps = pick(ls, Y_STA)
+        val ra = pa.primary; val rd = pd.primary; val rs = ps.primary
         val first = listOfNotNull(la, ld, ls).minByOrNull { it.top }
         val stars = first?.let { countStars(px, width, it) }
         fun d(x: BarResult) = "${x.value}(${x.filledPx}/${x.totalPx}${if (x.red) " 빨강" else ""} ${x.source})"
         val detail = "공:${d(ra)} 방:${d(rd)} HP:${d(rs)} 별:${stars ?: "?"}"
-        val fromRatio = listOf(ra, rd, rs).all { it.source == "ratio" }
-        return Reading(Appraisal(ra.value, rd.value, rs.value), stars, detail, fromRatio)
+        val mismatch = pa.alt != null || pd.alt != null || ps.alt != null
+        val alt = if (mismatch) Appraisal(pa.alt?.value ?: ra.value, pd.alt?.value ?: rd.value, ps.alt?.value ?: rs.value) else null
+        val fromRatio = listOf(ra, rd, rs).all { it.source.startsWith("ratio") }
+        return Reading(Appraisal(ra.value, rd.value, rs.value), stars, detail, fromRatio, alt, mismatch)
     }
 
     // 별 개수 → 개체값 합계 범위 (0~45). 3별 82%+ (37~45), 2별 67~80% (30~36), 1별 51~64% (23~29), 0별 ≤50% (0~22)

@@ -13,7 +13,7 @@ class Phase4b3Test {
         // 막대값·이름은 그대로, 전체 화면(모델 애니메이션)은 매 프레임 달라도 게이트는 1회만 열린다
         val g = ScanGate(400)
         var opens = 0
-        for (i in 0 until 20) { val d = g.offer(sig(15, 14, 13, 111L), i * 100L); if (d.reason == ScanGate.Reason.OPEN) { opens++; g.confirm(sig(15, 14, 13, 111L)) } }
+        for (i in 0 until 20) { val d = g.offer(sig(15, 14, 13, 111L), i * 100L); if (d.reason == ScanGate.Reason.OPEN) { opens++; g.confirm(sig(15, 14, 13, 111L), i * 100L); g.close() } }
         assertEquals(1, opens)
         assertEquals(ScanGate.Reason.SAME_AS_CONFIRMED, g.offer(sig(15, 14, 13, 111L), 5000).reason)
     }
@@ -22,7 +22,7 @@ class Phase4b3Test {
         val g = ScanGate(400)
         assertEquals(ScanGate.Reason.UNSTABLE, g.offer(sig(15, 14, 13, 1L), 0).reason)
         assertEquals(ScanGate.Reason.UNSTABLE, g.offer(sig(15, 14, 13, 1L), 300).reason)
-        assertEquals(ScanGate.Reason.OPEN, g.offer(sig(15, 14, 13, 1L), 400).reason); g.confirm(sig(15, 14, 13, 1L))
+        assertEquals(ScanGate.Reason.OPEN, g.offer(sig(15, 14, 13, 1L), 400).reason); g.confirm(sig(15, 14, 13, 1L), 400); g.close()
         // 넘김: 막대 애니메이션 중 값이 바뀌는 프레임들 → 불안정
         assertEquals(ScanGate.Reason.UNSTABLE, g.offer(sig(3, 14, 13, 2L), 800).reason)
         assertEquals(ScanGate.Reason.UNSTABLE, g.offer(sig(9, 14, 13, 2L), 900).reason)
@@ -35,7 +35,7 @@ class Phase4b3Test {
         val g = ScanGate(400)
         assertEquals(ScanGate.Reason.NOT_APPRAISAL, g.offer(sig(null, 14, 13, 1L), 0).reason)
         for (t in listOf(100L, 600L)) g.offer(sig(15, 15, 15, 7L), t)
-        assertEquals(ScanGate.Reason.OPEN, g.offer(sig(15, 15, 15, 7L), 600).reason); g.confirm(sig(15, 15, 15, 7L))
+        assertEquals(ScanGate.Reason.OPEN, g.offer(sig(15, 15, 15, 7L), 600).reason); g.confirm(sig(15, 15, 15, 7L), 600); g.close()
         // 같은 100% 막대지만 다른 이름(다른 개체) → 다시 열림
         g.offer(sig(15, 15, 15, 8L), 1000); assertEquals(ScanGate.Reason.OPEN, g.offer(sig(15, 15, 15, 8L), 1500).reason)
     }
@@ -45,7 +45,7 @@ class Phase4b3Test {
         var t = 0L
         for (i in 0 until 30) { g.offer(sig(15, 14, i % 3, 1L), t); t += 100 } // 계속 바뀜
         assertTrue(g.waitingTooLong(t, 2000))
-        g.offer(sig(1, 1, 1, 9L), t); g.offer(sig(1, 1, 1, 9L), t + 500); g.confirm(sig(1, 1, 1, 9L))
+        g.offer(sig(1, 1, 1, 9L), t); g.offer(sig(1, 1, 1, 9L), t + 500); g.confirm(sig(1, 1, 1, 9L), t + 500); g.close()
         assertFalse(g.waitingTooLong(t + 500, 2000))
     }
 

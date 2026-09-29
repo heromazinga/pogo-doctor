@@ -73,8 +73,8 @@ class CoreTest {
     }
 
     @Test fun bar_reader_counts_filled_ratio() {
-        // 폭 300: 라벨 오른쪽 x=100..250 이 막대. 채워진 주황 60%, 나머지 회색
-        val src = BarReader.PixelSource { x, _ -> when { x in 100..189 -> 0xFFF07030.toInt(); x in 190..250 -> 0xFFC8C8C8.toInt(); else -> 0xFFFFFFFF.toInt() } }
+        // 폭 300: 막대는 비율 x 범위(0.119~0.464W = 36~139) 안 x=40..135. 채워진 주황 60%, 나머지 회색 (4-B4: x 범위 고정)
+        val src = BarReader.PixelSource { x, _ -> when { x in 40..96 -> 0xFFF07030.toInt(); x in 97..135 -> 0xFFC8C8C8.toInt(); else -> 0xFFFFFFFF.toInt() } }
         val r = BarReader.readRow(src, 10, 0, 299)
         assertEquals(9, r.value, "60% → 9칸")
         val ap = BarReader.readAppraisal(src, 300, 400, listOf(OcrLine("공격", 0, 0, 80, 20), OcrLine("방어", 0, 0, 80, 20), OcrLine("HP", 0, 0, 80, 20)))

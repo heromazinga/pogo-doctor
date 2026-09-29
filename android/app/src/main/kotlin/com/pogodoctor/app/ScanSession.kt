@@ -100,6 +100,8 @@ class ScanSession(val id: String = newId()) {
     fun sessionBody(): JSONObject = JSONObject().put("session_id", id).put("metrics", metrics.json()).put("started_at", metrics.startedAt).put("ended_at", System.currentTimeMillis())
 
     fun isDuplicate(key: String): Boolean = !keys.add(key)
+    // 이 세션에서 같은 종·HP·막대로 CP 없이 기록된 적이 있으면 → 이번 기록은 CP 보완(서버 cpFilled)
+    fun isCpFill(sp: SpeciesRef, hp: Int?, ap: Appraisal?): Boolean = keys.contains(scanKey(sp, null, hp, ap, false))
 
     // 스캔 항목 본문 (/api/device/scan). 기술은 읽지 않는다. 포획 장소 없음(날짜만)
     fun body(sp: SpeciesRef, info: ScreenInfo, ap: Appraisal, cands: List<IvCalc.Candidate>, stars: Int?, recheck: Boolean): JSONObject {

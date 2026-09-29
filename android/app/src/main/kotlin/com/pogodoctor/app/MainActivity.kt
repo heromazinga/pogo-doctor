@@ -107,6 +107,7 @@ class MainActivity : ComponentActivity() {
         var scanStrip by remember { mutableStateOf(prefs.scanStrip) }
         var stableMs by remember { mutableStateOf(prefs.scanStableMs.toString()) }
         var scanVibrate by remember { mutableStateOf(prefs.scanVibrate) }
+        var debugMax by remember { mutableStateOf(prefs.scanDebugMax.toString()) }
         var webCode by remember { mutableStateOf("") }
         var busy by remember { mutableStateOf(false) }
         var log by remember { mutableStateOf("") }
@@ -232,7 +233,11 @@ class MainActivity : ComponentActivity() {
                         OutlinedButton(modifier = Modifier.padding(top = 8.dp), onClick = { prefs.scanStableMs = stableMs.toIntOrNull() ?: 400; stableMs = prefs.scanStableMs.toString(); status = "안정 대기 ${prefs.scanStableMs}ms 저장" }) { Text("저장") }
                     }
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Text("연속 스캔 기록 시 진동", fontSize = 13.sp, modifier = Modifier.padding(top = 12.dp))
+                        OutlinedTextField(value = debugMax, onValueChange = { debugMax = it.filter { ch -> ch.isDigit() } }, label = { Text("디버그 업로드 상한(세션당, 0~200)") }, modifier = Modifier.weight(1f))
+                        OutlinedButton(modifier = Modifier.padding(top = 8.dp), onClick = { prefs.scanDebugMax = debugMax.toIntOrNull() ?: 50; debugMax = prefs.scanDebugMax.toString(); status = "디버그 업로드 상한 ${prefs.scanDebugMax}장 저장" }) { Text("저장") }
+                    }
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Text("연속 스캔 기록 시 진동 (새 기록에만)", fontSize = 13.sp, modifier = Modifier.padding(top = 12.dp))
                         Switch(checked = scanVibrate, onCheckedChange = { scanVibrate = it; prefs.scanVibrate = it })
                     }
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
