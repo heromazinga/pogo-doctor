@@ -6,6 +6,7 @@ import { scanKey, findSuperseded } from "../../../lib/pokemonMatch";
 import { getFamilyOf } from "../../../lib/savePokemonServer";
 import { getPokemonDataset, findPokemon } from "../../../lib/pokemonData";
 import { cpConsistentLevel } from "../../../lib/ivCalc";
+import { CONFLICT_REASON } from "../../../lib/scanBackfill";
 import { buildVerdictContext } from "../../../lib/verdictContext";
 import { verdictForItem } from "../../../lib/scanVerdict";
 
@@ -78,6 +79,14 @@ export async function POST(req) {
     if (r.ambiguous) item.recheck = true;
     else if (r.superseded.length) item._supersedes = r.superseded.map((x) => x.id);
   }
+  // 4-C.3 개체값 충돌: 같은 종·폼·섀도·CP·HP 인데 개체값이 다른 활성 기록이 있으면(막대 오판독 의심) 새 기록과 그 기록 모두 recheck "재스캔 필요"
+  let conflictIds = [];
+  if (!existing && anyIv && item.cp != null && item.hp != null) {
+    const { data: same } = await sb.from("scan_items").select("id,atk_iv,def_iv,sta_iv").eq("user_id", auth.userId).eq("dismissed", false).eq("superseded", false)
+      .eq("species_id", item.species_id).eq("form", item.form).eq("is_shadow", item.is_shadow).eq("cp", item.cp).eq("hp", item.hp).limit(20);
+    conflictIds = (same || []).filter((x) => x.atk_iv !== item.atk_iv || x.def_iv !== item.def_iv || x.sta_iv !== item.sta_iv).map((x) => x.id);
+    if (conflictIds.length) { item.recheck = true; item.recheck_reason = CONFLICT_REASON; item._supersedes = undefined; }
+  }
   const supersedes = item._supersedes || []; delete item._supersedes;
   let data, error;
   if (existing) ({ data, error } = await sb.from("scan_items").update(item).eq("id", existing.id).select("*").single());
@@ -86,6 +95,10 @@ export async function POST(req) {
   if (supersedes.length) {
     const { error: e2 } = await sb.from("scan_items").update({ superseded: true, superseded_by: data.id }).eq("user_id", auth.userId).in("id", supersedes);
     if (!e2) superseded = supersedes.length; else console.warn(`[scan] superseded 표시 실패: ${e2.message}`);
+  }
+  if (conflictIds.length) {
+    const { error: e3 } = await sb.from("scan_items").update({ recheck: true, recheck_reason: CONFLICT_REASON }).eq("user_id", auth.userId).in("id", conflictIds);
+    if (e3) console.warn(`[scan] 충돌 recheck 표시 실패: ${e3.message}`);
   }
   const ivCandidates = Array.isArray(b.ivCandidates) ? b.ivCandidates.slice(0, 300) : undefined;
   after(async () => {
@@ -97,7 +110,7 @@ export async function POST(req) {
       console.log(`[scan] verdict after-response ${Date.now() - t0}ms ${data.id}`);
     } catch (e) { console.warn(`[scan] 판정 후계산 실패: ${e.message}`); }
   });
-  return NextResponse.json({ item: data, duplicate: Boolean(existing) && !cpFilled, cpFilled, superseded, cpRejected, ms: Date.now() - started });
+  return NextResponse.json({ item: data, duplicate: Boolean(existing) && !cpFilled, cpFilled, superseded, cpRejected, conflicts: conflictIds.length, ms: Date.now() - started });
 }
 
 // 앱 → 세션 스캔 기록 조회 (?session=… 없으면 최근 200)

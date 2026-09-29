@@ -30,7 +30,8 @@ export async function loadMyRows(userId) {
 // 4-C.2 보관함 여유 동기화: 요청에 storageMode 가 오면 user_settings 에 저장(앱·웹 어디서 바꿔도 서버 판정에 반영), 없으면 저장값, 그것도 없으면 기본값.
 //   이전에는 본문 값만 써서 스캔 기록 후계산·정리 도우미·stats 가 항상 normal 이었다(실DB 검증에서 확인).
 export async function buildVerdictContext(req, { storageMode, myRows } = {}) {
-  const [dataset, leagueRankings, events, maxBattleSpecies] = await Promise.all([getPokemonDataset(), getLeagueRankings(), getEventTargets(), getMaxBattleSpecies()]);
+  const [dataset, leagueRankings, events] = await Promise.all([getPokemonDataset(), getLeagueRankings(), getEventTargets()]);
+  const maxBattleSpecies = getMaxBattleSpecies();
   const user = await resolveUser(req);
   const sb = user ? getServiceClient() : null;
   const [rows, settings] = await Promise.all([myRows || (user ? loadMyRows(user.userId) : []), user ? loadUserSettings(sb, user.userId) : null]);

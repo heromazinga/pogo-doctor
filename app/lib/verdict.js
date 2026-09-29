@@ -57,6 +57,11 @@ function normalizeCandidates(input, p) {
   if (ivs && [ivs.atk, ivs.def, ivs.sta].every((v) => Number.isInteger(v) && v >= 0 && v <= 15)) {
     let level = input.level != null ? clampL(input.level) : null;
     if (level == null && input.cp) level = estimateLevel(input.cp, base, ivs).level;
+    // 4-C.3: CP·레벨이 없어도 HP 가 있으면 HP 로 가능한 레벨들을 후보로 (실DB 결함: 찌르꼬 0/15/14 L2 CP null 이 L40 으로 가정돼 리그 상한 초과 → 박사행)
+    if (level == null && input.hp) {
+      const lvs = levels().filter((lv) => calcHP(base.sta, ivs.sta, lv) === input.hp);
+      if (lvs.length) return lvs.map((lv) => ({ ...ivs, level: lv }));
+    }
     if (level == null) level = RULES.RAID_MEMBER_LEVEL;
     return [{ ...ivs, level }];
   }

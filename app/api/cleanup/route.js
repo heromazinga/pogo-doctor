@@ -43,7 +43,7 @@ export async function GET(req) {
   const categories = buildCleanup(all, all, { maxLen });
   const names = Object.fromEntries(all.map((x) => [x.id, x.name_kr]));
   const gameTagged = all.filter((x) => (x.game_tags || []).length).length;
-  return NextResponse.json({ categories, names, population: all.length, gameTagged, maxLen, protect: PROTECT_SUFFIX, note: EXPECTED_LIMIT_NOTE, protectNote: PROTECT_NOTE, backfill: backfill ? { ran: backfill.ran, superseded: backfill.superseded, version: backfill.version } : null, at: new Date().toISOString() });
+  return NextResponse.json({ categories, names, population: all.length, gameTagged, maxLen, protect: PROTECT_SUFFIX, note: EXPECTED_LIMIT_NOTE, protectNote: PROTECT_NOTE, backfill: backfill ? { ran: backfill.ran, superseded: backfill.superseded, conflicts: backfill.conflicts, version: backfill.version } : null, at: new Date().toISOString() });
 }
 
 export async function POST(req) {

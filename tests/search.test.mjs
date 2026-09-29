@@ -100,6 +100,15 @@ test("4-C.2 C 수집: 'tag:수집' 묶음(등급 무관) + 이로치·배경·XX
   assert.equal(fixed.fixed, true); assert.deepEqual(fixed.groups.map((g) => g.query), ["색이 다른", "배경", "xxl"]); assert.ok(fixed.groups.every((g) => g.expected === null));
 });
 
+test("4-C.3 재확인(recheck) 기록은 박사행·태그·수집 묶음 모두 제외", () => {
+  const c = classify([
+    { id: "1", species_id: 1, hp: 10, verdict: { tier: "transfer" }, recheck: true },
+    { id: "2", species_id: 1, hp: 11, verdict: { tier: "main", recommendedTags: ["슈퍼리그"], collect: [{ reason: "개체값 100%" }] }, recheck: true },
+    { id: "3", species_id: 1, hp: 12, verdict: { tier: "main", recommendedTags: ["슈퍼리그"] } },
+  ]);
+  assert.deepEqual(c.transfer, []); assert.deepEqual(c.tags.get("슈퍼리그").map((x) => x.id), ["3"]); assert.deepEqual(c.collect, []);
+});
+
 test("4-B6 게임 태그가 있는 개체는 박사행 대상 제외", () => {
   const c = classify([{ id: "1", species_id: 1, hp: 10, verdict: { tier: "transfer" }, game_tags: ["슈퍼리그"] }, { id: "2", species_id: 1, hp: 11, verdict: { tier: "transfer" }, game_tags: [] }]);
   assert.deepEqual(c.transfer.map((x) => x.id), ["2"]);

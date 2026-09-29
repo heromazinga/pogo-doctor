@@ -1,16 +1,21 @@
-// 4-C.2 스캔 기록 superseded 백필 (멱등, 규칙 버전당 사용자별 1회: user_settings.scan_backfill_version)
-//   실DB 검증에서 기존 중복 6쌍이 남아 있었다(insert 시점에만 대체 처리했기 때문). 과거 기록끼리도 규칙 ③ 으로 대체한다.
-//   규칙: 같은 계열·폼·섀도·개체값(확정) 묶음 안에서
-//     ① CP 검증(cp 가 개체값·HP 와 맞음)된 기록 > CP 없음/불일치 기록  — 같은 개체(같은 HP 또는 같은 세션)면 검증된 쪽을 남긴다
-//     ② 둘 다 검증됐으면 규칙 ③(레벨/CP 비감소·포획일 호환) → 최신 기록을 남긴다. 서로 다른 후보 2개 이상이면 건드리지 않는다
+// 4-C.2/4-C.3 스캔 기록 백필 (멱등, 규칙 버전당 사용자별 1회: user_settings.scan_backfill_version)
+//   실DB 검증에서 기존 중복이 남아 있었다(insert 시점에만 대체 처리했기 때문). 과거 기록끼리도 정리한다.
+//   대체(superseded) 규칙 — 같은 계열·폼·섀도·개체값(확정) 묶음 안에서:
+//     ⓪ 종·CP·HP 까지 모두 같은 기록(재기록) → 오래된 쪽 대체 (뚜벅쵸 9/4/4 사례, CP 검증 불필요)
+//     ① CP 가 없는 기록: 같은 종·HP 또는 같은 세션에 CP 있는 기록이 있으면 그쪽으로 대체 (리자몽·썬더·번치코 사례, 레벨 없어도)
+//     ② CP 가 개체값·HP 와 맞지 않는 기록: 같은 HP·세션의 검증된 기록으로 대체 (괴력몬 2634 vs 263 사례)
+//     ③ 검증된 기록끼리 시간순으로 규칙 ③(레벨/CP 비감소·포획일 호환) 재생 → 최신 유지. 서로 다른 과거 후보 2개 이상이면 건드리지 않는다
+//   재확인(recheck) 규칙 — 같은 종·폼·섀도·CP·HP 인데 개체값이 다른 활성 기록(막대 오판독 의심): 둘 다 recheck + "재스캔 필요" (박사행·태그 묶음 제외)
 import { RULES_VERSION } from "./verdictRules.js";
 import { findPokemon } from "./pokemonData.js";
 import { familyOfFactory, notDowngraded } from "./pokemonMatch.js";
 import { cpConsistentLevel } from "./ivCalc.js";
 import { loadUserSettings, saveBackfillVersion } from "./userSettings.js";
 
+export const CONFLICT_REASON = "같은 CP·HP 다른 개체값 — 재스캔 필요";
 const hasIv = (r) => [r.atk_iv, r.def_iv, r.sta_iv].every((v) => Number.isInteger(v));
 const caughtOk = (a, b) => !a.caught_on || !b.caught_on || a.caught_on === b.caught_on;
+const ivKey = (r) => `${r.atk_iv},${r.def_iv},${r.sta_iv}`;
 
 // 순수 계산: items(활성 스캔 기록) → [{ id, superseded_by }] (대체될 기록). dataset 으로 CP 검증·계열 판단
 export function planSupersede(items, dataset) {
@@ -25,7 +30,7 @@ export function planSupersede(items, dataset) {
   const groups = new Map();
   for (const r of items) {
     if (!hasIv(r)) continue;
-    const k = `${rootOf(r.species_id)}|${r.form || "Normal"}|${r.is_shadow ? 1 : 0}|${r.atk_iv},${r.def_iv},${r.sta_iv}`;
+    const k = `${rootOf(r.species_id)}|${r.form || "Normal"}|${r.is_shadow ? 1 : 0}|${ivKey(r)}`;
     if (!groups.has(k)) groups.set(k, []);
     groups.get(k).push(r);
   }
@@ -35,38 +40,77 @@ export function planSupersede(items, dataset) {
     const alive = new Set(list.map((r) => r.id));
     const byTime = [...list].sort((a, b) => String(a.created_at).localeCompare(String(b.created_at)));
     const ver = new Map(list.map((r) => [r.id, verified(r)]));
-    // ① 미검증(CP 없음·불일치) 기록: 같은 HP 또는 같은 세션의 검증된 기록이 있으면 그쪽으로 대체
-    for (const r of byTime) {
-      if (ver.get(r.id)) continue;
-      const winner = byTime.filter((o) => o.id !== r.id && alive.has(o.id) && ver.get(o.id) && caughtOk(o, r) && ((r.hp != null && o.hp === r.hp) || o.session_id === r.session_id)).pop();
-      if (winner) { out.push({ id: r.id, superseded_by: winner.id }); alive.delete(r.id); }
+    const drop = (r, winner) => { out.push({ id: r.id, superseded_by: winner.id }); alive.delete(r.id); };
+    // ⓪ 종·CP·HP 모두 같은 재기록 → 최신만 남김 (검증 불필요)
+    for (let i = 0; i < byTime.length; i++) {
+      const r = byTime[i];
+      if (!alive.has(r.id) || r.cp == null) continue;
+      const later = byTime.slice(i + 1).filter((o) => alive.has(o.id) && o.species_id === r.species_id && o.cp === r.cp && o.hp === r.hp && caughtOk(o, r));
+      if (later.length) drop(r, later[later.length - 1]);
     }
-    // ② 검증된 기록끼리: 시간순으로 규칙 ③ 재생 (새 기록이 이전 기록을 대체). 서로 다른 이전 후보가 2개 이상이면 건드리지 않음
+    // ① CP 없는 기록 → 같은 종·HP 또는 같은 세션의 CP 있는 기록(최신)으로 대체 (레벨·검증 여부 무관)
+    for (const r of byTime) {
+      if (!alive.has(r.id) || r.cp != null) continue;
+      const winner = byTime.filter((o) => o.id !== r.id && alive.has(o.id) && o.cp != null && caughtOk(o, r) && ((r.hp != null && o.species_id === r.species_id && o.hp === r.hp) || o.session_id === r.session_id)).pop();
+      if (winner) drop(r, winner);
+    }
+    // ② CP 불일치(미검증) 기록 → 같은 HP 또는 같은 세션의 검증된 기록으로 대체
+    for (const r of byTime) {
+      if (!alive.has(r.id) || r.cp == null || ver.get(r.id)) continue;
+      const winner = byTime.filter((o) => o.id !== r.id && alive.has(o.id) && ver.get(o.id) && caughtOk(o, r) && ((r.hp != null && o.hp === r.hp) || o.session_id === r.session_id)).pop();
+      if (winner) drop(r, winner);
+    }
+    // ③ 검증된 기록끼리: 시간순으로 규칙 ③ 재생 (새 기록이 이전 기록을 대체). 서로 다른 이전 후보가 2개 이상이면 건드리지 않음
     for (let i = 0; i < byTime.length; i++) {
       const cur = byTime[i];
       if (!alive.has(cur.id) || !ver.get(cur.id)) continue;
       const prior = byTime.slice(0, i).filter((o) => alive.has(o.id) && ver.get(o.id) && caughtOk(o, cur) && notDowngraded(o, cur) === true);
       const distinct = new Set(prior.map((o) => `${o.species_id}|${o.cp ?? ""}|${o.hp ?? ""}|${o.level ?? ""}`));
       if (!prior.length || distinct.size > 1) continue;
-      for (const o of prior) { out.push({ id: o.id, superseded_by: cur.id }); alive.delete(o.id); }
+      for (const o of prior) drop(o, cur);
     }
   }
   return out;
 }
 
-// 조회 경로에서 호출: 버전 플래그가 현재와 다르면 1회 실행하고 저장. 반환 { ran, superseded, version, changed, items(남은 활성 기록) }
+// 순수 계산: 같은 종·폼·섀도·CP·HP 인데 개체값이 다른 활성 기록 → recheck 대상 id 목록 (막대 오판독 의심)
+export function planConflicts(items) {
+  const groups = new Map();
+  for (const r of items) {
+    if (!hasIv(r) || r.cp == null || r.hp == null) continue;
+    const k = `${r.species_id}|${r.form || "Normal"}|${r.is_shadow ? 1 : 0}|${r.cp}|${r.hp}`;
+    if (!groups.has(k)) groups.set(k, []);
+    groups.get(k).push(r);
+  }
+  const out = [];
+  for (const list of groups.values()) {
+    if (new Set(list.map(ivKey)).size < 2) continue;
+    for (const r of list) out.push(r.id);
+  }
+  return out;
+}
+
+// 조회 경로에서 호출: 버전 플래그가 현재와 다르면 1회 실행하고 저장. 반환 { ran, superseded, conflicts, version, changed, items(남은 활성 기록) }
 export async function backfillSuperseded(sb, userId, items, ctx) {
   const version = RULES_VERSION;
   const settings = ctx?.settings !== undefined ? ctx.settings : await loadUserSettings(sb, userId);
-  if (settings?.scan_backfill_version === version) return { ran: false, superseded: 0, version, changed: false, items };
+  if (settings?.scan_backfill_version === version) return { ran: false, superseded: 0, conflicts: 0, version, changed: false, items };
   const plan = planSupersede(items, ctx.dataset);
   let n = 0;
   for (const p of plan) {
     const { error } = await sb.from("scan_items").update({ superseded: true, superseded_by: p.superseded_by }).eq("user_id", userId).eq("id", p.id);
     if (!error) n++; else console.warn(`[backfill] ${p.id}: ${error.message}`);
   }
-  const saved = await saveBackfillVersion(sb, userId, version);
   const gone = new Set(plan.map((p) => p.id));
-  console.log(`[backfill] ${userId} superseded ${n}/${plan.length} (version ${version}, flag ${saved ? "saved" : "not saved"})`);
-  return { ran: true, superseded: n, version, changed: n > 0, items: items.filter((it) => !gone.has(it.id)) };
+  const remaining = items.filter((it) => !gone.has(it.id));
+  const conflicts = planConflicts(remaining).filter((id) => { const it = remaining.find((x) => x.id === id); return it && !(it.recheck && it.recheck_reason === CONFLICT_REASON); });
+  let c = 0;
+  for (const id of conflicts) {
+    const { error } = await sb.from("scan_items").update({ recheck: true, recheck_reason: CONFLICT_REASON }).eq("user_id", userId).eq("id", id);
+    if (!error) { c++; const it = remaining.find((x) => x.id === id); if (it) { it.recheck = true; it.recheck_reason = CONFLICT_REASON; } }
+    else console.warn(`[backfill] recheck ${id}: ${error.message}`);
+  }
+  const saved = await saveBackfillVersion(sb, userId, version);
+  console.log(`[backfill] ${userId} superseded ${n}/${plan.length}, conflicts ${c} (version ${version}, flag ${saved ? "saved" : "not saved"})`);
+  return { ran: true, superseded: n, conflicts: c, version, changed: n > 0 || c > 0, items: remaining };
 }

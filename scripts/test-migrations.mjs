@@ -61,6 +61,8 @@ await check("0008 superseded_by 없는 id 거부", `update public.scan_items set
 await check("0009 user_settings upsert", `insert into public.user_settings(user_id, storage_mode) values ('${UID}','relaxed') on conflict (user_id) do update set storage_mode = excluded.storage_mode, updated_at = now()`, true);
 await check("0009 storage_mode 잘못된 값 거부", `update public.user_settings set storage_mode = 'huge' where user_id = '${UID}'`, false);
 await check("0009 scan_backfill_version 저장", `update public.user_settings set scan_backfill_version = '2026-09-29.4' where user_id = '${UID}'`, true);
+// 0010 recheck_reason
+await check("0010 recheck_reason 저장", `update public.scan_items set recheck = true, recheck_reason = '같은 CP·HP 다른 개체값 — 재스캔 필요' where session_id = 's3'`, true);
 const idx = await db.query(`select indexname from pg_indexes where tablename='my_pokemon' and indexname like '%tags%'`);
 console.log("tags index:", idx.rows.map((r) => r.indexname).join(", ") || "없음");
 console.log(failed ? `FAILED ${failed}` : "ALL OK");

@@ -7,7 +7,8 @@ import { getRankings } from "../app/lib/speciesRankings.js";
 import { extractEventTargets, matchEvents } from "../app/lib/eventTargets.js";
 import { ivCandidates } from "../app/lib/ivCalc.js";
 import { RULES, RULES_VERSION, TAG, purposesFromTags } from "../app/lib/verdictRules.js";
-import { fillMissingVerdicts, isStaleVerdict } from "../app/lib/scanVerdict.js";
+import { fillMissingVerdicts, isStaleVerdict, verdictForItem } from "../app/lib/scanVerdict.js";
+import { calcHP } from "../app/lib/ivCalc.js";
 
 // ── 합성 데이터셋 ──
 const moveStats = {
@@ -50,6 +51,10 @@ const dataset = {
     sp(184, "Azumarill", "마릴리", ["water", "fairy"], 112, 152, 225, ["Bubble"], ["Hydro Pump"]),
     sp(129, "Magikarp", "잉어킹", ["water"], 29, 85, 85, [], [], { evolutions: [{ id: 130, form: "Normal", candies: 400 }] }),
     sp(130, "Gyarados", "갸라도스", ["water", "flying"], 237, 186, 216, ["Bubble"], ["Hydro Pump"]),
+    // 4-C.3 실DB 사례: 찌르꼬 0/15/14 L2 CP null HP22 → 찌르호크(하이퍼 상위종) 기준 진화 후보
+    sp(396, "Starly", "찌르꼬", ["normal", "flying"], 101, 58, 120, ["Tackle"], ["Hyper Beam"], { evolutions: [{ id: 397, form: "Normal", candies: 25 }] }),
+    sp(397, "Staravia", "찌르버드", ["normal", "flying"], 142, 94, 146, ["Tackle"], ["Hyper Beam"], { evolutions: [{ id: 398, form: "Normal", candies: 100 }] }),
+    sp(398, "Staraptor", "찌르호크", ["normal", "flying"], 234, 140, 198, ["Quick Attack"], ["Hyper Beam"]),
     sp(150, "Mewtwo", "뮤츠", ["psychic"], 300, 182, 214, ["Confusion"], ["Psystrike"], { pokemonClass: "legendary" }),
     sp(999, "Weakmon", "약한몬", ["normal"], 50, 50, 50, [], [], { pokemonClass: "legendary" }),
     // 4-A2: 타입 1위 대비 비율 검증용. 노말 1위 폴리곤Z, 비행 1위 레쿠쟈(전설), 페어리는 님피아뿐
@@ -67,7 +72,7 @@ const dataset = {
   ],
 };
 const mk = (entries) => { const m = new Map(); entries.forEach((id, i) => m.set(id, { rank: i + 1, score: 100 - i, name: id })); return m; };
-const leagueRankings = { fetchedAt: "t", errors: {}, leagues: { great: mk(["azumarill", "cinderace"]), ultra: mk(["charizard", "annihilape"]), master: mk(["mewtwo"]) } };
+const leagueRankings = { fetchedAt: "t", errors: {}, leagues: { great: mk(["azumarill", "cinderace"]), ultra: mk(["charizard", "annihilape", "staraptor"]), master: mk(["mewtwo"]) } };
 const ctx = (over = {}) => ({ dataset, leagueRankings, eventTargets: [], myRows: [], storageMode: "normal", ...over });
 const tagOf = (v, name) => v.tags.find((t) => t.name === name);
 
@@ -250,6 +255,20 @@ test("4-C.2 D 리그 후보: 스탯곱 순위 ≤41 이면 PvPoke 200위 밖 종
   assert.equal(tagOf(computeVerdict({ species_id: 700, ivs: { atk: worst[0], def: worst[1], sta: worst[2] }, level: 15 }, ctx({ leagueRankings: lr })), TAG.great), undefined, "스탯곱 3000위 → 없음");
   assert.equal(tagOf(computeVerdict({ species_id: 700, ivs: { atk: best[0], def: best[1], sta: best[2] }, level: 15 }, ctx()), TAG.great), undefined, "순위 파일에 없는 종 → 없음");
   assert.equal(RULES.LEAGUE_CANDIDATE_PRODUCT_RANK, 41);
+});
+
+test("4-C.3 결함 1: 찌르꼬 0/15/14 L2 CP null HP22 → CP 없어도 HP 로 레벨 후보(L40 가정 금지) → 진화 후보(→찌르호크) 하이퍼 주력, 박사행 아님", () => {
+  const base = { atk: 101, def: 58, sta: 120 };
+  const hp = calcHP(base.sta, 14, 2);
+  const v = computeVerdict({ species_id: 396, ivs: { atk: 0, def: 15, sta: 14 }, level: null, cp: null, hp }, ctx());
+  assert.ok(v.levelRange[1] <= 5, `HP ${hp} 로 레벨 후보 ${v.levelRange.join("~")} (L40 가정이면 실패)`);
+  const t = tagOf(v, TAG.evolve("찌르호크"));
+  assert.ok(t, v.tags.map((x) => x.name).join());
+  assert.equal(t.tier, "main"); assert.ok(t.metrics.finalTags.some((x) => x.name === TAG.ultra), JSON.stringify(t.metrics.finalTags));
+  assert.notEqual(v.tier, "transfer");
+  // 스캔 기록 재계산 경로(verdictForItem: level null, ivCandidates 없음)도 동일
+  const s = verdictForItem({ species_id: 396, form: "Normal", atk_iv: 0, def_iv: 15, sta_iv: 14, level: null, cp: null, hp }, ctx());
+  assert.notEqual(s.tier, "transfer"); assert.ok(s.recommendedTags.includes(TAG.evolve("찌르호크")));
 });
 
 test("4-C.2 C 수집 태그: 100%·0%·반짝반짝·오래 전 포획 → recommendedTags 에 '수집'(등급 무관), 이로치만으로는 아님", () => {

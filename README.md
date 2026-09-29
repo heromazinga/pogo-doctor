@@ -212,6 +212,16 @@ Vercel 에서는 환경변수 `POGO_DISABLE_SOURCES` 를 Preview 환경에 잠�
 - 미사용 웹 코드는 발급 시 지우지 않는다(PC 용으로 받은 코드가 앱 웹 화면 열기로 무효화되지 않도록). 발급 제한 IP 당 10분 30회.
 - PC 브라우저는 계속 사용 가능(앱 → 웹 로그인 코드). "홈 화면에 추가" 는 앱 화면에 안내만.
 
+## 4-C.3: 실DB 검증(139건) 반영 — 리그 후보 미적용 원인, 개체값 충돌 재스캔, 백필 보강, 맥스배틀 목록 파일
+
+통과: user_settings(relaxed) 반영, 백필 3건, 보호 조건 4묶음, 잉어킹 진화 후보 보류, 추천 기술 문구. 결함 3건 수정:
+
+1. **찌르꼬 0/15/14(L2, CP null, HP22) 박사행 — 원인**: `normalizeCandidates` 가 CP·레벨이 없는 개체값 확정 입력을 **L40 으로 가정**해 진화 후보 평가에서 찌르호크 L40 이 하이퍼 상한(스탯곱 최적 L36)을 넘어 "불가" 처리됐다. 앱은 최초 기록 때 `ivCandidates`(HP 레벨 후보)를 보내지만, 규칙 버전 변경 시 재계산(`verdictForItem`)에는 없어 이 경로에서 발생. 수정: CP·레벨이 없고 HP 가 있으면 HP 로 가능한 레벨들을 후보로 쓴다. 테스트 "4-C.3 결함 1"(재계산 경로 포함). 찌르호크의 PvPoke 하이퍼 순위 존재 여부는 실DB `explain` 으로 확인 필요(테스트는 합성 순위).
+2. **같은 종·CP·HP 인데 개체값이 다른 기록**(괴력몬 2634/163 15/12/14 vs 15/6/8, 냐오불 577/83 13/15/12 vs 13/7/7): 마이그레이션 **0010** `scan_items.recheck_reason`. insert 시(`/api/device/scan`)와 백필에서 충돌 쌍 모두 `recheck=true, recheck_reason="같은 CP·HP 다른 개체값 — 재스캔 필요"`. 재확인 기록은 박사행·태그·수집 묶음 모두 제외(`classify`), 웹 스캔 기록에 사유 표시. **원인 추정**(디버그 수치 없음 — 확인 필요): 두 사례 모두 공격 막대는 같고 방어·HP 막대만 약 절반(12→6, 14→8, 15→7, 12→7)으로 읽혔다. 후보 ① 라벨행 판독값(`alt`) 채택 — CP/HP 후보가 두 개체값 조합 모두와 성립해 `IvCalc.consistent` 검증이 못 거른 경우(알림 줄 "(라벨행 값 채택)" 표시 여부로 확인), ② 채움 애니메이션 중 프레임 — 공격 막대가 먼저 차고 방어·HP 가 뒤늦게 차는 시점에 서명이 400ms 동안 우연히 같았던 경우. 디버그 모드에서 해당 개체의 `detail`(ratio/label 값)을 받으면 확정 가능.
+3. **백필 잔여**(리자몽 15/7/7·썬더 12/7/7 같은 세션·HP·한쪽 CP null·레벨 null, 뚜벅쵸 9/4/4 다른 세션 CP·HP 동일): 규칙 보강 — ⓪ 종·CP·HP·개체값이 모두 같은 기록은 검증과 무관하게 최신만 남김, ① 같은 세션·종·개체값·HP 에서 한쪽만 CP 가 있으면 레벨·검증 없이 CP 있는 쪽을 남김(다른 세션·다른 HP 는 대체 안 함 — 동일 개체 증명 불가). `RULES_VERSION` 2026-09-29.5 로 백필 재실행.
+- 맥스배틀 종 목록: 환경변수·snacknap 방식 폐지 → 저장소 파일 `app/data/maxBattleSpecies.json`(빈 목록, PR 관리). 비어 있으면 안내 없음. 사용자는 게임 "다이맥스" 태그 + 보호 조건 `!#` 로 보호.
+- D "PvPoke 파일에 없는 종 제외" 현행 유지(사용자 동의).
+
 ## 4-C.2: 실DB 검증(142건) 반영 — 백필 · CP 검증 · 박사행 보호 조건 · 수집 태그 · 리그 후보 · 진화 후보 · 보관함 동기화 · 맥스배틀 안내
 
 검증 결과: 0008 적용, 스캔 조회 정상(139건 재계산), 추천 기술 한국어 정상, `&!#` 정상. 문제: superseded 0건(기존 중복 6쌍 잔존 — insert 시점에만 처리), 서버 storageMode 가 항상 normal.
@@ -223,7 +233,7 @@ Vercel 에서는 환경변수 `POGO_DISABLE_SOURCES` 를 Preview 환경에 잠�
 - **D. 리그 후보**: 스탯곱 순위 ≤41(`LEAGUE_CANDIDATE_PRODUCT_RANK`, 상위 1%)이면 종 PvPoke 순위와 무관하게 보류("리그 후보" 표기, `metrics.candidate`). 사례: 찌르꼬 0/15/14 → 찌르호크 하이퍼 4위·슈퍼 115위.
 - **E. "진화 대기" → "진화 후보"**(`TAG.evolve`, `EVOLVE_PREFIX`): 필요 사탕 ≥200(`EVOLVE_CANDY_HOLD`)이면 등급 상한 보류. 사례: 잉어킹 15/12/11 사탕 400 → 보류.
 - **F. 보관함 설정 동기화**(마이그레이션 **0009** `user_settings`): 원인은 `buildVerdictContext` 가 요청 본문의 storageMode 만 쓰고 저장하지 않아 스캔 후계산·정리 도우미·stats 가 기본값(normal)을 쓴 것. 이제 `/api/verdict`·`/api/verdict/batch` 본문의 storageMode 를 `user_settings.storage_mode` 에 저장하고, 본문에 없는 경로는 저장값을 쓴다(`stats` 응답 `storageMode` 로 확인).
-- **G. 맥스배틀 종 안내**: 목록에 있는 종은 판정 대신 "🟡 보류: 맥스배틀 종 — 다이맥스 태그 권장"(`recommendedTags: ["다이맥스"]`, `dynamax: true`). **목록 출처 한계**: 이 환경에서 접근 가능한 공개 데이터(PokeMiners game master, PvPoke gamemaster, ScrapedDuck)에는 다이맥스 가능 종 필드가 없어 전체 목록을 확인하지 못함 → 현재는 snacknap.com/max-battles 의 **현재 맥스배틀 보스**(`app/lib/maxBattleSpecies.js`, `/api/max-battles` 와 같은 캐시) + 환경변수 `MAX_BATTLE_SPECIES_IDS`(쉼표 구분 도감 번호, 사용자 확인 종)만 사용. 두랄루돈이 현재 보스 목록에 없으면 안내되지 않는다(정보 부족 — 사용자 확인 필요).
+- **G. 맥스배틀 종 안내**: 목록에 있는 종은 판정 대신 "🟡 보류: 맥스배틀 종 — 다이맥스 태그 권장"(`recommendedTags: ["다이맥스"]`, `dynamax: true`). **목록 출처 한계**: 이 환경에서 접근 가능한 공개 데이터(PokeMiners game master, PvPoke gamemaster, ScrapedDuck)에는 다이맥스 가능 종 필드가 없어 전체 목록을 확인하지 못함. 4-C.3 부터 저장소 파일 `app/data/maxBattleSpecies.json` 로 관리(빈 목록 시작).
 - `RULES_VERSION` 2026-09-29.4 → 조회 시 판정 재계산.
 
 ## 4-C: 추천 기술 표시 · 강화/진화 후 동일 개체 갱신 · 정리 도우미 `&!#` 옵션 (기술 스캔 취소)

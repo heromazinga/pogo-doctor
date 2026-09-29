@@ -1,7 +1,7 @@
 // 4-C.2 스캔 기록 superseded 백필(planSupersede) + CP 검증(cpConsistentLevel)
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { planSupersede } from "../app/lib/scanBackfill.js";
+import { planSupersede, planConflicts } from "../app/lib/scanBackfill.js";
 import { cpConsistentLevel } from "../app/lib/ivCalc.js";
 import { calcCP } from "../app/lib/cpm.js";
 import { calcHP } from "../app/lib/ivCalc.js";
@@ -38,10 +38,31 @@ test("백필 ①: 다른 세션의 같은 개체(CP·HP·개체값 동일) → �
   assert.deepEqual(planSupersede([b], dataset), [], "멱등: 남은 기록만으로 다시 돌리면 변화 없음");
 });
 
-test("백필 ②: 같은 세션에서 한쪽 CP null(같은 HP) → CP 검증된 기록을 남김 (리자몽·썬더·번치코 사례)", () => {
-  const full = item("full", 6, [15, 7, 7], 25), noCp = { ...item("nocp", 6, [15, 7, 7], 25), cp: null, level: null };
-  assert.deepEqual(planSupersede([full, noCp], dataset), [{ id: "nocp", superseded_by: "full" }], "CP 없는 쪽이 나중이어도 검증된 쪽이 남음");
+test("백필 ①: 같은 세션·종·개체값·HP 에서 한쪽만 CP → 레벨·검증 없이 CP 있는 쪽을 남김 (리자몽 15/7/7·썬더 12/7/7 잔여 사례)", () => {
+  const full = { ...item("full", 6, [15, 7, 7], 25), level: null }, noCp = { ...item("nocp", 6, [15, 7, 7], 25), cp: null, level: null };
+  assert.deepEqual(planSupersede([full, noCp], dataset), [{ id: "nocp", superseded_by: "full" }], "CP 없는 쪽이 나중이어도 CP 있는 쪽이 남음");
   assert.deepEqual(planSupersede([noCp, full], dataset), [{ id: "nocp", superseded_by: "full" }]);
+  // CP 가 개체값과 맞지 않아도(검증 실패) CP 있는 쪽을 남긴다 — 규칙은 "한쪽만 CP" 뿐
+  const bad = { ...item("bad", 6, [15, 7, 7], 25), cp: 123, level: null };
+  assert.deepEqual(planSupersede([noCp, bad], dataset), [{ id: "nocp", superseded_by: "bad" }]);
+  // 다른 세션·다른 HP 의 CP 없는 기록은 대체하지 않음(동일 개체 증명 불가)
+  const far = { ...item("far", 6, [15, 7, 7], 20), cp: null, level: null, session_id: "s9" };
+  assert.deepEqual(planSupersede([full, far], dataset), []);
+});
+
+test("백필 ⓪: 종·CP·HP·개체값이 모두 같은 기록(다른 세션 포함) → 검증과 무관하게 최신만 남김 (뚜벅쵸 9/4/4 사례)", () => {
+  const a = { ...item("a", 4, [9, 4, 4], 20, { session_id: "s1" }), cp: 999, level: null }, b = { ...item("b", 4, [9, 4, 4], 20, { session_id: "s2" }), cp: 999, level: null };
+  assert.deepEqual(planSupersede([a, b], dataset), [{ id: "a", superseded_by: "b" }]);
+  assert.deepEqual(planSupersede([b], dataset), []);
+});
+
+test("개체값 충돌(planConflicts): 같은 종·CP·HP 인데 개체값이 다른 기록은 모두 재확인 대상 (괴력몬 2634/163 15/12/14 vs 15/6/8, 냐오불 577/83 사례)", () => {
+  const x = { ...item("x", 68, [15, 12, 14], 31), cp: 2634, hp: 163 }, y = { ...item("y", 68, [15, 6, 8], 33), cp: 2634, hp: 163 };
+  const z = { ...item("z", 68, [15, 12, 14], 31), cp: 2634, hp: 163, session_id: "s2" }; // x 와 같은 개체값 → 충돌 아님(재기록)
+  assert.deepEqual(planConflicts([x, y]).sort(), ["x", "y"]);
+  assert.deepEqual(planConflicts([x, z]), []);
+  assert.deepEqual(planConflicts([x, { ...y, hp: 150 }]), [], "HP 다르면 다른 개체");
+  assert.deepEqual(planConflicts([x, { ...y, cp: null }]), [], "CP 없으면 판단 불가");
 });
 
 test("백필 ③: CP 가 개체값·HP 와 맞지 않는 기록(괴력몬 2634 vs 263) → 검증된 기록으로 대체", () => {

@@ -107,9 +107,11 @@ export function classify(items) {
   for (const it of items) {
     const v = it.verdict || {};
     const rec = v.recommendedTags || [];
-    if (Array.isArray(v.collect) && v.collect.length) collect.push(it);
+    if (Array.isArray(v.collect) && v.collect.length && !it.recheck) collect.push(it);
     // 4-B6: 게임 태그가 이미 달린 개체는 박사행 대상에서 제외 (사용자가 용도를 정해 둔 것)
     if (v.tier === "transfer" && !it.recheck && !(v.collect || []).length && !it.is_shiny && !it.is_lucky && !it.legendary && !(it.game_tags || []).length) transfer.push(it);
+    // 4-C.3: 재확인(recheck) 기록은 태그·수집 묶음에서도 제외 (개체값 충돌 = 막대 오판독 의심)
+    if (it.recheck) continue;
     for (const tg of rec) {
       if (tg !== COLLECT_TAG && v.tier !== "main" && v.tier !== "hold") continue;
       if (!tags.has(tg)) tags.set(tg, []); tags.get(tg).push(it);
