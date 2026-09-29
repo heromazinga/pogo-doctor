@@ -78,6 +78,13 @@ class Api(private val prefs: Prefs) {
         catch (e: ApiException) { if (e.status == 401) prefs.deviceToken = null; throw e }
     }
 
+    // 4-B2 세션 측정값 저장
+    fun scanSession(body: JSONObject): JSONObject {
+        val token = prefs.deviceToken ?: throw ApiException(401, "기기 연결 필요")
+        try { return request("POST", "/api/device/scan/session", body, token, timeoutMs = 15000) }
+        catch (e: ApiException) { if (e.status == 401) prefs.deviceToken = null; throw e }
+    }
+
     fun savePokemon(row: JSONObject): JSONObject {
         val token = prefs.deviceToken ?: throw ApiException(401, "기기 연결 필요")
         try { return request("POST", "/api/device/pokemon", row, token) }

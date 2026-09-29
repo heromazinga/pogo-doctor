@@ -1,7 +1,8 @@
 import { NextResponse } from "next/server";
 import { getServiceClient } from "../../lib/supabaseServer";
 import { rateLimit, clientIp } from "../../lib/deviceAuth";
-import { resolveUser } from "../../lib/verdictContext";
+import { resolveUser, buildVerdictContext } from "../../lib/verdictContext";
+import { fillMissingVerdicts } from "../../lib/scanVerdict";
 import { upsertMyPokemon } from "../../lib/savePokemonServer";
 
 export const dynamic = "force-dynamic";
@@ -15,7 +16,14 @@ export async function GET(req) {
   if (!user) return NextResponse.json({ error: "로그인이 필요합니다" }, { status: 401 });
   const { data, error } = await sb.from("scan_items").select("*").eq("user_id", user.userId).eq("dismissed", false).order("created_at", { ascending: false }).limit(300);
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
-  return NextResponse.json({ items: data || [] });
+  const items = data || [];
+  // 4-B2: 앱 기록 시점에 판정이 아직 없는 항목(after() 미완료·실패)은 여기서 한 번의 컨텍스트로 계산해 저장
+  let filled = 0;
+  if (items.some((it) => !it.verdict || it.verdict.error)) {
+    try { const { ctx } = await buildVerdictContext(req, { myRows: undefined }); filled = await fillMissingVerdicts(sb, items, ctx); } catch (e) { console.warn(`[scan] 판정 보충 실패: ${e.message}`); }
+  }
+  const { data: sessions } = await sb.from("scan_sessions").select("session_id,metrics,started_at,ended_at,created_at").eq("user_id", user.userId).order("created_at", { ascending: false }).limit(20);
+  return NextResponse.json({ items, sessions: sessions || [], filled });
 }
 
 export async function POST(req) {

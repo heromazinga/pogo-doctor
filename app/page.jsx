@@ -97,6 +97,7 @@ export default function Home() {
   // 4-B: 스캔 기록 패널, 저장 시 기존 항목 갱신 안내
   const [showScans, setShowScans] = useState(false);
   const [scans, setScans] = useState([]);
+  const [scanSessions, setScanSessions] = useState([]);
   const [scanBusy, setScanBusy] = useState(false);
   const [scanError, setScanError] = useState(null);
   const [saveNotice, setSaveNotice] = useState(null);
@@ -256,7 +257,7 @@ export default function Home() {
       const res = await fetch("/api/scan", { headers: { ...(await authHeader()) } });
       const data = await res.json();
       if (!res.ok) { setScanError(data.error || `HTTP ${res.status}`); return; }
-      setScans(data.items || []);
+      setScans(data.items || []); setScanSessions(data.sessions || []);
     } catch (e) { setScanError(e.message); } finally { setScanBusy(false); }
   };
   const scanAction = async (action, ids, extra = {}) => {
@@ -1918,6 +1919,16 @@ export default function Home() {
                 <button onClick={() => { if (window.confirm("스캔 기록을 모두 지웁니다 (내 목록은 그대로). 계속할까요?")) scanAction("clear", []); }} disabled={scanBusy} style={{ ...s.chip, fontSize: 11, color: "#ff6b6b" }}>전부 지우기</button>
               </div>
             )}
+            {scanSessions.length > 0 && (
+              <details style={{ marginBottom: 10 }}>
+                <summary style={{ fontSize: 11, color: "#8899aa", cursor: "pointer" }}>📈 세션 측정값 ({scanSessions.length})</summary>
+                {scanSessions.map((ss) => { const m = ss.metrics || {}; const a = m.avgMs || {}; return (
+                  <div key={ss.session_id} style={{ fontSize: 10, color: "#8899aa", padding: "4px 0", borderBottom: "1px solid #1e2a44" }}>
+                    <b style={{ color: "#c8d6e5" }}>{ss.session_id}</b> · {m.minutes}분 · 프레임 {m.frames}(평가 아님 {m.prefiltered ?? "-"}) · 분석 {m.analyses} · 기록 {m.recorded} (중복 {m.duplicates}, CP 미확인 {m.noCp}) · 평균 ms 캡처 {a.capture} 지문 {a.fingerprint} 판별 {a.prefilter ?? "-"} OCR {a.ocr} 파싱 {a.parse ?? "-"} 막대 {a.bars} · 전송 {m.queue?.sent}/대기 {m.queue?.pending} · 배터리 {m.battery?.start}%→{m.battery?.end}%
+                  </div>
+                ); })}
+              </details>
+            )}
             {scans.length === 0 && !scanBusy && <div style={{ fontSize: 12, color: "#576574", padding: "8px 0" }}>기록이 없습니다 — 앱에서 "연속 스캔" 을 켜고 평가 화면을 넘기세요</div>}
             {scans.map((it) => (
               <div key={it.id} style={{ ...s.collItem, flexDirection: "column", alignItems: "stretch", marginBottom: 6 }}>
@@ -1926,7 +1937,7 @@ export default function Home() {
                   <div style={{ flex: 1, minWidth: 0 }}>
                     <div style={{ fontSize: 13, fontWeight: 700, color: "#e0e0e0" }}>{it.is_shadow ? "👤" : ""}{it.name_kr}{it.form && it.form !== "Normal" ? ` (${it.form})` : ""} <span style={{ fontSize: 10, opacity: 0.5 }}>{fmtStamp(it.created_at)} · {it.session_id}</span></div>
                     <div style={{ fontSize: 11, color: "#8899aa" }}>CP{it.cp || "?"} HP{it.hp || "?"} {Number.isInteger(it.atk_iv) ? `${it.atk_iv}/${it.def_iv}/${it.sta_iv} (${Math.round(((it.atk_iv + it.def_iv + it.sta_iv) / 45) * 100)}%)` : "개체값 미확정"}{it.level ? ` L${it.level}` : ""}{it.stars != null ? ` ★${it.stars}` : ""}{it.cp == null ? " · CP 미확인(레벨 범위)" : ""}{it.recheck ? " · ⚠️ 재확인 필요(CP/HP·막대 불일치)" : ""}</div>
-                    {it.verdict && <div style={{ fontSize: 11, color: TIER_COLORS[it.verdict.tier] || "#8899aa", marginTop: 2 }}>{it.verdict.summary}{it.verdict.event ? ` · ${it.verdict.event}` : ""}</div>}
+                    {it.verdict ? <div style={{ fontSize: 11, color: TIER_COLORS[it.verdict.tier] || "#8899aa", marginTop: 2 }}>{it.verdict.summary}{it.verdict.event ? ` · ${it.verdict.event}` : ""}</div> : <div style={{ fontSize: 10, color: "#576574", marginTop: 2 }}>판정 계산 중 — 🔄 로 새로고침</div>}
                   </div>
                 </div>
                 <div style={{ display: "flex", gap: 6, marginTop: 6 }}>

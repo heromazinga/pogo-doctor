@@ -47,6 +47,8 @@ await check("caught_on date", `insert into public.my_pokemon(user_id,species_id,
 await check("scan_items insert", `insert into public.scan_items(user_id,session_id,scan_key,species_id,name_kr,cp,hp) values ('${UID}','s1','815|Normal|3002|161|15|14|14|0',815,'에이스번',3002,161)`, true);
 await check("scan_items 같은 세션·개체 중복 거부", `insert into public.scan_items(user_id,session_id,scan_key,species_id,name_kr) values ('${UID}','s1','815|Normal|3002|161|15|14|14|0',815,'에이스번')`, false);
 await check("cleanup_scan_items()", `select public.cleanup_scan_items()`, true);
+await check("scan_sessions upsert", `insert into public.scan_sessions(user_id,session_id,metrics) values ('${UID}','s1','{"frames":10}') on conflict (user_id,session_id) do update set metrics = excluded.metrics`, true);
+await check("cleanup_scan_items() (세션 포함)", `select public.cleanup_scan_items()`, true);
 const idx = await db.query(`select indexname from pg_indexes where tablename='my_pokemon' and indexname like '%tags%'`);
 console.log("tags index:", idx.rows.map((r) => r.indexname).join(", ") || "없음");
 console.log(failed ? `FAILED ${failed}` : "ALL OK");

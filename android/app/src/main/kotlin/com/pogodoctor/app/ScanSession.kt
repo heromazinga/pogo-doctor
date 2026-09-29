@@ -45,35 +45,41 @@ class ScanSession(val id: String = newId()) {
             listOf(sp.id, sp.form, cp ?: "", hp ?: "", ap?.atk ?: "", ap?.def ?: "", ap?.sta ?: "", if (shadow) 1 else 0).joinToString("|")
     }
 
-    data class Metrics(var frames: Int = 0, var analyses: Int = 0, var recorded: Int = 0, var duplicates: Int = 0, var skippedNoCp: Int = 0,
-                       var captureMs: Long = 0, var fpMs: Long = 0, var ocrMs: Long = 0, var barMs: Long = 0, var apiMs: Long = 0, var apiFail: Int = 0,
+    data class Metrics(var frames: Int = 0, var analyses: Int = 0, var recorded: Int = 0, var duplicates: Int = 0, var skippedNoCp: Int = 0, var prefiltered: Int = 0,
+                       var captureMs: Long = 0, var fpMs: Long = 0, var prefilterMs: Long = 0, var ocrMs: Long = 0, var parseMs: Long = 0, var barMs: Long = 0,
+                       var queueSent: Int = 0, var queuePending: Int = 0, var queueFailed: Int = 0,
                        val startedAt: Long = System.currentTimeMillis(), var batteryStart: Int = -1, var batteryEnd: Int = -1) {
+        val minutes: Double get() = (System.currentTimeMillis() - startedAt) / 60000.0
         fun report(): String {
-            val min = (System.currentTimeMillis() - startedAt) / 60000.0
-            val a = maxOf(1, analyses)
-            return "세션 ${"%.1f".format(min)}분 · 프레임 $frames · 분석 $analyses · 기록 $recorded (중복 $duplicates, CP 미확인 $skippedNoCp) · " +
-                "평균 ms: 캡처 ${captureMs / maxOf(1, frames)} 지문 ${fpMs / maxOf(1, frames)} OCR ${ocrMs / a} 막대 ${barMs / a} API ${apiMs / maxOf(1, recorded)} (실패 $apiFail) · " +
-                "배터리 ${if (batteryStart >= 0) "$batteryStart% → $batteryEnd%" else "?"}"
+            val a = maxOf(1, analyses); val f = maxOf(1, frames)
+            return "세션 ${"%.1f".format(minutes)}분 · 프레임 $frames (평가 화면 아님 $prefiltered) · 분석 $analyses · 기록 $recorded (중복 $duplicates, CP 미확인 $skippedNoCp) · " +
+                "평균 ms: 캡처 ${captureMs / f} 지문 ${fpMs / f} 판별 ${prefilterMs / f} OCR ${ocrMs / a} 파싱 ${parseMs / a} 막대 ${barMs / a} · " +
+                "전송 $queueSent/대기 $queuePending(실패 시도 $queueFailed) · 배터리 ${if (batteryStart >= 0) "$batteryStart% → $batteryEnd%" else "?"}"
         }
+        fun json(): JSONObject = JSONObject().put("minutes", Math.round(minutes * 10) / 10.0).put("frames", frames).put("prefiltered", prefiltered).put("analyses", analyses).put("recorded", recorded)
+            .put("duplicates", duplicates).put("noCp", skippedNoCp).put("avgMs", JSONObject().put("capture", captureMs / maxOf(1, frames)).put("fingerprint", fpMs / maxOf(1, frames)).put("prefilter", prefilterMs / maxOf(1, frames))
+            .put("ocr", ocrMs / maxOf(1, analyses)).put("parse", parseMs / maxOf(1, analyses)).put("bars", barMs / maxOf(1, analyses)))
+            .put("queue", JSONObject().put("sent", queueSent).put("pending", queuePending).put("failedAttempts", queueFailed))
+            .put("battery", JSONObject().put("start", batteryStart).put("end", batteryEnd))
     }
 
     val metrics = Metrics()
     private val keys = HashSet<String>()
     var lastFp: IntArray? = null
-    var stableCount = 0
+    var stableSince = 0L
     var lastAnalyzedFp: IntArray? = null
     var lastBars: Appraisal? = null
     @Volatile var lastLine: String = "스캔 대기 — 평가 화면을 넘기세요"
 
-    // 새 프레임 지문 → 분석해야 하는지 (연속 2프레임 동일 + 직전 분석 프레임과 다름)
-    fun shouldAnalyze(fp: IntArray): Boolean {
-        val stable = same(lastFp, fp)
-        stableCount = if (stable) stableCount + 1 else 0
-        lastFp = fp
-        if (stableCount < 1) return false                 // 연속 2프레임 동일 (이전 + 현재)
+    // 새 프레임 지문 → 분석해야 하는지: 지문이 stableMs(기본 500ms) 이상 그대로(넘기는 중·애니메이션 제외) + 직전 분석 화면과 다름
+    fun shouldAnalyze(fp: IntArray, nowMs: Long, stableMs: Long): Boolean {
+        if (!same(lastFp, fp)) { stableSince = nowMs; lastFp = fp; return false }
+        if (nowMs - stableSince < stableMs) return false
         if (same(lastAnalyzedFp, fp)) return false        // 이미 분석한 화면
         return true
     }
+
+    fun sessionBody(): JSONObject = JSONObject().put("session_id", id).put("metrics", metrics.json()).put("started_at", metrics.startedAt).put("ended_at", System.currentTimeMillis())
 
     fun isDuplicate(key: String): Boolean = !keys.add(key)
 
