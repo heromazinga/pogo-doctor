@@ -24,3 +24,14 @@ export function ivCandidates(base, cp, hp, { maxLevel = 51, levelHint = null } =
 }
 
 export const ivPercent = (c) => Math.round(((c.atk + c.def + c.sta) / 45) * 100);
+
+// 4-C.2 CP 검증: 개체값(3개 확정)·HP 로 가능한 레벨(1~51, 0.5 단위)에서 계산한 CP 와 일치하면 그 레벨을, 아니면 null.
+//   자리수 누락 오판독(예: 2634 → 263)을 저장 전에 걸러낸다. HP 가 없으면 레벨 전 범위, 있으면 HP 가 맞는 레벨만.
+export function cpConsistentLevel(base, cp, hp, ivs, { maxLevel = 51 } = {}) {
+  if (!base || !cp || !ivs || ![ivs.atk, ivs.def, ivs.sta].every((v) => Number.isInteger(v))) return null;
+  for (const lv of levels().filter((l) => l <= maxLevel)) {
+    if (hp != null && calcHP(base.sta, ivs.sta, lv) !== hp) continue;
+    if (calcCP(base, ivs, lv) === cp) return lv;
+  }
+  return null;
+}

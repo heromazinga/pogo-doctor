@@ -151,6 +151,8 @@ class ResultCard(private val ctx: Context, private val repo: DataRepo, private v
                         val color = when (v.tier) { "main" -> 0xFF4ECDC4.toInt(); "hold" -> 0xFFFFD93D.toInt(); "transfer" -> 0xFFFF6B6B.toInt(); else -> 0xFFA890F0.toInt() }
                         text("📌 ${v.summary}", 13f, color, true)
                         for (t in v.tags) text("· ${t.name} (${tierShort(t.tier)}): ${t.reason}", 10f, 0xFF8899AA.toInt())
+                        // 4-C 추천 기술 (기술은 캡처하지 않음 — 기술머신·이벤트로 바꾼다)
+                        for (t in v.tags) if ((t.tier == "main" || t.tier == "hold") && t.moves != null) text("🎯 ${t.name} 추천 기술: ${t.moves}${if (t.special) " ⚠ 특수 기술머신" else ""}${t.evolveAtEvent?.let { " · $it" } ?: ""}", 11f, 0xFF4ECDC4.toInt())
                         v.eventNote?.let { text(it, 11f, 0xFFFFD93D.toInt()) }
                         if (v.collect.isNotEmpty()) text("💎 수집 추천: ${v.collect.joinToString(", ")}", 11f, 0xFFA890F0.toInt())
                         for (w in v.warnings) text("⚠️ $w", 10f, 0xFFFFD93D.toInt())

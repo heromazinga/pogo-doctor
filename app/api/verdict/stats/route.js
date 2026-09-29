@@ -22,7 +22,7 @@ export async function GET(req) {
   for (const k of OVERRIDABLE) if (sp.get(k) != null) override[k] = Number(sp.get(k));
   const { ctx } = await buildVerdictContext(req);
   ctx.rulesOverride = override;
-  const { data: scans } = await sb.from("scan_items").select("*").eq("user_id", user.userId).eq("dismissed", false).limit(300);
+  const { data: scans } = await sb.from("scan_items").select("*").eq("user_id", user.userId).eq("dismissed", false).eq("superseded", false).limit(300);
   const tiers = { main: 0, hold: 0, transfer: 0, need_appraisal: 0 };
   const holdReasons = {}, mainTags = {};
   const tally = (v) => {

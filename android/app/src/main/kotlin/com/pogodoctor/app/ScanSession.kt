@@ -104,7 +104,7 @@ class ScanSession(val id: String = newId()) {
     fun isCpFill(sp: SpeciesRef, hp: Int?, ap: Appraisal?): Boolean = keys.contains(scanKey(sp, null, hp, ap, false))
 
     // 스캔 항목 본문 (/api/device/scan). 기술은 읽지 않는다. 포획 장소 없음(날짜만)
-    fun body(sp: SpeciesRef, info: ScreenInfo, ap: Appraisal, cands: List<IvCalc.Candidate>, stars: Int?, recheck: Boolean): JSONObject {
+    fun body(sp: SpeciesRef, info: ScreenInfo, ap: Appraisal, cands: List<IvCalc.Candidate>, stars: Int?, recheck: Boolean, recheckReason: String? = null): JSONObject {
         val b = JSONObject().put("session_id", id).put("species_id", sp.id).put("form", sp.form).put("name_kr", sp.nameKr)
         info.cp?.let { b.put("cp", it) }; info.hp?.let { b.put("hp", it) }
         b.put("atk_iv", ap.atk).put("def_iv", ap.def).put("sta_iv", ap.sta)
@@ -112,6 +112,7 @@ class ScanSession(val id: String = newId()) {
         stars?.let { b.put("stars", it) }
         info.caughtOn?.let { b.put("caught_on", it) }
         b.put("recheck", recheck)
+        if (recheck && recheckReason != null) b.put("recheck_reason", recheckReason.take(80)) // 4-C.4 재확인 사유(서버 recheck_reason)
         // 4-B6: 화면에서 읽은 게임 태그 칩(알려진 태그 이름과 일치하는 OCR 줄). 있으면 서버가 박사행·검색 묶음에서 제외한다
         if (info.gameTags.isNotEmpty()) b.put("game_tags", JSONArray(info.gameTags.take(8)))
         if (cands.isNotEmpty()) { val arr = JSONArray(); for (c in cands.take(100)) arr.put(JSONObject().put("level", c.level).put("atk", c.atk).put("def", c.def).put("sta", c.sta)); b.put("ivCandidates", arr) }

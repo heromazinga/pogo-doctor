@@ -294,18 +294,12 @@ class CaptureService : Service() {
         var ap = reading.appraisal
         if (ap.atk == null || ap.def == null || ap.sta == null) { g.close(); session.metrics.failNotAppraisal++; scanFail(session, "막대 판독 실패", lines, bmp, reading.detail); return }
         info = parser.parse(lines, ap)
-        // 4-B4: 비율 판독이 기본. 라벨 y 판독(alt)과 다르면 CP/HP 역산으로 검증해 성립하는 쪽을 쓴다(둘 다 모순이면 기본값 + 재확인)
-        var altUsed = false
-        val altAp = reading.alt
-        if (reading.mismatch && altAp != null && info.cp != null) {
-            val spTry = info.species ?: info.speciesCandidates.firstOrNull()
-            if (spTry != null) {
-                val baseTry = IvCalc.Base(spTry.atk, spTry.def, spTry.sta)
-                val okPrimary = IvCalc.consistent(baseTry, info.cp, info.hp, ap)
-                val okAlt = IvCalc.consistent(baseTry, info.cp, info.hp, altAp)
-                if (!okPrimary && okAlt) { ap = altAp; altUsed = true; info = parser.parse(lines, ap) }
-            }
-        }
+        // 4-C.4: 라벨행 값 채택 경로 폐지 — 비율 판독만 쓴다. 두 방식이 다르면(reading.mismatch) 채택하지 않고 "재확인" 으로 기록한다.
+        //   실DB 결함(충돌 30건, 방어·HP 가 약 절반): 옛 경로는 비율 판독이 CP/HP 와 모순일 때 라벨행 값이 CP/HP 와 "성립하기만 하면" 채택했다.
+        //   CP/HP 하나에 성립하는 개체값 조합은 수십 개라 잘못된 라벨행 값도 쉽게 통과했고, 라벨행 후보 행(라벨 아래 0.3~1.6h + 라벨 중심 ±h/4)은
+        //   인접 막대·배경을 지나 방어=HP 같은 값(냐오불 13/7/7, 과사삭벌레 11/4/4)을 만들었다. 비율 판독이 모순이면 그 프레임은 재확인이 맞다.
+        val altUsed = false
+        val barMismatch = reading.mismatch
         val apA = ap.atk; val apD = ap.def; val apS = ap.sta   // 다른 모듈의 public 프로퍼티는 스마트 캐스트 불가 → 지역 val
         if (apA == null || apD == null || apS == null) { g.close(); session.metrics.failNotAppraisal++; scanFail(session, "막대 판독 실패", lines, bmp, reading.detail); return }
         session.metrics.parseMs += System.currentTimeMillis() - t3
@@ -335,10 +329,11 @@ class CaptureService : Service() {
         // 레벨 후보: 검증된 CP 가 있으면 CP+HP+막대, 없으면 막대+HP. "재확인 필요"는 막대와 HP 가 모순일 때(후보 0)만
         var cands: List<IvCalc.Candidate> = if (cp != null) IvCalc.filterByAppraisal(IvCalc.candidates(base, cp, info.hp), apA, apD, apS) else emptyList()
         if (cands.isEmpty()) cands = IvCalc.candidatesWithoutCp(base, info.hp, ap)
-        val recheck = forcedRecheck || cands.isEmpty()
+        // 재확인: 종 미확정 / 막대·HP 모순(후보 0) / 4-C.4 비율·라벨행 판독 불일치(막대 판독 신뢰 불가)
+        val recheck = forcedRecheck || cands.isEmpty() || barMismatch
         if (recheck) session.metrics.failMismatch++
         val pct = Math.round((apA + apD + apS) * 100.0 / 45)
-        val body = session.body(spFinal, info, ap, cands, reading.stars, recheck)
+        val body = session.body(spFinal, info, ap, cands, reading.stars, recheck, if (barMismatch) "막대 판독 불일치(비율≠라벨행) — 재스캔 필요" else null)
         // 로컬 확정 → 대기열 (서버 응답을 기다리지 않는다)
         session.metrics.recorded++
         g.close()
@@ -346,7 +341,7 @@ class CaptureService : Service() {
         // 진동은 "새 기록"에만: 같은 개체의 CP 보완(앞서 CP 미확인으로 기록된 것)은 진동 없이 문구만 갱신
         val cpFill = cp != null && session.isCpFill(spFinal, info.hp, ap)
         if (!cpFill) vibrateShort()
-        session.lastLine = "${if (cpFill) "CP 보완" else "방금"} ${spFinal.nameKr} ${pct}%${if (cp == null) " (CP 미확인)" else " CP$cp"}${if (recheck) " ⚠️재확인" else ""}${if (altUsed) " (라벨행 값 채택)" else ""}"
+        session.lastLine = "${if (cpFill) "CP 보완" else "방금"} ${spFinal.nameKr} ${pct}%${if (cp == null) " (CP 미확인)" else " CP$cp"}${if (recheck) " ⚠️재확인" else ""}${if (barMismatch) " (막대 판독 불일치)" else ""}${if (altUsed) " (라벨행 값 채택)" else ""}"
         refreshScanLine()
         // 4-B5 실시간 판정: 서버 /api/verdict 비동기 → 띠·알림에 "❌ 박사행 / ✅ 주력: 불꽃 레이드 / 💎" (게임 부스터를 끄면 띠가 보임)
         val recordedNow = session.metrics.recorded

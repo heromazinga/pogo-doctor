@@ -6,7 +6,7 @@
 import { TYPES, TYPE_NAMES_KR } from "./typeChart.js";
 import { cpmForLevel, levels, calcCP, estimateLevel } from "./cpm.js";
 import { findPokemon } from "./pokemonData.js";
-import { RULES, TAG, TIER_LABEL, purposesFromTags } from "./verdictRules.js";
+import { RULES, TAG, TIER_LABEL, EVOLVE_PREFIX, purposesFromTags } from "./verdictRules.js";
 import { getRankings, raidRankOf, gymRankOf, raidScoreForType, finalForms, familyIds, isLegendaryClass } from "./speciesRankings.js";
 import { leagueRankOf } from "./pvpokeRankings.js";
 import { ivCandidates, ivPercent, calcHP } from "./ivCalc.js";
@@ -57,6 +57,11 @@ function normalizeCandidates(input, p) {
   if (ivs && [ivs.atk, ivs.def, ivs.sta].every((v) => Number.isInteger(v) && v >= 0 && v <= 15)) {
     let level = input.level != null ? clampL(input.level) : null;
     if (level == null && input.cp) level = estimateLevel(input.cp, base, ivs).level;
+    // 4-C.3: CP·레벨이 없어도 HP 가 있으면 HP 로 가능한 레벨들을 후보로 (실DB 결함: 찌르꼬 0/15/14 L2 CP null 이 L40 으로 가정돼 리그 상한 초과 → 박사행)
+    if (level == null && input.hp) {
+      const lvs = levels().filter((lv) => calcHP(base.sta, ivs.sta, lv) === input.hp);
+      if (lvs.length) return lvs.map((lv) => ({ ...ivs, level: lv }));
+    }
     if (level == null) level = RULES.RAID_MEMBER_LEVEL;
     return [{ ...ivs, level }];
   }
@@ -123,11 +128,11 @@ function evaluateCandidate(p, cand, input, ctx, rankings, { forEvolve = false } 
       } else {
         notes.push(sp.usesSpecial ? `특수 기술머신 필요(${moveName(ctx.dataset, sp.charged)})` : `${kr} 기술로 변경 필요`);
       }
-    } else if (!forEvolve) {
-      notes.push("기술 확인 필요(최적 기술 가정)");
     }
-    const reason = `${kr} ${sp.rank}위(1위 대비 ${sp.pct}%)${shadow ? "(섀도)" : ""}·공격 ${cand.atk}, 내 ${p.nameKr} 중 ${indiv}위${notes.length ? " · " + notes.join(", ") : ""}`;
-    tags.push({ name: TAG.raid(kr), tier, reason, metrics: { type: t, speciesRank: sp.rank, speciesPct: sp.pct, top, indivRank: indiv, atkIv: cand.atk, level: cand.level, speciesScore: sp.score, myScore, bestMoves: [sp.fast, sp.charged], usesSpecial: sp.usesSpecial, notes } });
+    // 4-C: 기술은 캡처하지 않는다(기술머신·이벤트로 바꾸므로). 태그마다 추천 기술(종 최적 조합)을 표시하고, 특수 기술머신이 필요하면 ⚠ 표기
+    const moves = recommendedMoves(ctx.dataset, p, sp.fast, sp.charged);
+    const reason = `${kr} ${sp.rank}위(1위 대비 ${sp.pct}%)${shadow ? "(섀도)" : ""}·공격 ${cand.atk}, 내 ${p.nameKr} 중 ${indiv}위 · ${moveLine(moves)}${notes.length ? " · " + notes.join(", ") : ""}`;
+    tags.push({ name: TAG.raid(kr), tier, reason, moves, metrics: { type: t, speciesRank: sp.rank, speciesPct: sp.pct, top, indivRank: indiv, atkIv: cand.atk, level: cand.level, speciesScore: sp.score, myScore, bestMoves: [sp.fast, sp.charged], usesSpecial: sp.usesSpecial, notes } });
   }
 
   // 2) 체육관 방어
@@ -143,15 +148,20 @@ function evaluateCandidate(p, cand, input, ctx, rankings, { forEvolve = false } 
     const lr = ctx.leagueRankings?.leagues?.[league];
     if (!lr) { warnings.push(`${TAG[league]}: 데이터 없음(PvPoke 순위 미수신)`); continue; }
     const sp = leagueRankOf(ctx.leagueRankings, league, p.pvpokeId, shadow);
-    if (!sp || sp.rank > RULES.LEAGUE_MID_RANK) continue;
+    const ranked = Boolean(sp) && sp.rank <= RULES.LEAGUE_MID_RANK;
     const cap = RULES.LEAGUE_CAPS[league];
-    const top = sp.rank <= RULES.LEAGUE_TOP_RANK;
     const table = leagueProductTable(p, cap, ctx.maxLeagueLevel || RULES.LEAGUE_MAX_LEVEL);
     const me = table.rank.get(`${cand.atk},${cand.def},${cand.sta}`);
     if (!me || me.level == null) continue;
+    // 4-C.2 리그 후보: 스탯곱 순위 ≤41(상위 1%)이면 종 PvPoke 순위(200위 안팎)와 무관하게 보류 (사례: 찌르꼬 0/15/14 → 찌르호크 하이퍼 4위·슈퍼 115위)
+    //   단, PvPoke 순위 파일에 아예 없는 종(리그에서 쓸 수 없는 약한 종)은 제외 — 그런 종은 스탯곱 1위라도 의미가 없다
+    const candidateRank = rule(ctx, "LEAGUE_CANDIDATE_PRODUCT_RANK");
+    const candidate = Boolean(sp) && me.rank <= candidateRank;
+    if (!ranked && !candidate) continue;
+    const top = ranked && sp.rank <= RULES.LEAGUE_TOP_RANK;
     const currentCp = input.cp && !forEvolve ? input.cp : calcCP({ atk: p.baseAttack, def: p.baseDefense, sta: p.baseStamina }, cand, cand.level);
     if (currentCp > cap || cand.level > me.level) {
-      tags.push({ name: TAG[league], tier: "none", reason: `현재 CP ${currentCp} > 상한 ${cap} → 불가`, metrics: { speciesRank: sp.rank, productRank: me.rank, over: true } });
+      tags.push({ name: TAG[league], tier: "none", reason: `현재 CP ${currentCp} > 상한 ${cap} → 불가`, metrics: { speciesRank: sp?.rank ?? null, productRank: me.rank, over: true } });
       continue;
     }
     let tier = null;
@@ -160,9 +170,13 @@ function evaluateCandidate(p, cand, input, ctx, rankings, { forEvolve = false } 
     const holdRank = tight ? rule(ctx, "LEAGUE_HOLD_PRODUCT_RANK_TIGHT") : rule(ctx, "LEAGUE_HOLD_PRODUCT_RANK");
     const midHoldRank = tight ? rule(ctx, "LEAGUE_MID_HOLD_PRODUCT_RANK_TIGHT") : rule(ctx, "LEAGUE_MID_HOLD_PRODUCT_RANK");
     if (top && me.rank <= rule(ctx, "LEAGUE_MAIN_PRODUCT_RANK")) tier = "main";
-    else if ((top && me.rank <= holdRank) || (!top && me.rank <= midHoldRank)) tier = "hold";
+    else if (ranked && ((top && me.rank <= holdRank) || (!top && me.rank <= midHoldRank))) tier = "hold";
+    else if (candidate) tier = "hold";
     if (!tier) continue;
-    tags.push({ name: TAG[league], tier, reason: `PvPoke ${sp.rank}위·스탯곱 ${me.rank}/4096위 (L${me.level} CP${me.cp})`, metrics: { speciesRank: sp.rank, top, productRank: me.rank, levelAtCap: me.level, cpAtCap: me.cp } });
+    const moves = movesFromPvpoke(ctx.dataset, p, sp?.moveset);
+    const rankTxt = ranked ? `PvPoke ${sp.rank}위` : `PvPoke ${sp.rank}위(200위 밖)`;
+    const candTxt = !ranked || (!top && me.rank <= candidateRank && me.rank > midHoldRank) ? ` · 리그 후보(스탯곱 상위 ${candidateRank}위 이내)` : "";
+    tags.push({ name: TAG[league], tier, reason: `${rankTxt}·스탯곱 ${me.rank}/4096위 (L${me.level} CP${me.cp})${candTxt}${moves ? " · " + moveLine(moves) : ""}`, moves, metrics: { speciesRank: sp?.rank ?? null, top, productRank: me.rank, levelAtCap: me.level, cpAtCap: me.cp, candidate: !ranked || (!top && me.rank <= candidateRank) } });
   }
 
   // 4) 마스터리그
@@ -173,7 +187,8 @@ function evaluateCandidate(p, cand, input, ctx, rankings, { forEvolve = false } 
       const sp = leagueRankOf(ctx.leagueRankings, "master", p.pvpokeId, shadow);
       if (sp && sp.rank <= RULES.MASTER_TOP_RANK) {
         const tier = pct >= RULES.MASTER_MAIN_PCT ? "main" : pct >= RULES.MASTER_HOLD_PCT ? "hold" : null;
-        if (tier) tags.push({ name: TAG.master, tier, reason: `PvPoke ${sp.rank}위·개체값 ${pct}%`, metrics: { speciesRank: sp.rank, pct } });
+        const moves = movesFromPvpoke(ctx.dataset, p, sp.moveset);
+        if (tier) tags.push({ name: TAG.master, tier, reason: `PvPoke ${sp.rank}위·개체값 ${pct}%${moves ? " · " + moveLine(moves) : ""}`, moves, metrics: { speciesRank: sp.rank, pct } });
       }
     }
   }
@@ -183,17 +198,62 @@ function evaluateCandidate(p, cand, input, ctx, rankings, { forEvolve = false } 
     for (const f of finalForms(ctx.dataset, p)) {
       const sub = evaluateCandidate(f.species, cand, { ...input, cp: null, fast_move: null, charged_moves: [] }, ctx, rankings, { forEvolve: true });
       // 4-A2: 최종형이 "주력"일 때만 진화 대기 부여 (보류급이면 박사행)
-      const useful = sub.tags.filter((t) => t.tier === "main");
+      // 4-A2: 최종형이 "주력"일 때 진화 후보(주력). 4-C.4: 최종형의 "리그 후보" 보류(스탯곱 ≤41, D)도 진화 후보(보류)로 이어진다
+      //   (실DB 결함: 찌르꼬 0/15/14 → 찌르호크 하이퍼 스탯곱 4위가 종 순위 200위 밖이라 D 보류였는데, 주력만 세어 진화 후보가 없었고 박사행이 됐다)
+      const mains = sub.tags.filter((t) => t.tier === "main");
+      const candHolds = sub.tags.filter((t) => t.tier === "hold" && t.metrics?.candidate);
+      const useful = mains.length ? mains : candHolds;
       if (!useful.length) continue;
-      const tier = "main";
-      const candy = Number.isInteger(input.candy) ? (input.candy >= f.candiesFromHere ? `진화 가능(사탕 ${input.candy}/${f.candiesFromHere})` : `사탕 ${input.candy}/${f.candiesFromHere}`) : `사탕 ${f.candiesFromHere}개 필요`;
-      tags.push({ name: TAG.evolve(f.species.nameKr), tier, reason: `${f.species.nameKr} 기준: ${useful.map((t) => `${t.name} ${TIER_LABEL[t.tier]}`).join(", ")} · ${candy}`, metrics: { finalId: f.species.id, finalForm: f.species.form, candiesNeeded: f.candiesFromHere, candy: input.candy ?? null, finalTags: useful.map((t) => ({ name: t.name, tier: t.tier })) } });
+      // 4-C.2: 필요 사탕 ≥200(예: 잉어킹 400)이면 등급 상한 보류 — 진화까지 멀어 주력으로 세지 않는다
+      const candyHold = f.candiesFromHere >= rule(ctx, "EVOLVE_CANDY_HOLD");
+      const tier = candyHold || !mains.length ? "hold" : "main";
+      const candy = (Number.isInteger(input.candy) ? (input.candy >= f.candiesFromHere ? `진화 가능(사탕 ${input.candy}/${f.candiesFromHere})` : `사탕 ${input.candy}/${f.candiesFromHere}`) : `사탕 ${f.candiesFromHere}개 필요`) + (candyHold ? ` · 사탕 ${rule(ctx, "EVOLVE_CANDY_HOLD")}개 이상 → 보류` : "");
+      // 4-C: 최종형의 추천 기술(첫 주력 태그 기준)을 함께 표시. 30일 내 이벤트 대상이면 computeVerdict 에서 "📅 이벤트 때 진화" 를 붙인다
+      const moves = useful.find((t) => t.moves)?.moves || null;
+      tags.push({ name: TAG.evolve(f.species.nameKr), tier, reason: `${f.species.nameKr} 기준: ${useful.map((t) => `${t.name} ${TIER_LABEL[t.tier]}`).join(", ")} · ${candy}${moves ? " · " + moveLine(moves) : ""}`, moves, metrics: { finalId: f.species.id, finalForm: f.species.form, candiesNeeded: f.candiesFromHere, candy: input.candy ?? null, finalTags: useful.map((t) => ({ name: t.name, tier: t.tier, moves: t.moves || null })) } });
     }
   }
   return { tags, warnings, pct };
 }
 
 function moveName(dataset, m) { return dataset.moveNamesKr?.[m] || m; }
+
+// ─── 4-C 추천 기술 (기술 캡처 없음: 기술머신·이벤트로 바꾸므로 종 최적 조합을 안내) ───
+// 반환 { fast, charged:[…], fastKr, chargedKr:[…], special:boolean(특수 기술머신 필요: 레거시·전용기) }
+function specialSet(p) { return new Set([...(p.eliteFast || []), ...(p.eliteCharged || []), ...(p.signatureFast || []), ...(p.signatureCharged || [])]); }
+export function recommendedMoves(dataset, p, fast, charged) {
+  if (!fast && !charged) return null;
+  const chargedList = (Array.isArray(charged) ? charged : [charged]).filter(Boolean);
+  const sp = specialSet(p);
+  return { fast: fast || null, charged: chargedList, fastKr: fast ? moveName(dataset, fast) : null, chargedKr: chargedList.map((m) => moveName(dataset, m)), special: [fast, ...chargedList].some((m) => m && sp.has(m)) };
+}
+// PvPoke moveset ID("FIRE_SPIN", "X_SCISSOR") → 데이터셋 기술명("Fire Spin", "X-Scissor"): 영숫자만 남겨 비교. 못 찾으면 ID 를 보기 좋게
+const moveIndexMemo = new WeakMap();
+function moveIndex(dataset) {
+  if (moveIndexMemo.has(dataset)) return moveIndexMemo.get(dataset);
+  const idx = new Map();
+  const norm = (s) => String(s).toLowerCase().replace(/[^a-z0-9]/g, "");
+  for (const k of [...Object.keys(dataset.moveStats || {}), ...Object.keys(dataset.moveNamesKr || {})]) if (!idx.has(norm(k))) idx.set(norm(k), k);
+  const out = { idx, norm };
+  moveIndexMemo.set(dataset, out);
+  return out;
+}
+export function pvpokeMoveToName(dataset, id) {
+  if (!id) return null;
+  const { idx, norm } = moveIndex(dataset);
+  return idx.get(norm(id)) || String(id).toLowerCase().split("_").map((w) => w.charAt(0).toUpperCase() + w.slice(1)).join(" ");
+}
+function movesFromPvpoke(dataset, p, moveset) {
+  if (!Array.isArray(moveset) || !moveset.length) return null;
+  const names = moveset.map((m) => pvpokeMoveToName(dataset, m));
+  return recommendedMoves(dataset, p, names[0], names.slice(1, 3));
+}
+// 표시용 한 줄: "추천 기술: 불꽃회오리/블라스트번 ⚠ 특수 기술머신"
+export function moveLine(m) {
+  if (!m) return "";
+  const parts = [m.fastKr || m.fast, ...(m.chargedKr?.length ? m.chargedKr : m.charged || [])].filter(Boolean);
+  return `추천 기술: ${parts.join("/")}${m.special ? " ⚠ 특수 기술머신" : ""}`;
+}
 
 // ─── 보관함 여유 적용 ───
 function applyStorage(tags, p, input, ctx) {
@@ -260,6 +320,8 @@ export function computeVerdict(input, ctx) {
       const date = new Date(h.start).toISOString().slice(0, 10);
       event = { name: h.name, label: h.label, type: h.type, date, start: h.start, end: h.end, link: h.link, note: `📅 ${date} ${h.label} 대상 — 박사행 보류(이벤트 때 진화하면 전용 기술)` };
       if (tier === "transfer") tier = "hold";
+      // 4-C: 진화 대기 태그에 "📅 이벤트 때 진화" (이벤트 진화로 전용 기술을 얻으면 특수 기술머신 불필요)
+      for (const t of tags) if (t.name.startsWith(EVOLVE_PREFIX)) { t.evolveAtEvent = `📅 이벤트 때 진화(${date} ${h.label})`; t.reason += ` · ${t.evolveAtEvent}`; }
     }
   }
 
@@ -270,26 +332,36 @@ export function computeVerdict(input, ctx) {
 
   const allSame = evals.every((e) => e.cand.atk === evals[0].cand.atk && e.cand.def === evals[0].cand.def && e.cand.sta === evals[0].cand.sta);
   const collect = collectFor(p, input, allSame ? evals[0].cand : null, !legendaryHold && (tier === "main" || tier === "hold"));
+  // 4-C.2 "수집" 태그: 100%·0%·반짝반짝·오래 전 포획(교환 시 반짝반짝). 이로치·배경·XXL 은 게임 검색어로 묶는다(정리 도우미)
+  const collectTag = collect.some((c) => c.collectTag);
   const summary = buildSummary(tier, tags, collect, event, evals[0].cand, allSame, legendaryHold);
+  // 4-C.2 맥스배틀 종(공개 데이터로 확인된 목록만): 판정 대신 "다이맥스 태그 권장" 안내
+  const dynamax = isMaxBattleSpecies(ctx, p);
+  const keptTags = tags.filter((t) => t.tier === "main" || t.tier === "hold").map((t) => t.name);
+  const recommendedTags = dynamax ? [TAG.dynamax] : [...keptTags, ...(collectTag ? [TAG.collect] : [])];
   return {
-    tier, tags, collect, event, confident, basis: "server", summary, disabled, warnings,
+    tier: dynamax ? "hold" : tier, tags, collect, event, confident, basis: "server", disabled, warnings,
+    summary: dynamax ? `🟡 보류: 맥스배틀 종 — "${TAG.dynamax}" 태그 권장(판정 대신 안내)${allSame ? ` [${evals[0].cand.atk}/${evals[0].cand.def}/${evals[0].cand.sta} L${evals[0].cand.level}]` : ""}` : summary,
+    dynamax,
     species: { id: p.id, form: p.form, name: p.name, nameKr: p.nameKr, legendary: isLegendaryClass(p), pokemonClass: p.pokemonClass || null },
     candidates: evals.length,
     ivs: allSame ? { ...evals[0].cand, pct: evals[0].pct } : null,
     levelRange: [Math.min(...evals.map((e) => e.cand.level)), Math.max(...evals.map((e) => e.cand.level))],
-    recommendedTags: tags.filter((t) => t.tier === "main" || t.tier === "hold").map((t) => t.name),
-    purposes: purposesFromTags(tags.filter((t) => t.tier === "main" || t.tier === "hold").map((t) => t.name)),
+    recommendedTags,
+    purposes: purposesFromTags(keptTags),
+    // 4-C: 보관(주력/보류) 태그별 추천 기술 { 태그명: {fast, charged, fastKr, chargedKr, special} }
+    recommendedMoves: Object.fromEntries(tags.filter((t) => (t.tier === "main" || t.tier === "hold") && t.moves).map((t) => [t.name, t.moves])),
   };
 }
 
 function collectFor(p, input, cand, kept) {
   const out = [];
   if (input.is_shiny) out.push({ reason: "이로치" });
-  if (input.is_lucky) out.push({ reason: "반짝반짝(럭키)" });
+  if (input.is_lucky) out.push({ reason: "반짝반짝(럭키)", collectTag: true });
   if (cand) {
     const pct = ivPercent(cand);
-    if (pct >= RULES.COLLECT_HUNDO_PCT) out.push({ reason: "개체값 100%" });
-    if (cand.atk + cand.def + cand.sta === RULES.COLLECT_NUNDO_SUM) out.push({ reason: "개체값 0%(0/0/0)" });
+    if (pct >= RULES.COLLECT_HUNDO_PCT) out.push({ reason: "개체값 100%", collectTag: true });
+    if (cand.atk + cand.def + cand.sta === RULES.COLLECT_NUNDO_SUM) out.push({ reason: "개체값 0%(0/0/0)", collectTag: true });
   }
   if (isLegendaryClass(p)) {
     if (input.is_shadow || input.is_purified) out.push({ reason: `${input.is_shadow ? "섀도" : "정화"} 전설·환상 — 보관 권장` });
@@ -298,8 +370,15 @@ function collectFor(p, input, cand, kept) {
   }
   // 4-A2 교환 시 반짝반짝: 포획일 기준 (기기에서 읽은 날짜, 장소 없음). 이미 럭키면 해당 없음
   const lucky = luckyTradeReason(input.caught_on);
-  if (lucky && !input.is_lucky) out.push({ reason: lucky });
+  if (lucky && !input.is_lucky) out.push({ reason: lucky, collectTag: true }); // 오래 전 포획(교환 시 반짝반짝)
   return out;
+}
+
+// 4-C.2 맥스배틀 종 판별: ctx.maxBattleSpecies(Set<"id:form"> 또는 Set<id>) — 공개 데이터로 확인된 목록만 (app/lib/maxBattleSpecies.js)
+function isMaxBattleSpecies(ctx, p) {
+  const set = ctx.maxBattleSpecies;
+  if (!set || typeof set.has !== "function") return false;
+  return set.has(`${p.id}:${p.form}`) || set.has(p.id);
 }
 
 const normalizeDate = (d) => (typeof d === "string" && /^\d{4}-\d{2}-\d{2}/.test(d) ? d.slice(0, 10) : null);

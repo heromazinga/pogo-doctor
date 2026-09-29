@@ -1,7 +1,7 @@
 // 4-B5 정리 도우미 검색어 생성: CNF 형식, 교차곱 충돌 시 분할, 예상 수, 제외 규칙
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { buildGroups, buildQuery, matches, classify, buildCleanup } from "../app/lib/searchBuilder.js";
+import { buildGroups, buildQuery, matches, classify, buildCleanup, PROTECT_SUFFIX } from "../app/lib/searchBuilder.js";
 
 const t = (id, species_id, hp, cp = null, extra = {}) => ({ id, species_id, hp, cp, cpVerified: cp != null, is_shadow: false, form: "Normal", ...extra });
 
@@ -71,6 +71,42 @@ test("4-B6 strict=false(태그): 충돌이 있어도 묶음 생성 + overlap 표
   assert.equal(strict.groups.length, 2); assert.ok(strict.groups.every((g) => g.overlap === 0));
   const c = buildCleanup([{ id: "a", species_id: 700, hp: 154, verdict: { tier: "main", recommendedTags: ["페어리 레이드"] } }, { id: "x", species_id: 700, hp: 154, verdict: { tier: "transfer", recommendedTags: [] } }], []);
   assert.equal(c.find((x) => x.category.startsWith("tag:")).strict, false); assert.equal(c.find((x) => x.category === "transfer").strict, true);
+});
+
+test("4-C.2 B 박사행 보호 조건: 항상 '&!#&!색이 다른&!반짝반짝&!xxl&!배경' 추가(박사행만), 길이 상한에 포함, matches 부정 절", () => {
+  const items = [{ id: "a", species_id: 700, hp: 154, verdict: { tier: "transfer", recommendedTags: [] } }, { id: "b", species_id: 381, hp: 118, verdict: { tier: "main", recommendedTags: ["슈퍼리그"] } }];
+  const c = buildCleanup(items, items);
+  const tr = c.find((x) => x.category === "transfer");
+  assert.equal(PROTECT_SUFFIX, "&!#&!색이 다른&!반짝반짝&!xxl&!배경");
+  assert.equal(tr.groups[0].query, "700&hp154" + PROTECT_SUFFIX); assert.equal(tr.protect, true);
+  assert.equal(c.find((x) => x.category === "tag:슈퍼리그").groups[0].query, "381&hp118", "태그 묶음에는 붙이지 않음");
+  assert.ok(matches("700&hp154" + PROTECT_SUFFIX, { species_id: 700, hp: 154, game_tags: [] }));
+  assert.ok(!matches("700&hp154" + PROTECT_SUFFIX, { species_id: 700, hp: 154, game_tags: ["즐겨찾기"] }));
+  assert.ok(!matches("700&hp154" + PROTECT_SUFFIX, { species_id: 700, hp: 154, is_shiny: true }));
+  assert.ok(!matches("700&hp154" + PROTECT_SUFFIX, { species_id: 700, hp: 154, is_lucky: true }));
+  // 길이 상한: 보호 조건(36자) 포함해 60자 이내로 쪼개짐
+  const many = Array.from({ length: 6 }, (_, i) => t(`m${i}`, 100 + i, 100 + i));
+  const r = buildGroups(many, many, { maxLen: 60, strict: true, suffix: PROTECT_SUFFIX });
+  assert.ok(r.groups.length > 1 && r.groups.every((g) => g.query.length <= 60 && g.query.endsWith(PROTECT_SUFFIX)), r.groups.map((g) => g.query).join(" | "));
+  assert.equal(r.groups.reduce((s, g) => s + g.expected, 0), 6);
+});
+
+test("4-C.2 C 수집: 'tag:수집' 묶음(등급 무관) + 이로치·배경·XXL 고정 검색어(예상 수 없음)", () => {
+  const items = [{ id: "a", species_id: 999, hp: 50, verdict: { tier: "transfer", recommendedTags: ["수집"], collect: [{ reason: "개체값 100%" }] } }, { id: "b", species_id: 381, hp: 118, verdict: { tier: "main", recommendedTags: ["슈퍼리그"] } }];
+  const c = buildCleanup(items, items);
+  assert.equal(c.find((x) => x.category === "transfer"), undefined, "💎 수집 대상은 박사행 아님");
+  assert.equal(c.find((x) => x.category === "tag:수집").groups[0].query, "999&hp50");
+  const fixed = c.find((x) => x.category === "collect");
+  assert.equal(fixed.fixed, true); assert.deepEqual(fixed.groups.map((g) => g.query), ["색이 다른", "배경", "xxl"]); assert.ok(fixed.groups.every((g) => g.expected === null));
+});
+
+test("4-C.3 재확인(recheck) 기록은 박사행·태그·수집 묶음 모두 제외", () => {
+  const c = classify([
+    { id: "1", species_id: 1, hp: 10, verdict: { tier: "transfer" }, recheck: true },
+    { id: "2", species_id: 1, hp: 11, verdict: { tier: "main", recommendedTags: ["슈퍼리그"], collect: [{ reason: "개체값 100%" }] }, recheck: true },
+    { id: "3", species_id: 1, hp: 12, verdict: { tier: "main", recommendedTags: ["슈퍼리그"] } },
+  ]);
+  assert.deepEqual(c.transfer, []); assert.deepEqual(c.tags.get("슈퍼리그").map((x) => x.id), ["3"]); assert.deepEqual(c.collect, []);
 });
 
 test("4-B6 게임 태그가 있는 개체는 박사행 대상 제외", () => {

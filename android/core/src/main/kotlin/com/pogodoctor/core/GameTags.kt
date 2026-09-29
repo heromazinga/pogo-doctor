@@ -6,7 +6,7 @@ package com.pogodoctor.core
 object GameTags {
     val TYPES_KR = listOf("노말", "불꽃", "물", "전기", "풀", "얼음", "격투", "독", "땅", "비행", "에스퍼", "벌레", "바위", "고스트", "드래곤", "악", "강철", "페어리")
     // 포고박사 추천 태그 이름 (현행 유지 — 사용자가 앞으로 이 이름으로 태그를 닮)
-    val RECOMMENDED: Set<String> = (TYPES_KR.map { "$it 레이드" } + listOf("체육관 방어", "슈퍼리그", "하이퍼리그", "마스터리그", "수집", "교환용", "진화 대기")).toSet()
+    val RECOMMENDED: Set<String> = (TYPES_KR.map { "$it 레이드" } + listOf("체육관 방어", "슈퍼리그", "하이퍼리그", "마스터리그", "수집", "교환용", "진화 후보", "다이맥스")).toSet()
     // 4-B6.2 사용자의 기존 게임 태그 이름(실DB 검증에서 확인). 앱 설정에서 편집 가능(Prefs.gameTagNames), 기본값 = 이 목록
     val USER_DEFAULT: List<String> = listOf("즐겨찾기", "슈퍼리그", "하이퍼리그", "레이드1군", "레이드2군", "다이맥스", "체육관")
     val KNOWN: Set<String> = RECOMMENDED + USER_DEFAULT

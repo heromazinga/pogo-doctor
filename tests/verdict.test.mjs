@@ -2,12 +2,13 @@
 //   npm test  (node --test tests/*.test.mjs)
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { computeVerdict, leagueProductTable } from "../app/lib/verdict.js";
+import { computeVerdict, leagueProductTable, pvpokeMoveToName } from "../app/lib/verdict.js";
 import { getRankings } from "../app/lib/speciesRankings.js";
 import { extractEventTargets, matchEvents } from "../app/lib/eventTargets.js";
 import { ivCandidates } from "../app/lib/ivCalc.js";
 import { RULES, RULES_VERSION, TAG, purposesFromTags } from "../app/lib/verdictRules.js";
-import { fillMissingVerdicts, isStaleVerdict } from "../app/lib/scanVerdict.js";
+import { fillMissingVerdicts, isStaleVerdict, verdictForItem } from "../app/lib/scanVerdict.js";
+import { calcHP } from "../app/lib/ivCalc.js";
 
 // ── 합성 데이터셋 ──
 const moveStats = {
@@ -48,7 +49,12 @@ const dataset = {
     sp(4, "Charmander", "파이리", ["fire"], 116, 93, 118, ["Ember"], ["Flamethrower"], { evolutions: [{ id: 5, form: "Normal", candies: 25 }] }),
     sp(5, "Charmeleon", "리자드", ["fire"], 158, 126, 151, ["Ember"], ["Flamethrower"], { evolutions: [{ id: 6, form: "Normal", candies: 100 }] }),
     sp(184, "Azumarill", "마릴리", ["water", "fairy"], 112, 152, 225, ["Bubble"], ["Hydro Pump"]),
-    sp(129, "Magikarp", "잉어킹", ["water"], 29, 85, 85, [], []),
+    sp(129, "Magikarp", "잉어킹", ["water"], 29, 85, 85, [], [], { evolutions: [{ id: 130, form: "Normal", candies: 400 }] }),
+    sp(130, "Gyarados", "갸라도스", ["water", "flying"], 237, 186, 216, ["Bubble"], ["Hydro Pump"]),
+    // 4-C.3 실DB 사례: 찌르꼬 0/15/14 L2 CP null HP22 → 찌르호크(하이퍼 상위종) 기준 진화 후보
+    sp(396, "Starly", "찌르꼬", ["normal", "flying"], 101, 58, 120, ["Tackle"], ["Hyper Beam"], { evolutions: [{ id: 397, form: "Normal", candies: 25 }] }),
+    sp(397, "Staravia", "찌르버드", ["normal", "flying"], 142, 94, 146, ["Tackle"], ["Hyper Beam"], { evolutions: [{ id: 398, form: "Normal", candies: 100 }] }),
+    sp(398, "Staraptor", "찌르호크", ["normal", "flying"], 234, 140, 198, ["Quick Attack"], ["Hyper Beam"]),
     sp(150, "Mewtwo", "뮤츠", ["psychic"], 300, 182, 214, ["Confusion"], ["Psystrike"], { pokemonClass: "legendary" }),
     sp(999, "Weakmon", "약한몬", ["normal"], 50, 50, 50, [], [], { pokemonClass: "legendary" }),
     // 4-A2: 타입 1위 대비 비율 검증용. 노말 1위 폴리곤Z, 비행 1위 레쿠쟈(전설), 페어리는 님피아뿐
@@ -66,7 +72,7 @@ const dataset = {
   ],
 };
 const mk = (entries) => { const m = new Map(); entries.forEach((id, i) => m.set(id, { rank: i + 1, score: 100 - i, name: id })); return m; };
-const leagueRankings = { fetchedAt: "t", errors: {}, leagues: { great: mk(["azumarill", "cinderace"]), ultra: mk(["charizard", "annihilape"]), master: mk(["mewtwo"]) } };
+const leagueRankings = { fetchedAt: "t", errors: {}, leagues: { great: mk(["azumarill", "cinderace"]), ultra: mk(["charizard", "annihilape", "staraptor"]), master: mk(["mewtwo"]) } };
 const ctx = (over = {}) => ({ dataset, leagueRankings, eventTargets: [], myRows: [], storageMode: "normal", ...over });
 const tagOf = (v, name) => v.tags.find((t) => t.name === name);
 
@@ -88,9 +94,36 @@ test("에이스번에 블라스트번이 없으면 '특수 기술머신 필요' 
   assert.equal(t.metrics.speciesRank, tagOf(computeVerdict({ species_id: 815, ivs: { atk: 15, def: 14, sta: 14 }, level: 40 }, ctx()), TAG.raid("불꽃")).metrics.speciesRank);
 });
 
-test("기술 미입력 → '기술 확인 필요(최적 기술 가정)'", () => {
+test("4-C 추천 기술: 기술 미입력이어도 경고 없이 태그별 추천 기술(종 최적 조합)·특수 기술머신 표기, recommendedMoves, 리그는 PvPoke moveset", () => {
   const v = computeVerdict({ species_id: 815, ivs: { atk: 15, def: 14, sta: 14 }, level: 40 }, ctx());
-  assert.ok(tagOf(v, TAG.raid("불꽃")).metrics.notes.includes("기술 확인 필요(최적 기술 가정)"));
+  const t = tagOf(v, TAG.raid("불꽃"));
+  assert.ok(!t.reason.includes("기술 확인 필요"), t.reason);
+  assert.deepEqual(t.moves, { fast: "Fire Spin", charged: ["Blast Burn"], fastKr: "불꽃회오리", chargedKr: ["블라스트번"], special: true });
+  assert.ok(t.reason.includes("추천 기술: 불꽃회오리/블라스트번 ⚠ 특수 기술머신"), t.reason);
+  assert.deepEqual(v.recommendedMoves[TAG.raid("불꽃")], t.moves);
+  // 리자몽: 블라스트번이 일반 기술 → 특수 기술머신 아님
+  const c = tagOf(computeVerdict({ species_id: 6, ivs: { atk: 15, def: 15, sta: 15 }, level: 40 }, ctx()), TAG.raid("불꽃"));
+  assert.equal(c.moves.special, false); assert.ok(!c.reason.includes("⚠ 특수 기술머신"));
+  // 리그: PvPoke moveset ID → 데이터셋 기술명·한국어명
+  const lr = { ...leagueRankings, leagues: { ...leagueRankings.leagues, great: new Map([["azumarill", { rank: 1, score: 100, moveset: ["BUBBLE", "HYDRO_PUMP"] }]]) } };
+  const a = tagOf(computeVerdict({ species_id: 184, ivs: { atk: 0, def: 15, sta: 15 }, level: 20 }, ctx({ leagueRankings: lr })), TAG.great);
+  assert.deepEqual(a.moves, { fast: "Bubble", charged: ["Hydro Pump"], fastKr: "Bubble", chargedKr: ["Hydro Pump"], special: false });
+  assert.equal(pvpokeMoveToName(dataset, "X_SCISSOR"), "X Scissor", "데이터셋에 없으면 보기 좋게");
+  // 진화 대기: 최종형 추천 기술 + 30일 내 이벤트면 "📅 이벤트 때 진화"
+  const now = Date.now();
+  const targets = extractEventTargets([{ name: "Charmander Community Day", eventType: "community-day", start: new Date(now + 5 * 86400000).toISOString(), end: new Date(now + 5 * 86400000 + 3600000).toISOString(), extraData: { communityday: { spawns: [{ name: "Charmander" }] } } }], now);
+  const ev = computeVerdict({ species_id: 4, ivs: { atk: 15, def: 15, sta: 15 }, level: 20 }, ctx({ eventTargets: targets }));
+  const e = tagOf(ev, TAG.evolve("리자몽"));
+  assert.ok(e, ev.tags.map((x) => x.name).join());
+  assert.equal(e.moves?.fast, "Fire Spin");
+  assert.ok(e.evolveAtEvent?.startsWith("📅 이벤트 때 진화"), e.reason);
+});
+
+test("기술 미입력 → 경고 대신 추천 기술 (4-C 이전 '기술 확인 필요' 문구 폐지)", () => {
+  const v = computeVerdict({ species_id: 815, ivs: { atk: 15, def: 14, sta: 14 }, level: 40 }, ctx());
+  const t = tagOf(v, TAG.raid("불꽃"));
+  assert.equal(t.metrics.notes.length, 0, "경고 없음");
+  assert.ok(t.moves && t.reason.includes("추천 기술:"));
 });
 
 test("내 목록 같은 종 안에서 공격 IV 순위 7위 이상이면 보류", () => {
@@ -116,9 +149,12 @@ test("현재 CP 가 리그 상한 초과면 해당 리그 불가", () => {
   assert.ok(!v.recommendedTags.includes(TAG.great));
 });
 
-test("약한 종 15/15/15 → 박사행 + 💎 수집 추천(100%)", () => {
+test("약한 종 15/15/15 → 💎 수집 추천(100%) (4-C.2: 잉어킹은 진화 후보(→갸라도스) 사탕 400 → 보류, 진화 없는 약한 종은 박사행)", () => {
   const v = computeVerdict({ species_id: 129, ivs: { atk: 15, def: 15, sta: 15 }, level: 10 }, ctx());
-  assert.equal(v.tier, "transfer");
+  assert.equal(v.tier, "hold"); assert.equal(tagOf(v, TAG.evolve("갸라도스"))?.tier, "hold");
+  assert.ok(v.recommendedTags.includes(TAG.collect));
+  const w = computeVerdict({ species_id: 129, ivs: { atk: 15, def: 15, sta: 15 }, level: 10 }, ctx({ dataset: { ...dataset, pokemon: dataset.pokemon.map((p) => (p.id === 129 ? { ...p, evolutions: [] } : p)) } }));
+  assert.equal(w.tier, "transfer");
   assert.ok(v.collect.some((c) => c.reason === "개체값 100%"));
   assert.ok(v.summary.includes("💎"));
 });
@@ -193,6 +229,76 @@ test("4-B6.2 판정 최신화: 저장된 판정의 rulesVersion 이 다르면 �
   assert.equal(items[1].verdict.rulesVersion, RULES_VERSION);
   assert.equal(items[2].verdict.rulesVersion, RULES_VERSION);
   assert.ok(isStaleVerdict(undefined) && isStaleVerdict({ error: true }) && isStaleVerdict({ rulesVersion: "x" }) && !isStaleVerdict({ rulesVersion: RULES_VERSION }));
+});
+
+test("4-C.2 E 진화 후보: 이름 '진화 후보(→X)', 필요 사탕 ≥200(잉어킹 400)이면 등급 상한 보류, 125(파이리)는 주력 유지", () => {
+  assert.equal(TAG.evolve("갸라도스"), "진화 후보(→갸라도스)");
+  const karp = computeVerdict({ species_id: 129, ivs: { atk: 15, def: 12, sta: 11 }, level: 20 }, ctx());
+  const t = tagOf(karp, TAG.evolve("갸라도스"));
+  assert.ok(t, karp.tags.map((x) => x.name).join());
+  assert.equal(t.tier, "hold"); assert.ok(t.reason.includes("사탕 200개 이상 → 보류"), t.reason);
+  assert.equal(karp.tier, "hold", "잉어킹 15/12/11 사탕 400 → 현재 주력이 아니라 보류");
+  assert.equal(tagOf(computeVerdict({ species_id: 4, ivs: { atk: 15, def: 15, sta: 15 }, level: 20 }, ctx()), TAG.evolve("리자몽")).tier, "main");
+  assert.equal(RULES.EVOLVE_CANDY_HOLD, 200);
+});
+
+test("4-C.2 D 리그 후보: 스탯곱 순위 ≤41 이면 PvPoke 200위 밖 종도 보류, 순위 파일에 없는 종·스탯곱 순위 밖 개체는 태그 없음", () => {
+  const p = dataset.pokemon.find((x) => x.id === 700); // 님피아: 슈퍼 300위(200위 밖)로 주입
+  const great = new Map([...leagueRankings.leagues.great, ["sylveon", { rank: 300, score: 60, name: "Sylveon" }]]);
+  const lr = { ...leagueRankings, leagues: { ...leagueRankings.leagues, great } };
+  const table = leagueProductTable(p, 1500, 50);
+  const best = [...table.rank.entries()].find(([, v]) => v.rank === 1)[0].split(",").map(Number);
+  const v = computeVerdict({ species_id: 700, ivs: { atk: best[0], def: best[1], sta: best[2] }, level: 15 }, ctx({ leagueRankings: lr }));
+  const t = tagOf(v, TAG.great);
+  assert.ok(t, v.tags.map((x) => x.name).join()); assert.equal(t.tier, "hold"); assert.equal(t.metrics.candidate, true); assert.ok(t.reason.includes("리그 후보") && t.reason.includes("200위 밖"), t.reason);
+  const worst = [...table.rank.entries()].find(([, v]) => v.rank === 3000)[0].split(",").map(Number);
+  assert.equal(tagOf(computeVerdict({ species_id: 700, ivs: { atk: worst[0], def: worst[1], sta: worst[2] }, level: 15 }, ctx({ leagueRankings: lr })), TAG.great), undefined, "스탯곱 3000위 → 없음");
+  assert.equal(tagOf(computeVerdict({ species_id: 700, ivs: { atk: best[0], def: best[1], sta: best[2] }, level: 15 }, ctx()), TAG.great), undefined, "순위 파일에 없는 종 → 없음");
+  assert.equal(RULES.LEAGUE_CANDIDATE_PRODUCT_RANK, 41);
+});
+
+test("4-C.3 결함 1: 찌르꼬 0/15/14 L2 CP null HP22 → CP 없어도 HP 로 레벨 후보(L40 가정 금지) → 진화 후보(→찌르호크) 하이퍼 주력, 박사행 아님", () => {
+  const base = { atk: 101, def: 58, sta: 120 };
+  const hp = calcHP(base.sta, 14, 2);
+  const v = computeVerdict({ species_id: 396, ivs: { atk: 0, def: 15, sta: 14 }, level: null, cp: null, hp }, ctx());
+  assert.ok(v.levelRange[1] <= 5, `HP ${hp} 로 레벨 후보 ${v.levelRange.join("~")} (L40 가정이면 실패)`);
+  const t = tagOf(v, TAG.evolve("찌르호크"));
+  assert.ok(t, v.tags.map((x) => x.name).join());
+  assert.equal(t.tier, "main"); assert.ok(t.metrics.finalTags.some((x) => x.name === TAG.ultra), JSON.stringify(t.metrics.finalTags));
+  assert.notEqual(v.tier, "transfer");
+  // 스캔 기록 재계산 경로(verdictForItem: level null, ivCandidates 없음)도 동일
+  const s = verdictForItem({ species_id: 396, form: "Normal", atk_iv: 0, def_iv: 15, sta_iv: 14, level: null, cp: null, hp }, ctx());
+  assert.notEqual(s.tier, "transfer"); assert.ok(s.recommendedTags.includes(TAG.evolve("찌르호크")));
+});
+
+test("4-C.4 결함 3: 최종형이 리그 후보(D, 종 PvPoke 200위 밖·스탯곱 ≤41) 보류면 진화 후보(보류)로 이어진다 — 찌르꼬 0/15/14 HP22, 찌르호크 하이퍼 300위 가정", () => {
+  const ultra = new Map([...leagueRankings.leagues.ultra].filter(([k]) => k !== "staraptor").concat([["staraptor", { rank: 300, score: 50, name: "Staraptor" }]]));
+  const lr = { ...leagueRankings, leagues: { ...leagueRankings.leagues, ultra } };
+  const hp = calcHP(120, 14, 2);
+  const v = computeVerdict({ species_id: 396, ivs: { atk: 0, def: 15, sta: 14 }, level: null, cp: null, hp }, ctx({ leagueRankings: lr }));
+  const t = tagOf(v, TAG.evolve("찌르호크"));
+  assert.ok(t, v.tags.map((x) => x.name).join());
+  assert.equal(t.tier, "hold"); assert.ok(t.metrics.finalTags.some((x) => x.name === TAG.ultra && x.tier === "hold"), JSON.stringify(t.metrics.finalTags));
+  assert.equal(v.tier, "hold"); assert.ok(v.recommendedTags.includes(TAG.evolve("찌르호크")));
+  // 찌르호크가 PvPoke 파일에 아예 없으면(D 제외 규칙) 진화 후보 없음 → 박사행 (실DB explain 으로 확인할 지점)
+  const none = { ...leagueRankings, leagues: { ...leagueRankings.leagues, ultra: new Map([...leagueRankings.leagues.ultra].filter(([k]) => k !== "staraptor")) } };
+  assert.equal(computeVerdict({ species_id: 396, ivs: { atk: 0, def: 15, sta: 14 }, level: null, cp: null, hp }, ctx({ leagueRankings: none })).tier, "transfer");
+});
+
+test("4-C.2 C 수집 태그: 100%·0%·반짝반짝·오래 전 포획 → recommendedTags 에 '수집'(등급 무관), 이로치만으로는 아님", () => {
+  assert.ok(computeVerdict({ species_id: 999, ivs: { atk: 15, def: 15, sta: 15 }, level: 20 }, ctx()).recommendedTags.includes(TAG.collect), "100%");
+  assert.ok(computeVerdict({ species_id: 999, ivs: { atk: 0, def: 0, sta: 0 }, level: 20 }, ctx()).recommendedTags.includes(TAG.collect), "0%");
+  assert.ok(computeVerdict({ species_id: 999, ivs: { atk: 5, def: 5, sta: 5 }, level: 20, is_lucky: true }, ctx()).recommendedTags.includes(TAG.collect), "반짝반짝");
+  assert.ok(computeVerdict({ species_id: 999, ivs: { atk: 5, def: 5, sta: 5 }, level: 20, caught_on: "2017-03-01" }, ctx()).recommendedTags.includes(TAG.collect), "오래 전 포획");
+  assert.ok(!computeVerdict({ species_id: 999, ivs: { atk: 5, def: 5, sta: 5 }, level: 20, is_shiny: true }, ctx()).recommendedTags.includes(TAG.collect), "이로치는 게임 검색어(색이 다른)로");
+  assert.ok(!computeVerdict({ species_id: 999, ivs: { atk: 5, def: 5, sta: 5 }, level: 20 }, ctx()).recommendedTags.includes(TAG.collect));
+});
+
+test("4-C.2 G 맥스배틀 종: 판정 대신 '다이맥스' 태그 권장 안내(보류), 목록에 없으면 일반 판정", () => {
+  const v = computeVerdict({ species_id: 815, ivs: { atk: 15, def: 14, sta: 14 }, level: 40 }, ctx({ maxBattleSpecies: new Set([815]) }));
+  assert.equal(v.dynamax, true); assert.equal(v.tier, "hold"); assert.deepEqual(v.recommendedTags, [TAG.dynamax]); assert.ok(v.summary.includes("다이맥스"), v.summary);
+  const v0 = computeVerdict({ species_id: 815, ivs: { atk: 15, def: 14, sta: 14 }, level: 40 }, ctx({ maxBattleSpecies: new Set([1]) }));
+  assert.equal(v0.dynamax, false); assert.equal(v0.tier, "main");
 });
 
 test("마스터리그: 뮤츠 96% → 주력, 93% → 보류", () => {

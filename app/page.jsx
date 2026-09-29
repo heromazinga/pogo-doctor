@@ -1867,6 +1867,14 @@ export default function Home() {
                           <div style={{ marginTop: 4 }}>
                             <div style={{ fontSize: 11, color: TIER_COLORS[v.tier] || "#8899aa", whiteSpace: "pre-wrap" }} title={(v.tags || []).map((t) => `${t.name}: ${t.reason}`).join("\n")}>{v.summary}</div>
                             {v.event && <div style={{ fontSize: 10, color: "#ffd93d" }}>{v.event.note}</div>}
+                            {/* 4-C 추천 기술 (기술은 캡처하지 않음 — 기술머신·이벤트로 바꾼다) */}
+                            {(v.tags || []).filter((t) => (t.tier === "main" || t.tier === "hold") && t.moves).map((t) => (
+                              <div key={"mv" + t.name} style={{ fontSize: 10, color: "#4ecdc4" }}>🎯 {t.name} 추천 기술: {[t.moves.fastKr || t.moves.fast, ...(t.moves.chargedKr?.length ? t.moves.chargedKr : t.moves.charged || [])].filter(Boolean).join("/")}{t.moves.special ? <span style={{ color: "#ffd93d" }}> ⚠ 특수 기술머신</span> : ""}{t.evolveAtEvent ? <span style={{ color: "#ffd93d" }}> · {t.evolveAtEvent}</span> : ""}</div>
+                            ))}
+                            {/* 4-C 게임 태그 vs 판정 불일치: 게임 태그 우선(박사행 제외 유지), 표시만 */}
+                            {(item.raw.game_tags || []).length > 0 && (v.tier === "transfer" || !(item.raw.game_tags || []).some((g) => (v.recommendedTags || []).includes(g))) && (
+                              <div style={{ fontSize: 10, color: "#ffd93d" }}>⚠️ 불일치 — 판정: {TIER_LABEL[v.tier] || v.tier}{(v.recommendedTags || []).length ? `(${v.recommendedTags.join(", ")})` : ""} / 게임 태그: {item.raw.game_tags.join(", ")} (게임 태그 우선, 자동 변경 없음)</div>
+                            )}
                             {!sameTags && <button onClick={() => applyRecommended(item)} style={{ ...s.chip, fontSize: 10, marginTop: 3, padding: "3px 8px" }}>{v.tier === "transfer" ? "박사행으로 표시" : `추천 태그로 저장 (${(v.recommendedTags || []).join(", ") || "태그 없음"})`}</button>}
                           </div>
                         ); })()}
@@ -1943,7 +1951,7 @@ export default function Home() {
             <div style={s.collHeader}>
               <h2 style={{ fontSize: 18, fontWeight: 800, color: "#e0e0e0" }}>🧹 정리 도우미</h2>
               <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
-                <button onClick={loadCleanup} disabled={cleanupBusy} style={{ ...s.chip, fontSize: 10 }}>🔄</button>
+                <button onClick={() => loadCleanup()} disabled={cleanupBusy} style={{ ...s.chip, fontSize: 10 }}>🔄</button>
                 <button style={s.collClose} onClick={() => setShowCleanup(false)}>✕</button>
               </div>
             </div>
@@ -1951,21 +1959,23 @@ export default function Home() {
               판정 결과를 포켓몬GO <b>검색어</b>로 만듭니다. 게임을 대신 조작하지 않습니다 — 검색창에 붙여넣고, <b style={{ color: "#ffd93d" }}>결과 수가 "예상 N마리"와 같을 때만</b> 전체 선택 → 박사에게 보내기/태그. 형식 <code>도감번호,…&hp…,…</code>(한국어판 확인: & 절마다 , 는 OR). 박사행 묶음은 다른 개체가 섞일 수 있으면 쪼개거나 만들지 않고, 태그 묶음은 만들되 "다른 개체 최대 n마리 포함 가능"을 표시합니다. 게임 태그가 이미 달린 개체는 박사행에서 제외합니다. 박사행은 되돌릴 수 없습니다.
             </div>
             <div style={{ ...s.sourceNotice, marginBottom: 10 }}>⚠️ {cleanup?.note || "예상 수는 앱이 아는 개체(스캔 기록 + 내 목록) 기준입니다. 앱이 모르는 같은 종·HP 개체가 게임에 있으면 결과가 더 나옵니다 — 게임 결과 수가 예상과 다르면 보내지 마세요."}</div>
+            {cleanup?.protectNote && <div style={{ ...s.sourceNotice, marginBottom: 10 }}>🛡 {cleanup.protectNote}</div>}
+            {cleanup?.backfill?.ran && <div style={{ fontSize: 10, color: "#4ecdc4", marginBottom: 8 }}>🧹 스캔 기록 정리 1회 실행: 대체된 과거 기록 {cleanup.backfill.superseded}건 · 재스캔 필요 표시 {cleanup.backfill.conflicts ?? 0}건(충돌) + {cleanup.backfill.suspects ?? 0}건(오판독 의심) (규칙 {cleanup.backfill.version})</div>}
             {cleanupError && <div style={s.error}>{cleanupError}</div>}
             {cleanupBusy && !cleanup && <div style={{ fontSize: 12, color: "#8899aa" }}>계산 중…</div>}
             {cleanup && cleanup.categories.length === 0 && <div style={{ fontSize: 12, color: "#576574", padding: "8px 0" }}>정리할 대상이 없습니다 (스캔 기록·내 목록의 판정 기준)</div>}
             {cleanup && cleanup.categories.map((cat) => (
               <div key={cat.category} style={{ marginBottom: 14 }}>
-                <div style={{ fontSize: 13, fontWeight: 700, color: cat.category === "transfer" ? "#ff6b6b" : cat.category === "collect" ? "#a890f0" : "#4ecdc4" }}>{cat.label} — 대상 {cat.count}마리 · 묶음 {cat.groups.length}{cat.skipped.length ? ` · 제외 ${cat.skipped.length}` : ""}</div>
+                <div style={{ fontSize: 13, fontWeight: 700, color: cat.category === "transfer" ? "#ff6b6b" : cat.category === "collect" ? "#a890f0" : "#4ecdc4" }}>{cat.label}{cat.fixed ? " — 이로치·배경·XXL 은 게임 검색어로" : ` — 대상 ${cat.count}마리 · 묶음 ${cat.groups.length}${cat.skipped.length ? ` · 제외 ${cat.skipped.length}` : ""}`}{cat.protect ? " · 🛡 보호 조건 포함" : ""}</div>
                 {cat.groups.map((g, i) => (
                   <div key={g.query} style={{ ...s.collItem, flexDirection: "column", alignItems: "stretch", marginTop: 6, opacity: cleanupDone[g.query] ? 0.5 : 1 }}>
-                    <div style={{ fontSize: 11, color: "#8899aa" }}>묶음 {i + 1}/{cat.groups.length} · <b style={{ color: "#ffd93d" }}>예상 {g.expected}마리</b>{g.withCp ? " · CP 조건 포함" : ""}{g.overlap > 0 ? <span style={{ color: "#ff6b6b" }}> · ⚠️ 다른 개체 최대 {g.overlap}마리 포함 가능</span> : ""} · {g.targetIds.map((id) => cleanup.names[id]).filter(Boolean).slice(0, 8).join(", ")}{g.targetIds.length > 8 ? " …" : ""}</div>
+                    <div style={{ fontSize: 11, color: "#8899aa" }}>{cat.fixed ? <b style={{ color: "#a890f0" }}>{g.label}</b> : <>묶음 {i + 1}/{cat.groups.length} · <b style={{ color: "#ffd93d" }}>{cat.protect ? `게임 결과 ≤ 예상 ${g.expected}마리` : `예상 ${g.expected}마리`}</b></>}{g.withCp ? " · CP 조건 포함" : ""}{g.overlap > 0 ? <span style={{ color: "#ff6b6b" }}> · ⚠️ 다른 개체 최대 {g.overlap}마리 포함 가능</span> : ""}{cat.fixed ? " · 예상 수 없음(앱이 모르는 정보 — 게임 결과를 보고 태그)" : ` · ${g.targetIds.map((id) => cleanup.names[id]).filter(Boolean).slice(0, 8).join(", ")}${g.targetIds.length > 8 ? " …" : ""}`}</div>
                     <code style={{ fontSize: 12, color: "#e0e0e0", wordBreak: "break-all", marginTop: 4, userSelect: "all" }}>{g.query}</code>
                     <div style={{ display: "flex", gap: 6, marginTop: 6 }}>
                       <button onClick={() => copyQuery(g)} style={{ ...s.chip, fontSize: 11, flex: 1 }}>{copied === g.query ? "복사됨 ✓" : "📋 복사"}</button>
-                      {!cleanupDone[g.query] && <button onClick={() => cleanupGroupDone(cat, g)} disabled={cleanupBusy} style={{ ...s.chip, fontSize: 11, color: cat.category === "transfer" ? "#ff6b6b" : "#4ecdc4" }}>{cat.category === "transfer" ? "보냄 처리 완료" : "완료(정리)"}</button>}
+                      {!cleanupDone[g.query] && !cat.fixed && <button onClick={() => cleanupGroupDone(cat, g)} disabled={cleanupBusy} style={{ ...s.chip, fontSize: 11, color: cat.category === "transfer" ? "#ff6b6b" : "#4ecdc4" }}>{cat.category === "transfer" ? "보냄 처리 완료" : "완료(정리)"}</button>}
                     </div>
-                    {copied === g.query && <div style={{ fontSize: 10, color: "#ffd93d", marginTop: 4 }}>⚠️ 게임 검색 결과가 정확히 {g.expected}마리일 때만 전체 선택하세요. 다르면 진행하지 마세요.</div>}
+                    {copied === g.query && !cat.fixed && <div style={{ fontSize: 10, color: "#ffd93d", marginTop: 4 }}>{cat.protect ? `⚠️ 게임 결과 ≤ 예상 ${g.expected}마리. 적으면 보호 대상(태그·이로치·반짝반짝·XXL·배경)이 빠진 것, 많으면 보내지 마세요.` : `⚠️ 게임 검색 결과가 정확히 ${g.expected}마리일 때만 전체 선택하세요. 다르면 진행하지 마세요.`}</div>}
                   </div>
                 ))}
                 {cat.skipped.length > 0 && <div style={{ fontSize: 10, color: "#576574", marginTop: 4 }}>제외: {cat.skipped.map((x) => `${cleanup.names[x.id] || x.id}(${x.reason})`).join(", ")}</div>}
@@ -2016,8 +2026,11 @@ export default function Home() {
                   <img src={`https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/${it.species_id}.png`} alt="" style={{ width: 36, height: 36, imageRendering: "pixelated" }} />
                   <div style={{ flex: 1, minWidth: 0 }}>
                     <div style={{ fontSize: 13, fontWeight: 700, color: "#e0e0e0" }}>{it.is_shadow ? "👤" : ""}{it.name_kr}{it.form && it.form !== "Normal" ? ` (${it.form})` : ""} <span style={{ fontSize: 10, opacity: 0.5 }}>{fmtStamp(it.created_at)} · {it.session_id}</span></div>
-                    <div style={{ fontSize: 11, color: "#8899aa" }}>CP{it.cp || "?"} HP{it.hp || "?"} {Number.isInteger(it.atk_iv) ? `${it.atk_iv}/${it.def_iv}/${it.sta_iv} (${Math.round(((it.atk_iv + it.def_iv + it.sta_iv) / 45) * 100)}%)` : "개체값 미확정"}{it.level ? ` L${it.level}` : ""}{it.stars != null ? ` ★${it.stars}` : ""}{it.cp == null ? " · CP 미확인(레벨 범위)" : ""}{it.recheck ? " · ⚠️ 재확인 필요(CP/HP·막대 불일치)" : ""}{(it.game_tags || []).length ? ` · 🏷 게임 태그 있음(${it.game_tags.join(", ")})` : ""}</div>
+                    <div style={{ fontSize: 11, color: "#8899aa" }}>CP{it.cp || "?"} HP{it.hp || "?"} {Number.isInteger(it.atk_iv) ? `${it.atk_iv}/${it.def_iv}/${it.sta_iv} (${Math.round(((it.atk_iv + it.def_iv + it.sta_iv) / 45) * 100)}%)` : "개체값 미확정"}{it.level ? ` L${it.level}` : ""}{it.stars != null ? ` ★${it.stars}` : ""}{it.cp == null ? " · CP 미확인(레벨 범위)" : ""}{it.recheck ? ` · ⚠️ ${it.recheck_reason || "재확인 필요(CP/HP·막대 불일치)"}` : ""}{(it.game_tags || []).length ? ` · 🏷 게임 태그 있음(${it.game_tags.join(", ")})` : ""}</div>
                     {it.verdict ? <div style={{ fontSize: 11, color: TIER_COLORS[it.verdict.tier] || "#8899aa", marginTop: 2 }}>{it.verdict.summary}{it.verdict.event ? ` · ${it.verdict.event}` : ""}</div> : <div style={{ fontSize: 10, color: "#576574", marginTop: 2 }}>판정 계산 중 — 🔄 로 새로고침</div>}
+                    {(it.verdict?.tags || []).filter((t) => (t.tier === "main" || t.tier === "hold") && t.moves).map((t) => (
+                      <div key={"mv" + t.name} style={{ fontSize: 10, color: "#4ecdc4" }}>🎯 {t.name} 추천 기술: {[t.moves.fastKr || t.moves.fast, ...(t.moves.chargedKr?.length ? t.moves.chargedKr : t.moves.charged || [])].filter(Boolean).join("/")}{t.moves.special ? <span style={{ color: "#ffd93d" }}> ⚠ 특수 기술머신</span> : ""}{t.evolveAtEvent ? <span style={{ color: "#ffd93d" }}> · {t.evolveAtEvent}</span> : ""}</div>
+                    ))}
                   </div>
                 </div>
                 <div style={{ display: "flex", gap: 6, marginTop: 6 }}>
