@@ -180,6 +180,16 @@ class MainActivity : ComponentActivity() {
                         Text("전송 대기열 ${qPending}건 (앱 종료 후에도 보존됨)", fontSize = 11.sp, color = Color(0xFFFFD93D))
                         OutlinedButton(enabled = paired, onClick = { q.onChange = { runOnUiThread { qPending = q.pending } }; q.start(lifecycleScope); status = "대기열 전송 시작" }) { Text("지금 재전송") }
                     }
+                    var rejected by remember { mutableStateOf(q.rejectedCount()) }
+                    var rejectedText by remember { mutableStateOf("") }
+                    if (rejected > 0) {
+                        Text("서버가 거부한 항목(4xx) ${rejected}건 — 재전송하지 않음(최근 50건 보관)", fontSize = 11.sp, color = Color(0xFFFF6B6B))
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            OutlinedButton(onClick = { rejectedText = q.rejectedText() }) { Text("보기") }
+                            OutlinedButton(onClick = { q.clearRejected(); rejected = 0; rejectedText = "" }) { Text("지우기") }
+                        }
+                        if (rejectedText.isNotBlank()) Text(rejectedText, fontSize = 9.sp, color = Color(0xFFC8D6E5))
+                    }
                 }
             }
 
@@ -219,7 +229,7 @@ class MainActivity : ComponentActivity() {
                     }
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         OutlinedTextField(value = stableMs, onValueChange = { stableMs = it.filter { ch -> ch.isDigit() } }, label = { Text("연속 스캔 안정 대기(ms, 200~3000)") }, modifier = Modifier.weight(1f))
-                        OutlinedButton(modifier = Modifier.padding(top = 8.dp), onClick = { prefs.scanStableMs = stableMs.toIntOrNull() ?: 500; stableMs = prefs.scanStableMs.toString(); status = "안정 대기 ${prefs.scanStableMs}ms 저장" }) { Text("저장") }
+                        OutlinedButton(modifier = Modifier.padding(top = 8.dp), onClick = { prefs.scanStableMs = stableMs.toIntOrNull() ?: 400; stableMs = prefs.scanStableMs.toString(); status = "안정 대기 ${prefs.scanStableMs}ms 저장" }) { Text("저장") }
                     }
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         Text("연속 스캔 기록 시 진동", fontSize = 13.sp, modifier = Modifier.padding(top = 12.dp))
