@@ -77,18 +77,19 @@ test("4-C.2 B 박사행 보호 조건: 항상 '&!#&!색이 다른&!반짝반짝&
   const items = [{ id: "a", species_id: 700, hp: 154, verdict: { tier: "transfer", recommendedTags: [] } }, { id: "b", species_id: 381, hp: 118, verdict: { tier: "main", recommendedTags: ["슈퍼리그"] } }];
   const c = buildCleanup(items, items);
   const tr = c.find((x) => x.category === "transfer");
-  assert.equal(PROTECT_SUFFIX, "&!#&!색이 다른&!반짝반짝&!xxl&!배경&!특별"); // 4-D2: 코스튬(!특별) 추가
-  assert.ok(matches("700&hp154" + PROTECT_SUFFIX, { species_id: 700, hp: 154 }), "!특별 은 앱이 모르는 정보 → 잡힌다고 봄");
+  assert.equal(PROTECT_SUFFIX, "&!#&!색이 다른&!반짝반짝&!xxl&!배경&!특별&!다이맥스"); // 4-D2: 코스튬(!특별), 4-D3: 다이맥스
+  assert.ok(matches("700&hp154" + PROTECT_SUFFIX, { species_id: 700, hp: 154 }), "!특별·!다이맥스 는 앱이 모르는 정보 → 잡힌다고 봄");
+  assert.ok(matches("700&hp154&!거다이맥스", { species_id: 700, hp: 154 }), "거다이맥스 절도 인식(추가 예정)");
   assert.equal(tr.groups[0].query, "700&hp154" + PROTECT_SUFFIX); assert.equal(tr.protect, true);
   assert.equal(c.find((x) => x.category === "tag:슈퍼리그").groups[0].query, "381&hp118", "태그 묶음에는 붙이지 않음");
   assert.ok(matches("700&hp154" + PROTECT_SUFFIX, { species_id: 700, hp: 154, game_tags: [] }));
   assert.ok(!matches("700&hp154" + PROTECT_SUFFIX, { species_id: 700, hp: 154, game_tags: ["즐겨찾기"] }));
   assert.ok(!matches("700&hp154" + PROTECT_SUFFIX, { species_id: 700, hp: 154, is_shiny: true }));
   assert.ok(!matches("700&hp154" + PROTECT_SUFFIX, { species_id: 700, hp: 154, is_lucky: true }));
-  // 길이 상한: 보호 조건(40자) 포함해 64자 이내로 쪼개짐
+  // 길이 상한: 보호 조건(46자) 포함해 70자 이내로 쪼개짐
   const many = Array.from({ length: 6 }, (_, i) => t(`m${i}`, 100 + i, 100 + i));
-  const r = buildGroups(many, many, { maxLen: 64, strict: true, suffix: PROTECT_SUFFIX });
-  assert.ok(r.groups.length > 1 && r.groups.every((g) => g.query.length <= 64 && g.query.endsWith(PROTECT_SUFFIX)), r.groups.map((g) => g.query).join(" | "));
+  const r = buildGroups(many, many, { maxLen: 70, strict: true, suffix: PROTECT_SUFFIX });
+  assert.ok(r.groups.length > 1 && r.groups.every((g) => g.query.length <= 70 && g.query.endsWith(PROTECT_SUFFIX)), r.groups.map((g) => g.query).join(" | "));
   assert.equal(r.groups.reduce((s, g) => s + g.expected, 0), 6);
 });
 

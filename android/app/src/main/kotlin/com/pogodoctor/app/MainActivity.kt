@@ -178,7 +178,7 @@ class MainActivity : ComponentActivity() {
                     }
                     // 4-D 스캔 모드: 게임 검색("섀도"/"정화")으로 먼저 거른 뒤 그 모드로 스캔. 섀도 모드는 is_shadow=true 로 기록(섀도 판정). 타일·알림으로 시작해도 이 설정을 쓴다
                     var scanMode by remember { mutableStateOf(prefs.scanMode) }
-                    Text("스캔 모드(시작 전 선택): 게임 검색으로 섀도/정화만 거른 뒤 해당 모드로 스캔하세요. 이로치·배경·XXL 은 박사행 보호 조건이 지키고, 코스튬은 태그로 보호. 한국어판 \"섀도\"·\"정화\" 검색어 동작은 확인 필요", fontSize = 11.sp, color = Color(0xFF8899AA))
+                    Text("스캔 모드(시작 전 선택): 게임 검색으로 섀도/정화만 거른 뒤 해당 모드로 스캔하세요. 이로치·배경·XXL·코스튬·다이맥스는 박사행 보호 조건이 지킵니다.", fontSize = 11.sp, color = Color(0xFF8899AA))
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         for ((k, label) in listOf("normal" to "일반", "shadow" to "섀도", "purified" to "정화")) {
                             if (scanMode == k) Button(onClick = { }) { Text(label) } else OutlinedButton(enabled = !scanning, onClick = { prefs.scanMode = k; scanMode = k; status = "스캔 모드: $label" }) { Text(label) }
@@ -217,8 +217,8 @@ class MainActivity : ComponentActivity() {
                         OutlinedButton(enabled = paired && !busy, onClick = { startActivity(Intent(this@MainActivity, CleanupActivity::class.java)) }) { Text("태그 선택") }
                     }
                     Text("묶음: $cleanupStatus · 자세한 목록·완료 처리는 웹 내 목록 → 🧹 정리 도우미", fontSize = 11.sp, color = Color(0xFF8899AA))
-                    // 4-C.2: 박사행 검색어에는 보호 조건(&!#&!색이 다른&!반짝반짝&!xxl&!배경)이 항상 붙는다(옵션 없음). 코스튬은 검색어가 없어 태그로 보호
-                    Text("🛡 박사행 검색어에는 보호 조건(태그·이로치·반짝반짝·XXL·배경 제외)이 항상 붙습니다 → 게임 결과 ≤ 예상 N마리. 적으면 보호 대상이 빠진 것, 많으면 보내지 마세요. 코스튬은 태그로 보호하세요.", fontSize = 12.sp, color = Color(0xFF8899AA))
+                    // 4-C.2/4-D3: 박사행 검색어에는 보호 조건(&!#&!색이 다른&!반짝반짝&!xxl&!배경&!특별&!다이맥스)이 항상 붙는다(옵션 없음)
+                    Text("🛡 박사행 검색어에는 보호 조건(태그·이로치·반짝반짝·XXL·배경·코스튬·다이맥스 제외)이 항상 붙습니다 → 게임 결과 ≤ 예상 N마리. 적으면 보호 대상이 빠진 것, 많으면 보내지 마세요.", fontSize = 12.sp, color = Color(0xFF8899AA))
                 }
             }
 

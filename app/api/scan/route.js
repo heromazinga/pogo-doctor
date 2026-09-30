@@ -17,6 +17,11 @@ export async function GET(req) {
   if (!sb) return NextResponse.json({ error: "서버 Supabase 미설정" }, { status: 503 });
   const user = await resolveUser(req);
   if (!user) return NextResponse.json({ error: "로그인이 필요합니다" }, { status: 401 });
+  // 4-D3: ?count=1 → 활성 스캔 기록 수만 (내 목록 패널 안내용, 판정 재계산·백필 없음)
+  if (new URL(req.url).searchParams.get("count") === "1") {
+    try { const { items: ids, truncated } = await fetchActiveScanItems(sb, user.userId, { select: "id" }); return NextResponse.json({ count: ids.length, truncated }); }
+    catch (e) { return NextResponse.json({ error: e.message }, { status: 500 }); }
+  }
   // 4-C: 강화·진화로 대체된(superseded) 기록은 제외 (마이그레이션 0008). 4-D: 상한 300 → 페이지네이션으로 활성 전부(≤3000)
   let items, truncated;
   try { ({ items, truncated } = await fetchActiveScanItems(sb, user.userId)); } catch (e) { return NextResponse.json({ error: e.message }, { status: 500 }); }
