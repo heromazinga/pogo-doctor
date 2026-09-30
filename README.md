@@ -223,7 +223,18 @@ Vercel 에서는 환경변수 `POGO_DISABLE_SOURCES` 를 Preview 환경에 잠�
 5. 테스트: 라이츄 3/13/13 슈퍼 예비 보류(391위·CP1480), 1/13/15(450위) 박사행, 빠듯·BEGINNER_RULES=0 은 박사행, 15/15/15(742위) 예비 아님; 가성비 풀에 전설 없음·≤12위 보류·공격 9 제외·섀도 제외; 레이드 예비 상위 6·7번째 제외·레벨 보정·서명 매칭. 기본 테스트 ctx 는 종이 적어 가성비가 항상 ≤12위가 되므로 `BEGINNER_RULES: 0`.
 6. 실DB 전후 분포: 이 환경에서 Supabase 접근 불가 → 배포 후 `GET /api/verdict/stats`(적용 후) 와 `GET /api/verdict/stats?BEGINNER_RULES=0`(적용 전)의 `tiers`·`holdReasons` 비교. 추정: 리그 예비는 종당 최대 2(슈퍼·하이퍼), 레이드 예비는 타입당 최대 6 → 상한 18×6=108 이지만 대부분 기존 주력·보류와 겹쳐 박사행→보류 전환은 그보다 훨씬 적을 것(확인 필요).
 
-새 APK 불필요(서버 판정만). 마이그레이션 없음. `:app`·`:core` 변경 없음(Actions 미실행).
+### 4-F.2 검토 반영 · 수집 관점 · 전체 동기화 (`RULES_VERSION` 2026-09-30.5)
+- **예비 순위 캐시**: `buildVerdictContext` 가 사용자별 `ctx.reserve` 를 60초 메모리 캐시(`scanItems` 를 직접 받은 조회는 항상 새로 계산해 갱신, 데이터셋 generatedAt 이 바뀌면 무효). `dismiss_not_seen` 후 무효화.
+- **레이드 예비 하한**(`RESERVE_RAID_MIN_PCT` 40): 개체 점수가 가성비 풀 그 타입 1위 점수의 40% 미만이면 예비 제외.
+- 섀도·일반 별개 계산 유지.
+- **수집 관점(보관함 "여유"만, `COLLECT_REPRESENTATIVE`)**: 박사행은 "같은 종 중 더 좋은 개체가 이미 있는 중복"으로 좁힌다.
+  1. 종별 대표: 같은 종·폼(섀도·정화·지역 폼 각각 별개)에서 개체값 합 최고 1마리(동률이면 CP 높은 쪽)는 보류 + 태그 "수집(종 대표)"(`TAG.collectRep`).
+  2. 귀한 계열(`RARE_FAMILY_FINAL_CANDY` 100 · `RARE_FAMILY_CANDY` 400): 3단 진화이면서 사탕 100 진화가 있는 계열, 사탕 400 계열은 진화 전 단계도 종 대표 1마리 보장(1 로 이미 보장되며 사유에 "귀한 계열: …" 표기, `rareFamilyNote`).
+  3. 박사행 사유: "같은 종 더 좋은 개체 있음(공/방/HP CP○○○)" — 보관함 여유·보통·빠듯 모두 표시(문구만).
+  4. "보통"·"빠듯"은 현행.
+- **전체 동기화 스캔**(앱 `ScanSession.fullSync`, `ACTION_SCAN_START` + `EXTRA_FULL_SYNC`, 첫 화면·⚡ 메뉴 "🔄 전체 동기화 스캔"): 검색어 없이 보관함 전체를 넘긴 세션이 끝나면 서버 세션 `metrics.fullSync=true`. 웹 📦 보관함이 최근 전체 동기화 세션의 "다시 보이지 않은 이전 기록" 수(`POST /api/scan {action:"not_seen_count"}`)를 보여주고, 확인창 후 숨김(`dismiss_not_seen` → `dismissed_reason 'not_seen'`, `planNotSeen`: 다른 세션·세션 종료 전 활성 기록). "숨김 복구" 가 `before_session`·`not_seen` 모두 복구. 태그 필터 등 부분 스캔(fullSync 없음)에는 적용하지 않는다. 마이그레이션 없음(기존 `dismissed_reason` 컬럼).
+- 테스트: 종 대표 3마리 중 최고만 보류·나머지 사유 표기·섀도/알로라 별개·보통/빠듯/끔 현행, 귀한 계열 표기(잉어킹·파이리·마릴리 없음), 레이드 예비 하한, `planNotSeen`.
+- 새 APK 필요(전체 동기화 버튼·메뉴·세션 플래그).
 
 ## 4-E: 사용 편의 개선 — 내 보관함 통합(웹), 스캔 모드 자동 복귀, 박사행 묶음 목록, 오버레이 메뉴, 첫 화면·설정 정리
 

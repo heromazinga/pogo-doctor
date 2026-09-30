@@ -8,7 +8,7 @@ import { extractEventTargets, matchEvents } from "../app/lib/eventTargets.js";
 import { ivCandidates } from "../app/lib/ivCalc.js";
 import { RULES, RULES_VERSION, TAG, purposesFromTags } from "../app/lib/verdictRules.js";
 import { fillMissingVerdicts, isStaleVerdict, verdictForItem } from "../app/lib/scanVerdict.js";
-import { buildReserveRanks } from "../app/lib/reserveRanks.js";
+import { buildReserveRanks, rareFamilyNote } from "../app/lib/reserveRanks.js";
 import { getRankings as getRankings2, budgetRankOf } from "../app/lib/speciesRankings.js";
 import { calcHP } from "../app/lib/ivCalc.js";
 
@@ -65,6 +65,7 @@ const dataset = {
     sp(25, "Pikachu", "피카츄", ["electric"], 112, 96, 111, ["Thunder Shock"], ["Thunderbolt"]),
     // 4-F 실DB 사례: 라이츄(관동) 3/13/13 CP1480 슈퍼리그 스탯곱 391위(PvPoke 순위 밖)가 박사행 → 리그 예비 보류
     sp(26, "Raichu", "라이츄", ["electric"], 193, 151, 155, ["Thunder Shock"], ["Thunderbolt"]),
+    { ...sp(26, "Raichu", "라이츄(알로라)", ["electric", "psychic"], 201, 154, 155, ["Thunder Shock"], ["Thunderbolt"]), form: "Alola" },
     // 4-F 가성비 풀 검증용 전설 전기(라이츄가 전체 1위 대비 <65% 가 되도록 종족값 과장)
     sp(644, "Zekrom", "제크로무", ["dragon", "electric"], 400, 300, 300, ["Thunder Shock"], ["Thunderbolt"], { pokemonClass: "legendary", shadowEligible: false }),
     sp(150, "Mewtwo", "뮤츠", ["psychic"], 300, 182, 214, ["Confusion"], ["Psystrike"], { pokemonClass: "legendary" }),
@@ -603,4 +604,46 @@ test("4-F ② 레이드 예비: 타입마다 내 보관함 개체 점수 상위 
   const hi = scanRow("h", 26, [12, 5, 5], 40), lo = scanRow("l", 26, [12, 5, 5], 20);
   const r2 = buildReserveRanks(dataset, [], [lo, hi]).raid.electric;
   assert.equal(r2.get("scan:h"), 1); assert.equal(r2.get("scan:l"), 2);
+});
+
+test("4-F.2 종 대표(보관함 여유만): 같은 종 3마리 중 개체값 합 최고만 보류 '수집(종 대표)', 나머지 박사행 사유에 비교 대상, 섀도·지역 폼은 별개 1마리", () => {
+  const a = scanRow("a", 26, [5, 6, 7], 20, { cp: 900 }), b = scanRow("b", 26, [10, 9, 8], 20, { cp: 1200 }), c = scanRow("c", 26, [4, 4, 4], 20, { cp: 800 });
+  const sh = scanRow("s", 26, [3, 3, 3], 20, { is_shadow: true, cp: 700 });
+  const al = { ...scanRow("al", 26, [2, 2, 2], 20, { cp: 650 }), form: "Alola" };
+  // 레이드 예비(공격 10 인 b 가 전기 1위)가 섞이지 않도록 RESERVE_RAID_TOP_N 0 으로 만든 예비 순위로 종 대표만 검증
+  const reserve = buildReserveRanks(dataset, [], [a, b, c, sh, al], { rules: { ...RULES, RESERVE_RAID_TOP_N: 0 } });
+  assert.equal(reserve.rep.get("26:Normal:0:0")?.key, "scan:b");
+  assert.equal(reserve.rep.get("26:Normal:1:0")?.key, "scan:s", "섀도는 별개 대표");
+  assert.equal(reserve.rep.get("26:Alola:0:0")?.key, "scan:al", "지역 폼은 별개 대표");
+  // 가성비·레이드 예비 영향을 끄고(BUDGET 0, RESERVE_RAID_MIN_PCT 100) 종 대표만 검증
+  const relaxed = beginnerCtx({ reserve, storageMode: "relaxed", rulesOverride: { BUDGET_RAID_TOP_RANK: 0 } });
+  const vb = verdictForItem(b, relaxed), va = verdictForItem(a, relaxed), vs = verdictForItem(sh, relaxed), val = verdictForItem(al, relaxed);
+  assert.equal(vb.tier, "hold", vb.summary); assert.ok(vb.recommendedTags.includes(TAG.collectRep), JSON.stringify(vb.recommendedTags)); assert.ok(vb.summary.includes("종 대표"), vb.summary);
+  assert.equal(va.tier, "transfer", va.summary); assert.ok(va.summary.includes("같은 종 더 좋은 개체 있음(10/9/8 CP1200)"), va.summary);
+  assert.equal(verdictForItem(c, relaxed).tier, "transfer");
+  assert.equal(vs.tier, "hold", "섀도 대표"); assert.equal(val.tier, "hold", "알로라 대표");
+  // 보통·빠듯은 현행(대표도 박사행), 문구는 표시
+  const normal = beginnerCtx({ reserve, storageMode: "normal", rulesOverride: { BUDGET_RAID_TOP_RANK: 0 } });
+  assert.equal(verdictForItem(b, normal).tier, "transfer"); assert.ok(!verdictForItem(b, normal).recommendedTags.includes(TAG.collectRep));
+  assert.ok(verdictForItem(a, normal).summary.includes("같은 종 더 좋은 개체 있음"));
+  assert.equal(verdictForItem(b, beginnerCtx({ reserve, storageMode: "tight", rulesOverride: { BUDGET_RAID_TOP_RANK: 0 } })).tier, "transfer");
+  // 끄기
+  assert.equal(verdictForItem(b, beginnerCtx({ reserve, storageMode: "relaxed", rulesOverride: { BUDGET_RAID_TOP_RANK: 0, COLLECT_REPRESENTATIVE: 0 } })).tier, "transfer");
+});
+
+test("4-F.2 귀한 계열 표기: 잉어킹(사탕 400) · 파이리(3단·사탕 100) 는 종 대표 사유에 계열 표기, 마릴리(진화 없음)는 없음", () => {
+  assert.equal(rareFamilyNote(dataset, dataset.pokemon.find((p) => p.id === 129)), "사탕 400 계열");
+  assert.equal(rareFamilyNote(dataset, dataset.pokemon.find((p) => p.id === 4)), "3단 진화·사탕 100 계열");
+  assert.equal(rareFamilyNote(dataset, dataset.pokemon.find((p) => p.id === 184)), null);
+  const m = scanRow("m", 129, [3, 3, 3], 10, { cp: 100 });
+  const v = verdictForItem(m, beginnerCtx({ reserve: buildReserveRanks(dataset, [], [m]), storageMode: "relaxed", rulesOverride: { BUDGET_RAID_TOP_RANK: 0 } }));
+  assert.ok(v.collect.some((c) => c.reason.includes("종 대표") && c.reason.includes("사탕 400 계열")), JSON.stringify(v.collect));
+});
+
+test("4-F.2 레이드 예비 하한: 개체 점수가 가성비 풀 타입 1위의 40% 미만이면 예비 제외 (라이츄 L1 공격 10 → 제외, L20 → 포함)", () => {
+  const lo = scanRow("lo", 26, [10, 5, 5], 1), hi = scanRow("hi", 26, [10, 5, 5], 20);
+  const r = buildReserveRanks(dataset, [], [lo, hi]).raid.electric;
+  assert.equal(r.get("scan:hi"), 1); assert.equal(r.get("scan:lo"), undefined);
+  const r0 = buildReserveRanks(dataset, [], [lo, hi], { rules: { ...RULES, RESERVE_RAID_MIN_PCT: 0 } }).raid.electric;
+  assert.equal(r0.get("scan:lo"), 2, "하한 0 이면 포함");
 });

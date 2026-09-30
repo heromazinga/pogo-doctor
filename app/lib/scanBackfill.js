@@ -172,3 +172,13 @@ export async function backfillSuperseded(sb, userId, items, ctx) {
   console.log(`[backfill] ${userId} superseded ${n}/${plan.length}, conflicts ${c}, suspects ${s} (version ${version}, flag ${saved ? "saved" : "not saved"})`);
   return { ran: true, superseded: n, conflicts: c, suspects: s, version, changed: n > 0 || c > 0 || s > 0, items: remaining };
 }
+
+// 4-F.2 전체 동기화: 검색어 없이 보관함 전체를 넘긴 세션(metrics.fullSync, ended_at 있음)이 끝나면, 그 세션에서 다시 보이지 않은
+//   이전 활성 기록(다른 세션, 세션 종료 전 기록)을 숨김 후보로. 순수 계산 → [id]. (같은 개체가 이번 세션에서 다시 기록되면 그 기록은 남고 옛 기록만 숨는다)
+export const NOT_SEEN_REASON = "not_seen";
+export function planNotSeen(items, session) {
+  if (!session || !session.session_id || !session.ended_at || !session.metrics?.fullSync) return [];
+  const end = new Date(session.ended_at).getTime();
+  if (!Number.isFinite(end)) return [];
+  return items.filter((it) => it.session_id !== session.session_id && !it.dismissed && !it.superseded && new Date(it.created_at).getTime() < end).map((it) => it.id);
+}

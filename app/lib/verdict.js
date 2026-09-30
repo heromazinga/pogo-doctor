@@ -8,7 +8,7 @@ import { cpmForLevel, levels, calcCP, estimateLevel } from "./cpm.js";
 import { findPokemon } from "./pokemonData.js";
 import { RULES, TAG, TIER_LABEL, EVOLVE_PREFIX, purposesFromTags } from "./verdictRules.js";
 import { getRankings, raidRankOf, budgetRankOf, gymRankOf, raidScoreForType, finalForms, familyIds, isLegendaryClass } from "./speciesRankings.js";
-import { reserveRaidRank, reserveLeagueBest } from "./reserveRanks.js";
+import { reserveRaidRank, reserveLeagueBest, reserveRepresentative, rareFamilyNote } from "./reserveRanks.js";
 import { leagueRankOf } from "./pvpokeRankings.js";
 import { ivCandidates, ivPercent, calcHP } from "./ivCalc.js";
 import { matchEvents } from "./eventTargets.js";
@@ -364,15 +364,23 @@ export function computeVerdict(input, ctx) {
   const allSame = evals.every((e) => e.cand.atk === evals[0].cand.atk && e.cand.def === evals[0].cand.def && e.cand.sta === evals[0].cand.sta);
   const collect = collectFor(p, input, allSame ? evals[0].cand : null, !legendaryHold && (tier === "main" || tier === "hold"));
   // 4-C.2 "수집" 태그: 100%·0%·반짝반짝·오래 전 포획(교환 시 반짝반짝). 이로치·배경·XXL 은 게임 검색어로 묶는다(정리 도우미)
-  const collectTag = collect.some((c) => c.collectTag);
   // 4-D3: 고개체(14+/14+/14+·100%)는 종과 무관하게 박사행 → 보류(수집). 실측: 피카츄 15/14/14 가 박사행 묶음에 들어가 수동 해제가 필요했음
   let collectHold = false;
   if (tier === "transfer" && collect.some((c) => c.hold)) { tier = "hold"; collectHold = true; }
-  const summary = buildSummary(tier, tags, collect, event, evals[0].cand, allSame, legendaryHold || collectHold, collectHold);
+  // 4-F.2 수집 관점(보관함 "여유"만): 같은 종·폼(섀도·정화·지역 폼 별개) 중 개체값 합 최고 1마리는 보류 "수집(종 대표)". 박사행은 "같은 종 더 좋은 개체 있음(…)" 으로 비교 대상 표기
+  let repHold = false, repNote = "";
+  const rep = Number(rule(ctx, "COLLECT_REPRESENTATIVE")) !== 0 && Number(rule(ctx, "BEGINNER_RULES")) !== 0 ? reserveRepresentative(ctx.reserve, input, p, allSame ? evals[0].cand : null) : null;
+  if (rep && !rep.other && storageMode === "relaxed") {
+    const rare = rareFamilyNote(dataset, p);
+    collect.push({ reason: `종 대표(내 ${p.nameKr}${shadow ? "(섀도)" : input.is_purified ? "(정화)" : ""} 중 개체값 합 최고${rare ? " · 귀한 계열: " + rare : ""})`, rep: true, hold: true });
+    if (tier === "transfer") { tier = "hold"; repHold = true; }
+  } else if (rep?.other && tier === "transfer") repNote = ` · 같은 종 더 좋은 개체 있음(${rep.ivs.atk}/${rep.ivs.def}/${rep.ivs.sta} CP${rep.cp ?? "?"})`;
+  const collectTag = collect.some((c) => c.collectTag);
+  const summary = buildSummary(tier, tags, collect, event, evals[0].cand, allSame, legendaryHold || collectHold || repHold, collectHold, repHold) + repNote;
   // 4-C.2 맥스배틀 종(공개 데이터로 확인된 목록만): 판정 대신 "다이맥스 태그 권장" 안내
   const dynamax = isMaxBattleSpecies(ctx, p);
   const keptTags = tags.filter((t) => t.tier === "main" || t.tier === "hold").map((t) => t.name);
-  const recommendedTags = dynamax ? [TAG.dynamax] : [...keptTags, ...(collectTag ? [TAG.collect] : [])];
+  const recommendedTags = dynamax ? [TAG.dynamax] : [...keptTags, ...(collectTag ? [TAG.collect] : []), ...(collect.some((c) => c.rep) ? [TAG.collectRep] : [])];
   return {
     tier: dynamax ? "hold" : tier, tags, collect, event, confident, basis: "server", disabled, warnings,
     summary: dynamax ? `🟡 보류: 맥스배틀 종 — "${TAG.dynamax}" 태그 권장(판정 대신 안내)${allSame ? ` [${evals[0].cand.atk}/${evals[0].cand.def}/${evals[0].cand.sta} L${evals[0].cand.level}]` : ""}` : summary,
@@ -431,7 +439,7 @@ export function luckyTradeReason(caughtOn) {
   return null;
 }
 
-function buildSummary(tier, tags, collect, event, cand, allSame, legendaryHold, collectHold = false) {
+function buildSummary(tier, tags, collect, event, cand, allSame, legendaryHold, collectHold = false, repHold = false) {
   const kept = tags.filter((t) => t.tier === tier && (tier === "main" || tier === "hold"));
   let s;
   if (tier === "need_appraisal") s = `${TIER_LABEL.need_appraisal}${tags.length ? ": " + tags.map((t) => t.name).join(", ") : ""}`;
@@ -440,6 +448,7 @@ function buildSummary(tier, tags, collect, event, cand, allSame, legendaryHold, 
   else s = `${TIER_LABEL[tier]}`;
   if (event && tier === "hold" && !kept.length) s = `${TIER_LABEL.hold}: ${event.note}`;
   else if (collectHold && !kept.length) s = `${TIER_LABEL.hold}: 고개체 수집(용도 태그 없음)`;
+  else if (repHold && !kept.length) s = `${TIER_LABEL.hold}: 종 대표 수집(용도 태그 없음)`;
   else if (legendaryHold && !kept.length) s = `${TIER_LABEL.hold}: 전설·환상(용도 태그 없음)`;
   if (collect.length) s += ` → 💎 수집 추천: ${collect.map((c) => c.reason).join(", ")}`;
   if (cand && allSame) s += ` [${cand.atk}/${cand.def}/${cand.sta} L${cand.level}]`;

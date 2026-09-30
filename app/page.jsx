@@ -119,6 +119,7 @@ export default function Home() {
   const [storageSrc, setStorageSrc] = useState("all");
   const [storageForm, setStorageForm] = useState("all");
   const storageAutoOpened = useRef(false);
+  const [syncInfo, setSyncInfo] = useState(null); // 4-F.2 { session_id, count } 전체 동기화 세션 뒤 다시 보이지 않은 기록 수
   // 4-E.2: window.confirm 대체(앱 WebView 는 WebChromeClient 없이는 confirm 이 즉시 false → 버튼 무반응 실측). 브라우저·WebView 동일 동작
   const [confirmBox, setConfirmBox] = useState(null); // { message, resolve }
   const askConfirm = (message) => new Promise((resolve) => setConfirmBox({ message, resolve }));
@@ -285,6 +286,10 @@ export default function Home() {
       const data = await res.json();
       if (!res.ok) { setScanError(data.error || `HTTP ${res.status}`); return; }
       setScans(data.items || []); setScanSessions(data.sessions || []); setScanPending(data.pending || 0); setScanCount(data.activeCount ?? (data.items || []).length);
+      // 4-F.2 최근 전체 동기화 세션(metrics.fullSync, 종료됨)이 있으면 "다시 보이지 않은 기록" 수 조회
+      const sync = (data.sessions || []).find((ss) => ss.metrics?.fullSync && ss.ended_at);
+      if (sync) { try { const r2 = await fetch("/api/scan", { method: "POST", headers: { "Content-Type": "application/json", ...(await authHeader()) }, body: JSON.stringify({ action: "not_seen_count", session_id: sync.session_id }) }); const d2 = await r2.json(); setSyncInfo(r2.ok ? { session_id: sync.session_id, count: d2.count || 0 } : null); } catch { setSyncInfo(null); } }
+      else setSyncInfo(null);
     } catch (e) { setScanError(e.message); } finally { setScanBusy(false); }
   };
   const scanAction = async (action, ids, extra = {}) => {
@@ -300,6 +305,7 @@ export default function Home() {
       }
       if (action === "dismiss_untrusted") setSaveNotice(`구버전 앱 기록 ${data.count ?? 0}건 숨김 (앱 ${data.minTrusted} 미만 또는 버전 없음)`);
       if (action === "restore_dismissed") setSaveNotice(`숨긴 기록 ${data.count ?? 0}건 복구`);
+      if (action === "dismiss_not_seen") setSaveNotice(`전체 동기화: 다시 보이지 않은 기록 ${data.count ?? 0}건 숨김 (📷 스캔 기록(고급) → 숨김 복구 로 되돌릴 수 있음)`);
       await loadScans();
     } catch (e) { setScanError(e.message); } finally { setScanBusy(false); }
   };
@@ -2020,6 +2026,13 @@ export default function Home() {
               {scanError && <div style={s.error}>{scanError}</div>}
               {collError && <div style={s.error}>{collError}</div>}
               {scanPending > 0 && <div style={{ ...s.sourceNotice, marginBottom: 8 }}>⏳ 판정 갱신 중 — {scanPending}건 남음 (한 번에 100건씩, 🔄 로 이어서)</div>}
+              {/* 4-F.2 전체 동기화: 검색어 없이 보관함 전체를 넘긴 세션 뒤, 다시 보이지 않은 이전 기록 숨김(확인창, 복구 가능) */}
+              {syncInfo && syncInfo.count > 0 && (
+                <div style={{ ...s.sourceNotice, marginBottom: 8, display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+                  <span>🔄 전체 동기화 세션 {syncInfo.session_id} 완료 — 이 세션에서 다시 보이지 않은 이전 기록 <b>{syncInfo.count}건</b>(게임에서 이미 정리된 개체로 추정)</span>
+                  <button onClick={async () => { if (await askConfirm(`전체 동기화 세션 ${syncInfo.session_id} 에서 다시 보이지 않은 이전 기록 ${syncInfo.count}건을 숨깁니다(복구 가능). 부분 스캔(태그 검색 등)이었다면 취소하세요. 계속할까요?`)) scanAction("dismiss_not_seen", [], { session_id: syncInfo.session_id }); }} disabled={scanBusy} style={{ ...s.chip, fontSize: 11 }}>숨기기</button>
+                </div>
+              )}
               {saveNotice && <div style={s.collNote}>{saveNotice} <button onClick={() => setSaveNotice(null)} style={{ ...s.chip, fontSize: 10, marginLeft: 8, padding: "2px 6px" }}>닫기</button></div>}
               <input style={{ ...s.input, fontSize: 13, padding: "9px 12px", marginBottom: 8 }} placeholder="🔍 이름 또는 도감번호로 검색" value={storageQ} onChange={(e) => setStorageQ(e.target.value)} />
               <div style={s.collFilterRow}>

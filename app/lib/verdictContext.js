@@ -11,6 +11,10 @@ import { getMaxBattleSpecies } from "./maxBattleSpecies.js";
 import { fetchActiveScanItems } from "./scanQuery.js";
 import { buildReserveRanks } from "./reserveRanks.js";
 
+const RESERVE_CACHE_MS = 60_000;
+const reserveCache = new Map(); // userId → { at, reserve, datasetAt }
+export function invalidateReserveCache(userId) { if (userId) reserveCache.delete(userId); }
+
 export async function resolveUser(req) {
   const auth = req.headers.get("authorization") || "";
   const token = auth.startsWith("Bearer ") ? auth.slice(7).trim() : "";
@@ -41,10 +45,15 @@ export async function buildVerdictContext(req, { storageMode, myRows, scanItems 
   let mode = storageMode && storageMode in RULES.STORAGE_HOLD_LIMIT ? storageMode : null;
   if (mode && user && settings?.storage_mode !== mode) await saveStorageMode(sb, user.userId, mode);
   if (!mode) mode = settings?.storage_mode in RULES.STORAGE_HOLD_LIMIT ? settings.storage_mode : RULES.STORAGE_DEFAULT;
-  let scans = Array.isArray(scanItems) ? scanItems : [];
-  if (!Array.isArray(scanItems) && user && sb) { try { scans = (await fetchActiveScanItems(sb, user.userId)).items; } catch (e) { console.warn(`[verdict] 스캔 기록 조회 실패(예비 순위 생략): ${e.message}`); } }
+  // 4-F.2: 사용자별 예비 순위 60초 메모리 캐시 (scanItems 를 직접 받은 조회는 항상 새로 계산해 캐시 갱신)
   let reserve = null;
-  try { reserve = buildReserveRanks(dataset, rows, scans); } catch (e) { console.warn(`[verdict] 예비 순위 계산 실패: ${e.message}`); }
+  const cached = user ? reserveCache.get(user.userId) : null;
+  if (!Array.isArray(scanItems) && cached && Date.now() - cached.at < RESERVE_CACHE_MS && cached.datasetAt === dataset.generatedAt) reserve = cached.reserve;
+  else {
+    let scans = Array.isArray(scanItems) ? scanItems : [];
+    if (!Array.isArray(scanItems) && user && sb) { try { scans = (await fetchActiveScanItems(sb, user.userId)).items; } catch (e) { console.warn(`[verdict] 스캔 기록 조회 실패(예비 순위 생략): ${e.message}`); } }
+    try { reserve = buildReserveRanks(dataset, rows, scans); if (user) reserveCache.set(user.userId, { at: Date.now(), reserve, datasetAt: dataset.generatedAt }); } catch (e) { console.warn(`[verdict] 예비 순위 계산 실패: ${e.message}`); }
+  }
   return {
     ctx: { dataset, leagueRankings, eventTargets: events.targets || [], myRows: rows, storageMode: mode, now: Date.now(), settings, maxBattleSpecies, reserve },
     user,

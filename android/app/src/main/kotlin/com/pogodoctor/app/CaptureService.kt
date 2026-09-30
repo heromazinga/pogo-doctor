@@ -66,6 +66,7 @@ class CaptureService : Service() {
         const val ACTION_SCAN_START = "com.pogodoctor.app.SCAN_START"     // 4-E 모드를 지정해 연속 스캔 시작 (EXTRA_MODE: normal|shadow|purified)
         const val ACTION_SCAN_STOP = "com.pogodoctor.app.SCAN_STOP"       // 4-E 연속 스캔 중지
         const val EXTRA_MODE = "mode"
+        const val EXTRA_FULL_SYNC = "fullSync"   // 4-F.2 전체 동기화 세션
         fun modeEmoji(m: String?) = when (m) { "shadow" -> "👤"; "purified" -> "✨"; else -> "📷" }
         @Volatile var scanning = false
         @Volatile var scanLine: String = ""
@@ -126,7 +127,7 @@ class CaptureService : Service() {
                 if (projection == null) { toast("캡처 서비스가 실행 중이 아닙니다 — 앱에서 오버레이 시작"); return START_NOT_STICKY }
                 val m = intent?.getStringExtra(EXTRA_MODE)?.takeIf { it in listOf("normal", "shadow", "purified") } ?: "normal"
                 if (scanning) stopScan()
-                prefs.scanMode = m; startScan()
+                prefs.scanMode = m; startScan(fullSync = intent?.getBooleanExtra(EXTRA_FULL_SYNC, false) == true)
                 return START_NOT_STICKY
             }
             ACTION_SCAN_STOP -> { if (scanning) stopScan(); return START_NOT_STICKY }
@@ -197,13 +198,13 @@ class CaptureService : Service() {
     private val queue: ScanQueue by lazy { ScanQueue(this, prefs).also { q -> q.onChange = { handler.post { if (scanning) refreshScanLine() } } } }
     private var scanStartedAt = 0L
     private var hadScanRecords = false   // 4-B5: 스캔 종료 후에도 정리 복사 액션 유지
-    private fun startScan() {
-        val session = ScanSession(mode = prefs.scanMode); session.metrics.batteryStart = batteryPct()   // 4-D 스캔 모드(일반/섀도/정화)는 시작 시점 설정으로 고정
+    private fun startScan(fullSync: Boolean = false) {
+        val session = ScanSession(mode = prefs.scanMode, fullSync = fullSync); session.metrics.batteryStart = batteryPct()   // 4-D 스캔 모드(일반/섀도/정화)는 시작 시점 설정으로 고정
         scan = session; scanning = true; scanStartedAt = System.currentTimeMillis(); gate = ScanGate(prefs.scanStableMs.toLong(), 3, 300)
         hideCard(); hideMenu(); bubble?.text = modeEmoji(session.mode)
         if (prefs.scanStrip) showStrip(session.mode)   // 상단 띠(설정). 4-E: 섀도/정화 모드면 색·글자 크게
         queue.start(scope)
-        refreshScanLine(if (session.mode == "normal") "평가 화면(막대 3개)을 켜고 좌우로 넘기세요" else "${modeEmoji(session.mode)} ${session.modeLabel} 모드 — 게임 검색 \"${session.modeLabel}\" 로 거른 뒤 평가 화면을 넘기세요")
+        refreshScanLine(if (session.fullSync) "🔄 전체 동기화 — 검색어 없이 보관함 전체를 처음부터 끝까지 넘기세요" else if (session.mode == "normal") "평가 화면(막대 3개)을 켜고 좌우로 넘기세요" else "${modeEmoji(session.mode)} ${session.modeLabel} 모드 — 게임 검색 \"${session.modeLabel}\" 로 거른 뒤 평가 화면을 넘기세요")
         DebugLog.add(this, "scan", emptyList(), "연속 스캔 시작 세션 ${session.id} 모드 ${session.mode} 간격 ${prefs.scanIntervalMs}ms 안정 ${prefs.scanStableMs}ms 대기열 ${queue.pending}")
         handler.removeCallbacks(scanTick); handler.post(scanTick)
     }
@@ -223,7 +224,7 @@ class CaptureService : Service() {
         // 4-E: 세션이 끝나면 스캔 모드를 "일반" 으로 되돌린다 (섀도/정화 모드가 다음 세션에 남지 않도록)
         val reverted = session.mode != "normal"; prefs.scanMode = "normal"
         updateNotification("스캔 종료 · 기록 ${session.metrics.recorded}건 · 전송 대기 ${queue.pending}${if (reverted) " · 모드 일반으로 복귀" else ""} — 웹 📦 내 보관함에서 확인, 정리는 ⚡ 메뉴 → 박사행/태그 목록")
-        toast("연속 스캔 종료: 기록 ${session.metrics.recorded}건${if (reverted) " · ${session.modeLabel} 모드 → 일반으로 복귀" else ""}")
+        toast(if (session.fullSync) "전체 동기화 종료: 기록 ${session.metrics.recorded}건 — 웹 📦 내 보관함에서 \"다시 보이지 않은 기록 숨기기\" 를 확인하세요" else "연속 스캔 종료: 기록 ${session.metrics.recorded}건${if (reverted) " · ${session.modeLabel} 모드 → 일반으로 복귀" else ""}")
     }
     private fun refreshScanLine(head: String? = null) {
         val session = scan ?: return
@@ -483,11 +484,12 @@ class CaptureService : Service() {
             col.addView(tv)
         }
         val s = scan
-        if (scanning && s != null) item("■ 연속 스캔 중지 (${s.modeLabel} · 기록 ${s.metrics.recorded})", 0xFFFF6B6B.toInt()) { stopScan() }
+        if (scanning && s != null) item("■ 연속 스캔 중지 (${if (s.fullSync) "전체 동기화" else s.modeLabel} · 기록 ${s.metrics.recorded})", 0xFFFF6B6B.toInt()) { stopScan() }
         else {
             item("📷 연속 스캔 시작 — 일반") { prefs.scanMode = "normal"; startScan() }
             item("👤 섀도 모드로 스캔 (게임 검색 \"섀도\" 후)", 0xFFD0A8FF.toInt()) { prefs.scanMode = "shadow"; startScan() }
             item("✨ 정화 모드로 스캔 (게임 검색 \"정화\" 후)", 0xFF9CD3FF.toInt()) { prefs.scanMode = "purified"; startScan() }
+            item("🔄 전체 동기화 스캔 (검색어 없이 보관함 전체)", 0xFFFFD93D.toInt()) { prefs.scanMode = "normal"; startScan(fullSync = true) }
         }
         item("⚡ 1장 캡처(상세·평가 화면)") { captureAndAnalyze(viaActivity = false) }
         item("❌ 박사행 복사 목록", 0xFFFF6B6B.toInt()) { openCleanup(CleanupActivity.KIND_TRANSFER) }
