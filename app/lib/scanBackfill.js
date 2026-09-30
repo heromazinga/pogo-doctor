@@ -220,3 +220,41 @@ export async function latestFullSyncSession(sb, userId) {
   const { data } = await sb.from("scan_sessions").select("session_id,metrics,ended_at,created_at").eq("user_id", userId).order("created_at", { ascending: false }).limit(20);
   return (data || []).find((s) => s.metrics?.fullSync && s.ended_at) || null;
 }
+
+// 4-F.5 D: 최근 전체 동기화 세션 기준 대체를 매 조회마다 적용(멱등). 반환 { superseded, items(남은 활성), session }
+export async function applySyncSupersede(sb, userId, items) {
+  const session = await latestFullSyncSession(sb, userId);
+  const plan = planSyncSupersede(items, session);
+  let n = 0;
+  for (const p of plan) {
+    const { error } = await sb.from("scan_items").update({ superseded: true, superseded_by: p.superseded_by }).eq("user_id", userId).eq("id", p.id);
+    if (!error) n++; else console.warn(`[sync-supersede] ${p.id}: ${error.message}`);
+  }
+  if (plan.length) console.log(`[sync-supersede] ${userId} session ${session?.session_id} plan ${plan.length} applied ${n}`);
+  const gone = new Set(plan.filter((p) => p).map((p) => p.id));
+  return { superseded: n, planned: plan.length, items: n ? items.filter((it) => !gone.has(it.id)) : items, session };
+}
+// 4-F.5 D 진단: 동기화 세션 이전의 활성 기록마다 왜 대체/숨김 후보가 아닌지 — [{ id, name, ivs, cp, hp, session_id, verdict: "supersede"|"not_seen"|사유 }]
+export function diagnoseSync(items, session) {
+  if (!session) return { error: "전체 동기화 세션 없음(metrics.fullSync·ended_at 필요)", rows: [] };
+  const end = new Date(session.ended_at || "").getTime();
+  const key = (r) => `${r.species_id}|${r.form || "Normal"}|${r.is_shadow ? 1 : 0}|${r.is_purified ? 1 : 0}|${ivKey(r)}`;
+  const fresh = new Map();
+  for (const r of items) if (r.session_id === session.session_id && hasIv(r)) { const k = key(r); if (!fresh.has(k)) fresh.set(k, []); fresh.get(k).push(r); }
+  const rows = [];
+  for (const r of items) {
+    if (r.session_id === session.session_id) continue;
+    let why;
+    if (!hasIv(r)) why = "개체값 없음";
+    else if (!(new Date(r.created_at).getTime() < end)) why = "세션 종료 후 기록";
+    else {
+      const c = fresh.get(key(r)) || [];
+      if (!c.length) why = "not_seen: 새 세션에 같은 종·폼·그림자·정화·개체값 기록 없음";
+      else if (!c.some((o) => (r.cp == null || o.cp == null || o.cp === r.cp))) why = `not_seen: CP 불일치(새 ${c.map((o) => o.cp).join("/")} vs ${r.cp})`;
+      else if (!c.some((o) => (r.cp == null || o.cp == null || o.cp === r.cp) && (r.hp == null || o.hp == null || o.hp === r.hp))) why = `not_seen: HP 불일치(새 ${c.map((o) => o.hp).join("/")} vs ${r.hp})`;
+      else why = "supersede";
+    }
+    rows.push({ id: r.id, name: r.name_kr, ivs: hasIv(r) ? ivKey(r) : null, cp: r.cp, hp: r.hp, session_id: r.session_id, dismissed: r.dismissed, superseded: r.superseded, why });
+  }
+  return { session: { session_id: session.session_id, ended_at: session.ended_at, fullSync: Boolean(session.metrics?.fullSync) }, rows };
+}

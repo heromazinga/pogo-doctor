@@ -76,7 +76,8 @@ class CleanupActivity : Activity() {
         val cats = CleanupCopier.categories()
         if (!ok && cats.isEmpty()) text("정리 묶음을 받지 못했습니다: ${CleanupCopier.lastError ?: "오류"}", 12f, 0xFFFF6B6B.toInt())
         else if (cats.isEmpty()) text("태그를 붙일 대상이 없습니다", 12f, 0xFFC8D6E5.toInt())
-        for (cat in cats) for ((gi, g) in cat.groups.withIndex()) {
+        // 4-F.5: 선택 태그(수집(종 대표))는 뒤로 보내고 "(선택)" 표시 — 서버가 optional 로 표시
+        for (cat in cats.sortedBy { if (it.optional) 1 else 0 }) for ((gi, g) in cat.groups.withIndex()) {
             val head = cat.label + (if (cat.groups.size > 1) " ${gi + 1}/${cat.groups.size}" else "")
             val line = "$head · " + (if (g.expected < 0) "예상 수 없음(게임 검색어)" else "예상 ${g.expected}마리") + (if (g.overlap > 0) " ⚠️ 다른 개체 최대 ${g.overlap}마리 포함 가능" else "")
             root.addView(button(line) { CleanupCopier.copyTag(this, cat, gi); refreshNotif(); finish() })
@@ -102,6 +103,7 @@ class CleanupActivity : Activity() {
                 addView(button("묶음 ${i + 1} · 예상 ${g.expected}마리 · ${st.label}", color) { CleanupCopier.copyTransfer(this@CleanupActivity, i); refreshNotif(); finish() },
                     LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
                 if (st != CleanupCopier.State.DONE) addView(button("보냄", 0xFFFF6B6B.toInt()) { confirmDone(i, g) })
+                if (st != CleanupCopier.State.DONE) addView(button("없음", 0xFF8899AA.toInt()) { confirmNotSeen(i, g) }) // 4-F.5 B 게임 결과 0마리
                 root.addView(this)
             }
             // 4-E.2 포함 포켓몬 보기(펼치기): 보내기 전 남길 개체를 알아보고 태그를 달 수 있게
@@ -116,6 +118,20 @@ class CleanupActivity : Activity() {
         footer()
     }
 
+    private fun confirmNotSeen(i: Int, g: CleanupCopier.Group) {
+        AlertDialog.Builder(this).setTitle("묶음 ${i + 1} 이미 없음")
+            .setMessage("게임 검색 결과가 0마리입니까? 이 묶음 ${g.expected}마리의 스캔 기록을 \"이미 없음\"(복구 가능)으로 숨깁니다.")
+            .setPositiveButton("없음 처리") { _, _ ->
+                Thread {
+                    val err = CleanupCopier.markNotSeen(prefs, g)
+                    runOnUiThread {
+                        Toast.makeText(this, if (err != null) "처리 실패: $err" else "묶음 ${i + 1} 이미 없음 처리", Toast.LENGTH_LONG).show()
+                        refreshNotif(); renderTransfer(true)
+                    }
+                }.start()
+            }
+            .setNegativeButton("취소", null).show()
+    }
     private fun confirmDone(i: Int, g: CleanupCopier.Group) {
         val rows = g.targetIds.count { it.startsWith("row:") }
         AlertDialog.Builder(this).setTitle("묶음 ${i + 1} 보냄 처리")

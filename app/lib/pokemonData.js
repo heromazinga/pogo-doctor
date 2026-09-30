@@ -257,10 +257,12 @@ function parsePvpoke(json) {
     }
   }
 
+  const megaDex = new Set(); // 4-F.5 메가진화가 있는 종(도감번호): PvPoke gamemaster 의 "(Mega…)"/"(Primal…)" 항목
   for (const p of json.pokemon) {
     if (!p?.dex || !p.speciesName) continue;
     // "Raichu (Alolan)", "Rattata (Alolan) (Shadow)", "Charizard (Mega X)"
     const labels = [...p.speciesName.matchAll(/\(([^)]+)\)/g)].map((x) => x[1].trim());
+    if (labels.some((l) => /^(mega|primal)\b/i.test(l))) megaDex.add(p.dex);
     const baseName = p.speciesName.replace(/\s*\([^)]*\)/g, "").trim();
     let form = "Normal";
     if (labels.length) {
@@ -291,6 +293,7 @@ function parsePvpoke(json) {
       shadowEligible: Array.isArray(p.tags) && p.tags.includes("shadoweligible"), // PvPoke gamemaster tags: 그림자 존재 종 (4-A2 그림자 순위 범위)
     });
   }
+  for (const r of records.values()) if (megaDex.has(r.id)) r.hasMega = true; // 4-F.5
   return { records, moveNames, moveKinds, moveStats };
 }
 
@@ -744,6 +747,7 @@ function crossValidate(loaded /* {sourceKey: {meta, parsed}} */) {
       evolutions: recs.find((x) => Array.isArray(x.rec.evolutions) && x.rec.evolutions.length)?.rec.evolutions || [],
       pvpokeId: recs.find((x) => x.rec.pvpokeId)?.rec.pvpokeId || null,
       shadowEligible: recs.some((x) => x.rec.shadowEligible === true),
+      hasMega: recs.some((x) => x.rec.hasMega === true), // 4-F.5 메가진화 가능 종 (PvPoke gamemaster)
     });
   }
   counts.stat = statDisputes;

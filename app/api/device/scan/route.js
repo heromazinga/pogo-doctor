@@ -9,7 +9,7 @@ import { cpConsistentLevel } from "../../../lib/ivCalc";
 import { CONFLICT_REASON } from "../../../lib/scanBackfill";
 import { fetchActiveScanItems } from "../../../lib/scanQuery";
 import { isTrustedVersion } from "../../../lib/appVersion";
-import { buildVerdictContext } from "../../../lib/verdictContext";
+import { buildVerdictContext, invalidateReserveCache } from "../../../lib/verdictContext";
 import { verdictForItem } from "../../../lib/scanVerdict";
 
 export const dynamic = "force-dynamic";
@@ -112,6 +112,13 @@ export async function POST(req) {
     const { data: normals } = await nq;
     if (normals?.length) item._supersedes = [...new Set([...(item._supersedes || []), ...normals.map((x) => x.id)])];
   }
+  // 4-F.5 B①: 보냄/없음 처리로 숨긴 기록과 같은 개체(종·폼·그림자·개체값, CP·HP 같거나 한쪽 없음)가 다시 스캔되면 그 숨김 기록을 새 기록으로 대체 → 새 기록이 활성으로 복구된 셈
+  if (!existing && anyIv) {
+    const { data: hidden } = await sb.from("scan_items").select("id,cp,hp").eq("user_id", auth.userId).eq("dismissed", true).eq("superseded", false)
+      .eq("species_id", item.species_id).eq("form", item.form).eq("is_shadow", item.is_shadow).eq("atk_iv", item.atk_iv).eq("def_iv", item.def_iv).eq("sta_iv", item.sta_iv).limit(20);
+    const hit = (hidden || []).filter((h) => (item.cp == null || h.cp == null || h.cp === item.cp) && (item.hp == null || h.hp == null || h.hp === item.hp)).map((h) => h.id);
+    if (hit.length) item._supersedes = [...new Set([...(item._supersedes || []), ...hit])];
+  }
   const supersedes = item._supersedes || []; delete item._supersedes;
   let data, error;
   if (existing) ({ data, error } = await sb.from("scan_items").update(item).eq("id", existing.id).select("*").single());
@@ -129,6 +136,7 @@ export async function POST(req) {
   after(async () => {
     try {
       const t0 = Date.now();
+      invalidateReserveCache(auth.userId); // 4-F.5 E: 새 기록을 포함한 예비 순위로 계산(캐시 무효). 이후 같은 종 기록이 더 들어오면 웹 조회 시 지문 불일치로 다시 계산
       const { ctx } = await buildVerdictContext(req);
       const v = verdictForItem(data, ctx, ivCandidates);
       await sb.from("scan_items").update({ verdict: v }).eq("id", data.id);

@@ -130,7 +130,40 @@ export function buildReserveRanks(dataset, rows = [], scans = [], { rules = RULE
     const { pick, basis } = pickRepresentative(cands, usage, rules, maxLeagueLevel);
     rep.set(sk, { key: pick.key, sig: pick.sig, ivs: pick.ivs, cp: pick.cp, ivSum: pick.ivSum, basis, tie: cands.filter((c) => c.ivSum >= pick.ivSum - (rules.REP_TIE_MARGIN ?? 0)).length > 1 });
   }
-  return { raid, league, rep, size: entries.length };
+  // 4-F.5 B② 메가 진화용: 메가진화 가능 종(dataset.hasMega)의 일반(그림자 아님) 개체 중 레이드 기준(공격 → 합 → CP) 1마리
+  const mega = new Map();
+  for (const e of entries) {
+    if (!e.p.hasMega || e.shadow) continue;
+    const sk = `${e.p.id}:${e.p.form}`;
+    const cur = mega.get(sk);
+    const better = !cur || e.ivs.atk > cur.ivs.atk || (e.ivs.atk === cur.ivs.atk && (e.ivs.atk + e.ivs.def + e.ivs.sta > cur.ivSum || (e.ivs.atk + e.ivs.def + e.ivs.sta === cur.ivSum && (e.cp || 0) > (cur.cp || 0))));
+    if (better) mega.set(sk, { key: e.key, sig: e.sig, ivs: e.ivs, cp: e.cp, ivSum: e.ivs.atk + e.ivs.def + e.ivs.sta });
+  }
+  // 4-F.5 E 예비 순위 지문: 종별(대표·리그 목록·메가) + 전체 레이드 상위 목록. 저장된 판정의 지문과 다르면 다시 계산(삽입 시 캐시/부분 보관함으로 계산된 판정이 남지 않도록)
+  const speciesFp = new Map();
+  const speciesKeys = new Set([...rep.keys(), ...mega.keys(), ...Object.values(league).flatMap((m) => [...m.keys()])]);
+  for (const sk of speciesKeys) {
+    const parts = [rep.get(sk)?.key || "", mega.get(sk.split(":").slice(0, 2).join(":"))?.key || ""];
+    for (const lg of ["great", "ultra"]) parts.push((league[lg].get(sk.split(":").slice(0, 3).join(":")) || []).map((b) => b.key).join(","));
+    speciesFp.set(sk, hashStr(parts.join("|")));
+  }
+  const raidFp = hashStr(TYPES.map((t) => [...(raid[t]?.keys() || [])].filter((k) => k.startsWith("scan:") || k.startsWith("row:")).join(",")).join("|"));
+  return { raid, league, rep, mega, fp: { species: speciesFp, raid: raidFp }, size: entries.length };
+}
+export function hashStr(s) { let h = 5381; for (let i = 0; i < s.length; i++) h = ((h * 33) ^ s.charCodeAt(i)) >>> 0; return h.toString(36); }
+// 판정 입력에 대한 현재 지문 "종지문|레이드지문(공격 IV ≥ 하한일 때만)". reserve 없으면 null
+export function reserveFingerprint(reserve, p, input, cand, rules = RULES) {
+  if (!reserve?.fp) return null;
+  const sk = speciesKeyOf(p, Boolean(input.is_shadow), Boolean(input.is_purified));
+  const s = reserve.fp.species.get(sk) || reserve.fp.species.get(`${p.id}:${p.form}:${input.is_shadow ? 1 : 0}`) || "-";
+  const r = cand && cand.atk >= rules.RAID_MIN_ATK_IV ? reserve.fp.raid : "-";
+  return `${s}|${r}`;
+}
+export function reserveMega(reserve, input, p, cand) {
+  const m = reserve?.mega; if (!m || input.is_shadow) return null;
+  const b = m.get(`${p.id}:${p.form}`); if (!b) return null;
+  const sig = cand ? sigOf(p.id, p.form, false, cand, cand.level) : null;
+  return keysOf(input).includes(b.key) || (sig && b.sig === sig) ? b : { ...b, other: true };
 }
 
 const keysOf = (input) => [input.reserveKey, input.id != null ? `scan:${input.id}` : null, input.id != null ? `row:${input.id}` : null].filter(Boolean);

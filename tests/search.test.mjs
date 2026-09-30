@@ -1,7 +1,7 @@
 // 4-B5 정리 도우미 검색어 생성: CNF 형식, 교차곱 충돌 시 분할, 예상 수, 제외 규칙
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { buildGroups, buildQuery, matches, classify, buildCleanup, PROTECT_SUFFIX } from "../app/lib/searchBuilder.js";
+import { buildGroups, buildQuery, matches, classify, buildCleanup, PROTECT_SUFFIX, protectSuffix, userTagsOf, APP_TAGS } from "../app/lib/searchBuilder.js";
 
 const t = (id, species_id, hp, cp = null, extra = {}) => ({ id, species_id, hp, cp, cpVerified: cp != null, is_shadow: false, form: "Normal", ...extra });
 
@@ -77,14 +77,15 @@ test("4-C.2 B 박사행 보호 조건: 항상 '&!#&!색이 다른&!반짝반짝&
   const items = [{ id: "a", species_id: 700, hp: 154, verdict: { tier: "transfer", recommendedTags: [] } }, { id: "b", species_id: 381, hp: 118, verdict: { tier: "main", recommendedTags: ["슈퍼리그"] } }];
   const c = buildCleanup(items, items);
   const tr = c.find((x) => x.category === "transfer");
-  assert.equal(PROTECT_SUFFIX, "&!#&!색이 다른&!반짝반짝&!xxl&!xxs&!배경&!특별&!다이맥스"); // 4-D2: 코스튬(!특별), 4-D3: xxs·다이맥스
-  assert.equal(PROTECT_SUFFIX.length, 40, "글자 수(한글 1자 = 1)");
+  assert.equal(PROTECT_SUFFIX, "&!색이 다른&!반짝반짝&!xxl&!xxs&!배경&!특별&!다이맥스"); // 4-D2: 코스튬(!특별), 4-D3: xxs·다이맥스, 4-F.5: "!#" 폐지(사용자 고유 태그마다 !#태그명)
+  assert.equal(PROTECT_SUFFIX.length, 37, "글자 수(한글 1자 = 1)");
   assert.ok(matches("700&hp154" + PROTECT_SUFFIX, { species_id: 700, hp: 154 }), "!특별·!다이맥스 는 앱이 모르는 정보 → 잡힌다고 봄");
   assert.ok(matches("700&hp154&!거다이맥스", { species_id: 700, hp: 154 }), "거다이맥스 절도 인식(추가 예정)");
   assert.equal(tr.groups[0].query, "700&hp154" + PROTECT_SUFFIX); assert.equal(tr.protect, true);
   assert.equal(c.find((x) => x.category === "tag:슈퍼리그").groups[0].query, "381&hp118", "태그 묶음에는 붙이지 않음");
   assert.ok(matches("700&hp154" + PROTECT_SUFFIX, { species_id: 700, hp: 154, game_tags: [] }));
-  assert.ok(!matches("700&hp154" + PROTECT_SUFFIX, { species_id: 700, hp: 154, game_tags: ["즐겨찾기"] }));
+  assert.ok(matches("700&hp154" + PROTECT_SUFFIX, { species_id: 700, hp: 154, game_tags: ["즐겨찾기"] }), "4-F.5: 기본 절엔 태그 절 없음");
+  assert.ok(!matches("700&hp154" + protectSuffix(["즐겨찾기"]), { species_id: 700, hp: 154, game_tags: ["즐겨찾기"] }), "!#즐겨찾기 는 그 태그 개체를 잡지 않음");
   assert.ok(!matches("700&hp154" + PROTECT_SUFFIX, { species_id: 700, hp: 154, is_shiny: true }));
   assert.ok(!matches("700&hp154" + PROTECT_SUFFIX, { species_id: 700, hp: 154, is_lucky: true }));
   // 길이 상한: 보호 조건(40자) 포함해 70자 이내로 쪼개짐
@@ -123,7 +124,36 @@ test("4-C.3 재확인(recheck) 기록은 박사행·태그·수집 묶음 모두
   assert.deepEqual(c.transfer, []); assert.deepEqual(c.tags.get("슈퍼리그").map((x) => x.id), ["3"]); assert.deepEqual(c.collect, []);
 });
 
-test("4-B6 게임 태그가 있는 개체는 박사행 대상 제외", () => {
-  const c = classify([{ id: "1", species_id: 1, hp: 10, verdict: { tier: "transfer" }, game_tags: ["슈퍼리그"] }, { id: "2", species_id: 1, hp: 11, verdict: { tier: "transfer" }, game_tags: [] }]);
-  assert.deepEqual(c.transfer.map((x) => x.id), ["2"]);
+test("4-B6→4-F.5 게임 태그: 사용자 고유 태그(앱 관리 밖)가 있는 개체만 박사행 제외, 앱 관리 태그(수집·진화 후보·슈퍼리그·○○ 레이드)는 포함", () => {
+  const c = classify([
+    { id: "1", species_id: 1, hp: 10, verdict: { tier: "transfer" }, game_tags: ["슈퍼리그"] },
+    { id: "2", species_id: 1, hp: 11, verdict: { tier: "transfer" }, game_tags: [] },
+    { id: "3", species_id: 1, hp: 12, verdict: { tier: "transfer" }, game_tags: ["다이맥스"] },
+    { id: "4", species_id: 1, hp: 13, verdict: { tier: "transfer" }, game_tags: ["수집", "즐겨찾기"] },
+    { id: "5", species_id: 1, hp: 14, verdict: { tier: "transfer" }, game_tags: ["진화 후보", "불꽃 레이드", "수집(종 대표)"] },
+  ]);
+  assert.deepEqual(c.transfer.map((x) => x.id), ["1", "2", "5"]);
+  assert.ok(APP_TAGS.has("수집") && APP_TAGS.has("진화 후보") && !APP_TAGS.has("다이맥스"));
+});
+
+test("4-F.5 A 박사행 검색어: 관측된 사용자 고유 태그마다 &!#태그명, 앱 관리 태그 개체는 묶음 포함, 사용자 태그 개체는 잡히지 않음", () => {
+  const items = [
+    { id: "a", species_id: 25, hp: 50, verdict: { tier: "transfer" }, game_tags: ["수집"] },
+    { id: "b", species_id: 25, hp: 50, verdict: { tier: "transfer" }, game_tags: ["다이맥스"] },
+    { id: "c", species_id: 25, hp: 51, verdict: { tier: "hold", recommendedTags: [] }, game_tags: ["즐겨찾기"] },
+  ];
+  assert.deepEqual(userTagsOf(items), ["다이맥스", "즐겨찾기"]);
+  const c = buildCleanup(items, items);
+  const tr = c.find((x) => x.category === "transfer");
+  assert.deepEqual(tr.userTags, ["다이맥스", "즐겨찾기"]);
+  assert.deepEqual(tr.groups.map((g) => g.targetIds), [["a"]], "앱 태그(수집) 개체 a 포함, 사용자 태그(다이맥스) 개체 b 제외");
+  assert.equal(tr.groups[0].query, "25&hp50&!#다이맥스&!#즐겨찾기" + PROTECT_SUFFIX);
+  assert.ok(matches(tr.groups[0].query, items[0]) && !matches(tr.groups[0].query, items[1]) && !matches(tr.groups[0].query, items[2]));
+  assert.equal(buildCleanup([items[0]], [items[0]]).find((x) => x.category === "transfer").groups[0].query, "25&hp50" + PROTECT_SUFFIX, "사용자 태그 없으면 태그 절 없음");
+});
+
+test("4-F.5 '수집(종 대표)' 태그 묶음은 선택(optional)으로 뒤에", () => {
+  const items = [{ id: "a", species_id: 25, hp: 50, verdict: { tier: "hold", recommendedTags: ["수집(종 대표)"] } }, { id: "b", species_id: 26, hp: 60, verdict: { tier: "hold", recommendedTags: ["전기 레이드"] } }];
+  const c = buildCleanup(items, items).filter((x) => x.category.startsWith("tag:"));
+  assert.deepEqual(c.map((x) => [x.category, Boolean(x.optional)]), [["tag:전기 레이드", false], ["tag:수집(종 대표)", true]]);
 });

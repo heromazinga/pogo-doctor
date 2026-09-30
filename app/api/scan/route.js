@@ -3,7 +3,7 @@ import { getServiceClient } from "../../lib/supabaseServer";
 import { rateLimit, clientIp } from "../../lib/deviceAuth";
 import { resolveUser, buildVerdictContext } from "../../lib/verdictContext";
 import { fillMissingVerdicts, isStaleVerdict } from "../../lib/scanVerdict";
-import { backfillSuperseded, planNotSeen, planSyncSupersede, NOT_SEEN_REASON } from "../../lib/scanBackfill";
+import { backfillSuperseded, planNotSeen, planSyncSupersede, applySyncSupersede, NOT_SEEN_REASON } from "../../lib/scanBackfill";
 import { invalidateReserveCache } from "../../lib/verdictContext";
 import { fetchActiveScanItems } from "../../lib/scanQuery";
 import { isTrustedVersion, MIN_TRUSTED_APP_VERSION } from "../../lib/appVersion";
@@ -22,16 +22,18 @@ export async function GET(req) {
   let items, truncated;
   try { ({ items, truncated } = await fetchActiveScanItems(sb, user.userId)); } catch (e) { return NextResponse.json({ error: e.message }, { status: 500 }); }
   // 4-B2: 앱 기록 시점에 판정이 아직 없는 항목(after() 미완료·실패)은 여기서 한 번의 컨텍스트로 계산해 저장
-  let filled = 0, pending = 0, backfill = null;
+  let filled = 0, pending = 0, backfill = null, syncSuperseded = 0;
   // 4-B6.2: 규칙 버전이 다른(낡은) 판정도 다시 계산 (isStaleVerdict). 4-C.2: 그때 superseded 백필도 1회(버전 플래그). 4-D2: 청크(100건·15s)만 처리, 나머지는 pending
   try {
     const { ctx } = await buildVerdictContext(req, { myRows: undefined, scanItems: items }); // 4-F: 예비 순위는 이 조회의 활성 기록으로
     try { backfill = await backfillSuperseded(sb, user.userId, items, ctx); if (backfill.changed) items = backfill.items; } catch (e) { console.warn(`[scan] 백필 실패: ${e.message}`); }
-    if (items.some((it) => isStaleVerdict(it.verdict))) ({ filled, pending } = await fillMissingVerdicts(sb, items, ctx));
+    // 4-F.5 D: 최근 전체 동기화 세션과 일치하는 이전 기록은 매 조회마다 대체(멱등, 백필 1회에 의존하지 않음)
+    try { const r = await applySyncSupersede(sb, user.userId, items); if (r.superseded) { items = r.items; syncSuperseded = r.superseded; } } catch (e) { console.warn(`[scan] 동기화 대체 실패: ${e.message}`); }
+    if (items.some((it) => isStaleVerdict(it.verdict, it, ctx))) ({ filled, pending } = await fillMissingVerdicts(sb, items, ctx));
   } catch (e) { console.warn(`[scan] 판정 보충 실패: ${e.message}`); }
   const { data: sessions } = await sb.from("scan_sessions").select("session_id,metrics,started_at,ended_at,created_at").eq("user_id", user.userId).order("created_at", { ascending: false }).limit(20);
   // 4-D3: activeCount = 활성 스캔 기록 수(백필 후) — 내 목록 패널 안내용(별도 호출 없음)
-  return NextResponse.json({ items, truncated, activeCount: items.length, sessions: sessions || [], filled, pending, backfill: backfill ? { ran: backfill.ran, superseded: backfill.superseded, conflicts: backfill.conflicts, suspects: backfill.suspects, version: backfill.version } : null });
+  return NextResponse.json({ items, truncated, activeCount: items.length, sessions: sessions || [], filled, pending, syncSuperseded, backfill: backfill ? { ran: backfill.ran, superseded: backfill.superseded, conflicts: backfill.conflicts, suspects: backfill.suspects, version: backfill.version } : null });
 }
 
 export async function POST(req) {

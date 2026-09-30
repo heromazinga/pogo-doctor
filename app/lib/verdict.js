@@ -8,7 +8,7 @@ import { cpmForLevel, levels, calcCP, estimateLevel } from "./cpm.js";
 import { findPokemon } from "./pokemonData.js";
 import { RULES, TAG, TIER_LABEL, EVOLVE_PREFIX, purposesFromTags } from "./verdictRules.js";
 import { getRankings, raidRankOf, budgetRankOf, gymRankOf, raidScoreForType, finalForms, familyIds, isLegendaryClass } from "./speciesRankings.js";
-import { reserveRaidRank, reserveLeagueBest, reserveRepresentative, rareFamilyNote } from "./reserveRanks.js";
+import { reserveRaidRank, reserveLeagueBest, reserveRepresentative, rareFamilyNote, reserveMega, reserveFingerprint } from "./reserveRanks.js";
 import { leagueRankOf } from "./pvpokeRankings.js";
 import { ivCandidates, ivPercent, calcHP } from "./ivCalc.js";
 import { matchEvents } from "./eventTargets.js";
@@ -139,9 +139,11 @@ function evaluateCandidate(p, cand, input, ctx, rankings, { forEvolve = false } 
     //   보관함 밖 개체(웹 분석 입력 등, reserveKey 없음)는 순위를 알 수 없어 현행 유지
     const rr = forEvolve ? null : reserveRaidRank(ctx.reserve, t, input, p, cand);
     if (tier === "main" && ctx.reserve && input.reserveKey) {
-      if (rr == null || rr > rule(ctx, "RESERVE_RAID_TOP_N")) { tier = "hold"; notes.push(rr == null ? `내 보관함 ${kr} 상위 ${rule(ctx, "RESERVE_RAID_TOP_N")} 밖 → 보류` : `내 보관함 ${kr} ${rr}위 → 보류`); }
+      if (rr == null || rr > rule(ctx, "RESERVE_RAID_TOP_N")) { tier = "hold"; notes.push(`상위종 · 내 보관함 ${kr} 타입 ${rule(ctx, "RESERVE_RAID_TOP_N") + 1}위 이하`); }
       else notes.push(`내 보관함 ${kr} ${rr}위`);
     }
+    // 4-F.5 C: 최적 기술이 특수 기술머신(레거시·전용기)을 필요로 하는데 현재 기술을 모르면(스캔 기록은 기술을 읽지 않음) 주력 → 보류 (번치코 12/2/9 불꽃 6위 사례)
+    if (tier === "main" && sp.usesSpecial && !hasMoves && !forEvolve) { tier = "hold"; notes.push("특수 기술 보유 여부 확인 필요"); }
     let myScore = null;
     if (hasMoves && !forEvolve) {
       const mine = raidScoreForType(p, t, moveStats, { shadow, fastOnly: input.fast_move ? [input.fast_move] : null, chargedOnly: input.charged_moves?.length ? input.charged_moves : null });
@@ -160,6 +162,12 @@ function evaluateCandidate(p, cand, input, ctx, rankings, { forEvolve = false } 
     const moves = recommendedMoves(ctx.dataset, p, sp.fast, sp.charged);
     const reason = `${kr} ${sp.rank}위(1위 대비 ${sp.pct}%)${shadow ? "(그림자)" : ""}·공격 ${cand.atk}, 내 ${p.nameKr} 중 ${indiv}위 · ${moveLine(moves)}${notes.length ? " · " + notes.join(", ") : ""}`;
     tags.push({ name: TAG.raid(kr), tier, reason, moves, metrics: { type: t, speciesRank: sp.rank, speciesPct: sp.pct, top, indivRank: indiv, atkIv: cand.atk, level: cand.level, speciesScore: sp.score, myScore, bestMoves: [sp.fast, sp.charged], usesSpecial: sp.usesSpecial, notes } });
+  }
+
+  // 4-F.5 B② 메가 진화용: 메가진화 가능 종은 레이드 기준(공격 우선) 1마리를 보류해 사용자가 묶음에서 수동으로 뺄 일이 없게 (독침붕 770 12/12/15 사례). 그림자는 제외(메가진화 불가 가정 — 확인 필요)
+  if (!forEvolve && p.hasMega) {
+    const mg = reserveMega(ctx.reserve, input, p, cand);
+    if (mg && !mg.other) tags.push({ name: TAG.mega, tier: "hold", reason: `메가진화 가능 종 — 내 ${p.nameKr} 중 레이드 기준(공격 ${cand.atk}) 1마리 보류`, metrics: { mega: true, atkIv: cand.atk } });
   }
 
   // 2) 체육관 방어

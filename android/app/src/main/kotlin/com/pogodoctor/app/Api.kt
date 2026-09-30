@@ -93,6 +93,13 @@ class Api(private val prefs: Prefs) {
     }
 
     // 4-E 박사행 묶음 보냄 처리 (웹 🧹 패널의 "보냄 처리 완료" 와 같은 API): 스캔 기록 dismissed + 내 목록 행 삭제
+    // 4-F.5 B 게임 결과 0마리 → "이미 없음"(not_seen, 복구 가능)
+    fun cleanupNotSeen(targetIds: List<String>): JSONObject {
+        val token = prefs.deviceToken ?: throw ApiException(401, "기기 연결 필요")
+        val body = JSONObject().put("action", "not_seen").put("targetIds", org.json.JSONArray(targetIds))
+        try { return request("POST", "/api/cleanup", body, token, timeoutMs = 20000) }
+        catch (e: ApiException) { if (e.status == 401) prefs.deviceToken = null; throw e }
+    }
     fun cleanupDone(targetIds: List<String>, deleteRows: Boolean): JSONObject {
         val token = prefs.deviceToken ?: throw ApiException(401, "기기 연결 필요")
         val body = JSONObject().put("action", "done").put("targetIds", org.json.JSONArray(targetIds)).put("deleteRows", deleteRows)

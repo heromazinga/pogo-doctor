@@ -10,6 +10,8 @@ object GameTags {
     // 4-B6.2 사용자의 기존 게임 태그 이름(실DB 검증에서 확인). 앱 설정에서 편집 가능(Prefs.gameTagNames), 기본값 = 이 목록
     val USER_DEFAULT: List<String> = listOf("즐겨찾기", "슈퍼리그", "하이퍼리그", "레이드1군", "레이드2군", "다이맥스", "체육관")
     val KNOWN: Set<String> = RECOMMENDED + USER_DEFAULT
+    // 4-F.5 앱이 관리하는 태그(웹 searchBuilder.js APP_TAGS 와 동일): 박사행 보호 절에서 제외하지 않는다. "다이맥스" 는 사용자 고유 태그로 본다
+    val APP_MANAGED: Set<String> = (TYPES_KR.map { "$it 레이드" } + listOf("체육관 방어", "슈퍼리그", "하이퍼리그", "마스터리그", "수집", "수집(종 대표)", "진화 후보", "교환용", "메가 진화용")).toSet()
     // 칩 띠(720×1600 비율, 미검증): 이름 줄 아래 ~ 기술 줄 위. 실측 디버그 캡처로 확인 후 픽셀 판독을 붙인다
     const val CHIP_Y0 = 0.49; const val CHIP_Y1 = 0.56
 

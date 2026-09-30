@@ -82,10 +82,16 @@ class Phase4b6Test {
 
     // 4-C.2: 박사행 보호 조건 절은 태그·이로치·반짝반짝 개체를 잡지 않는다 (웹 searchBuilder.js 와 동일). 길이 상한에 포함
     @Test fun protect_suffix_excludes_tagged_shiny_lucky_and_counts_toward_maxlen() {
+        // 4-F.5: "!#" 폐지 → 사용자 고유 태그마다 "!#태그명"(앱 관리 태그는 제외하지 않음)
         val q = SearchBuilder.withProtect("700&hp154")
-        assertEquals("700&hp154&!#&!색이 다른&!반짝반짝&!xxl&!xxs&!배경&!특별&!다이맥스", q)
+        assertEquals("700&hp154&!색이 다른&!반짝반짝&!xxl&!xxs&!배경&!특별&!다이맥스", q)
         assertTrue(SearchBuilder.matches(q, SearchBuilder.Item("a", 700, 154, null, false)))
-        assertTrue(!SearchBuilder.matches(q, SearchBuilder.Item("b", 700, 154, null, false, gameTags = listOf("즐겨찾기"))))
+        assertTrue(SearchBuilder.matches(q, SearchBuilder.Item("b", 700, 154, null, false, gameTags = listOf("즐겨찾기"))))
+        val qu = SearchBuilder.withProtect("700&hp154", listOf("다이맥스", "즐겨찾기"))
+        assertEquals("700&hp154&!#다이맥스&!#즐겨찾기&!색이 다른&!반짝반짝&!xxl&!xxs&!배경&!특별&!다이맥스", qu)
+        assertTrue(!SearchBuilder.matches(qu, SearchBuilder.Item("b", 700, 154, null, false, gameTags = listOf("즐겨찾기"))))
+        assertTrue(SearchBuilder.matches(qu, SearchBuilder.Item("b2", 700, 154, null, false, gameTags = listOf("수집"))))
+        assertEquals(listOf("다이맥스", "즐겨찾기"), SearchBuilder.userTagsOf(listOf(SearchBuilder.Item("x", 1, 1, null, false, gameTags = listOf("즐겨찾기", "수집", "진화 후보")), SearchBuilder.Item("y", 1, 1, null, false, gameTags = listOf("다이맥스")))))
         assertTrue(!SearchBuilder.matches(q, SearchBuilder.Item("c", 700, 154, null, false, isShiny = true)))
         assertTrue(!SearchBuilder.matches(q, SearchBuilder.Item("d", 700, 154, null, false, isLucky = true)))
         assertTrue(!SearchBuilder.matches(q, SearchBuilder.Item("e", 700, 120, null, false)))
