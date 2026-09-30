@@ -2,7 +2,8 @@ import { NextResponse } from "next/server";
 import { getServiceClient } from "../../../lib/supabaseServer";
 import { resolveUser } from "../../../lib/verdictContext";
 import { fetchActiveScanItems } from "../../../lib/scanQuery";
-import { latestFullSyncSession, diagnoseSync } from "../../../lib/scanBackfill";
+import { latestFullSyncSession, diagnoseSync, planSyncSupersede } from "../../../lib/scanBackfill";
+import { invalidateReserveCache } from "../../../lib/verdictContext";
 
 export const dynamic = "force-dynamic";
 
@@ -14,6 +15,15 @@ export async function GET(req) {
   const user = await resolveUser(req);
   if (!user) return NextResponse.json({ error: "로그인이 필요합니다" }, { status: 401 });
   const sp = new URL(req.url).searchParams;
+  // 4-F.6 C: ?species_id=15 → 그 종의 모든 기록(활성·숨김·대체) 상태 사슬 — "보냄" 이후 어디에 남았는지 추적
+  if (sp.get("species_id")) {
+    const sid = Number(sp.get("species_id"));
+    const { data, error } = await sb.from("scan_items").select("id,name_kr,species_id,form,is_shadow,is_purified,atk_iv,def_iv,sta_iv,cp,hp,level,session_id,app_version,created_at,dismissed,dismissed_reason,superseded,superseded_by,recheck,recheck_reason,saved_pokemon_id").eq("user_id", user.userId).eq("species_id", sid).order("created_at", { ascending: true }).limit(500);
+    if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+    const { data: rows } = await sb.from("my_pokemon").select("id,species_id,form,cp,hp,atk_iv,def_iv,sta_iv,status,tags,memo,created_at,updated_at,hidden_reason").eq("user_id", user.userId).eq("species_id", sid).limit(200);
+    const state = (r) => (r.superseded ? `superseded_by ${r.superseded_by}` : r.dismissed ? `dismissed(${r.dismissed_reason || "사유 없음: 저장·보냄 처리·숨김 버튼"})` : "active");
+    return NextResponse.json({ species_id: sid, scans: (data || []).map((r) => ({ ...r, state: state(r) })), rows: rows || [] });
+  }
   let session = null;
   if (sp.get("session_id")) { const { data } = await sb.from("scan_sessions").select("session_id,metrics,ended_at,created_at").eq("user_id", user.userId).eq("session_id", sp.get("session_id")).maybeSingle(); session = data; }
   else session = await latestFullSyncSession(sb, user.userId);
@@ -26,8 +36,21 @@ export async function GET(req) {
     try { ({ items } = await fetchActiveScanItems(sb, user.userId)); } catch (e) { return NextResponse.json({ error: e.message }, { status: 500 }); }
   }
   const d = diagnoseSync(items, session);
+  // 4-F.6 B: ?apply=1 → 대체 계획을 지금 DB 에 적용하고 행별 결과(오류 메시지 포함)를 돌려준다
+  let applied = null;
+  if (sp.get("apply") === "1" && session) {
+    const plan = planSyncSupersede(items, session);
+    applied = { planned: plan.length, ok: 0, errors: [] };
+    for (const p of plan) {
+      const { data: upd, error } = await sb.from("scan_items").update({ superseded: true, superseded_by: p.superseded_by }).eq("user_id", user.userId).eq("id", p.id).select("id,superseded");
+      if (error) applied.errors.push({ id: p.id, error: error.message });
+      else if (!upd?.length) applied.errors.push({ id: p.id, error: "0 rows updated (user_id/id 불일치 또는 RLS)" });
+      else applied.ok++;
+    }
+    invalidateReserveCache(user.userId);
+  }
   const summary = {};
   for (const r of d.rows) { const k = r.why.split(":")[0]; summary[k] = (summary[k] || 0) + 1; }
   const sessions = {}; for (const r of d.rows) sessions[r.session_id] = (sessions[r.session_id] || 0) + 1;
-  return NextResponse.json({ ...d, total: items.length, summary, bySession: sessions });
+  return NextResponse.json({ ...d, total: items.length, summary, bySession: sessions, applied });
 }

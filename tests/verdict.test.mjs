@@ -9,6 +9,7 @@ import { ivCandidates } from "../app/lib/ivCalc.js";
 import { RULES, RULES_VERSION, TAG, purposesFromTags } from "../app/lib/verdictRules.js";
 import { fillMissingVerdicts, isStaleVerdict, verdictForItem } from "../app/lib/scanVerdict.js";
 import { buildReserveRanks, rareFamilyNote } from "../app/lib/reserveRanks.js";
+import { megaFromSources } from "../app/lib/pokemonData.js";
 import { getRankings as getRankings2, budgetRankOf } from "../app/lib/speciesRankings.js";
 import { calcHP } from "../app/lib/ivCalc.js";
 
@@ -766,4 +767,11 @@ test("4-F.5 E 회귀: 삽입 시 부분 보관함(자기 자신 없음)으로 �
   assert.ok(!isStaleVerdict(v2n, s2, c2) && !isStaleVerdict(v1n, s1, c2), "다시 계산한 판정은 최신");
   // 규칙 버전만 같고 지문이 없던(구버전) 판정도 낡음
   assert.ok(isStaleVerdict({ ...v2n, reserveFp: undefined }, s2, c2));
+});
+
+test("4-F.6 A 메가 판정 출처: 포켓몬 GO 게임 마스터(pokemon-go-api hasMegaEvolution) AND PvPoke released≠false. 한쪽만 있으면 그쪽, 본가 기준 아님", () => {
+  assert.equal(megaFromSources({ hasMega: true }, { hasMega: true }), true, "GO 게임 마스터 + PvPoke released");
+  assert.equal(megaFromSources({ hasMega: true }, { hasMega: false }), false, "PvPoke released=false(Camerupt) → 제외");
+  assert.equal(megaFromSources({ hasMega: false }, { hasMega: true }), false, "GO 게임 마스터에 없음 → 제외");
+  assert.equal(megaFromSources({ hasMega: true }, undefined), true); assert.equal(megaFromSources(undefined, { hasMega: true }), true); assert.equal(megaFromSources(undefined, undefined), false);
 });

@@ -97,7 +97,11 @@ export async function POST(req) {
   if (b.action === "restore_dismissed") {
     const { data: rows, error } = await sb.from("scan_items").update({ dismissed: false, dismissed_reason: null }).eq("user_id", user.userId).eq("dismissed", true).in("dismissed_reason", ["before_session", NOT_SEEN_REASON]).select("id");
     if (error) return NextResponse.json({ error: error.message }, { status: 500 });
-    return NextResponse.json({ ok: true, count: (rows || []).length });
+    // 4-F.6: "이미 없음" 으로 숨긴 내 목록 행도 복구 (0012 미적용이면 무시)
+    let rowsRestored = 0;
+    try { const { data: r2 } = await sb.from("my_pokemon").update({ hidden_reason: null }).eq("user_id", user.userId).eq("hidden_reason", NOT_SEEN_REASON).select("id"); rowsRestored = (r2 || []).length; } catch {}
+    invalidateReserveCache(user.userId);
+    return NextResponse.json({ ok: true, count: (rows || []).length, rows: rowsRestored });
   }
   if (b.action === "dismiss") {
     if (!ids.length) return NextResponse.json({ error: "ids 필요" }, { status: 400 });

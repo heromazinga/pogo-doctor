@@ -258,3 +258,11 @@ export function diagnoseSync(items, session) {
   }
   return { session: { session_id: session.session_id, ended_at: session.ended_at, fullSync: Boolean(session.metrics?.fullSync) }, rows };
 }
+
+// 4-F.5/4-F.6 C 재스캔 복구(순수 계산): 보냄/없음 처리로 숨긴 기록(dismissed=true, superseded=false) 중 새 스캔과 같은 개체(종·폼·그림자·개체값, CP·HP 같거나 한쪽 없음)는
+//   새 기록으로 superseded → 새 기록이 활성으로 남는다(= 복구). "보냄" 상태는 scan_items.dismissed(+dismissed_reason null) 와 my_pokemon 행 삭제로만 저장되며 별도 플래그는 없다
+export function planRescanRecovery(hidden, item) {
+  return (hidden || []).filter((h) => h.dismissed && !h.superseded && h.species_id === item.species_id && (h.form || "Normal") === (item.form || "Normal") && Boolean(h.is_shadow) === Boolean(item.is_shadow)
+    && h.atk_iv === item.atk_iv && h.def_iv === item.def_iv && h.sta_iv === item.sta_iv
+    && (item.cp == null || h.cp == null || h.cp === item.cp) && (item.hp == null || h.hp == null || h.hp === item.hp)).map((h) => h.id);
+}

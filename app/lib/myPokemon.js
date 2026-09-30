@@ -16,7 +16,9 @@ export let schemaLegacy = false;
 export async function listMyPokemon() {
   const sb = getSupabase();
   if (!sb) return { rows: [], error: "미설정" };
-  let { data, error } = await sb.from("my_pokemon").select(COLUMNS).order("species_id", { ascending: true }).order("created_at", { ascending: true });
+  // 4-F.6: "이미 없음" 으로 숨긴 행(hidden_reason)은 제외. 0012 미적용이면 컬럼 오류 → 필터 없이 재조회
+  let { data, error } = await sb.from("my_pokemon").select(COLUMNS).is("hidden_reason", null).order("species_id", { ascending: true }).order("created_at", { ascending: true });
+  if (error && isColumnError(error)) ({ data, error } = await sb.from("my_pokemon").select(COLUMNS).order("species_id", { ascending: true }).order("created_at", { ascending: true }));
   if (error && isColumnError(error)) {
     schemaLegacy = true;
     ({ data, error } = await sb.from("my_pokemon").select(COLUMNS_LEGACY).order("species_id", { ascending: true }).order("created_at", { ascending: true }));

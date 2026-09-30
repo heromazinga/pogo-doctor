@@ -212,6 +212,16 @@ Vercel 에서는 환경변수 `POGO_DISABLE_SOURCES` 를 Preview 환경에 잠�
 - 미사용 웹 코드는 발급 시 지우지 않는다(PC 용으로 받은 코드가 앱 웹 화면 열기로 무효화되지 않도록). 발급 제한 IP 당 10분 30회.
 - PC 브라우저는 계속 사용 가능(앱 → 웹 로그인 코드). "홈 화면에 추가" 는 앱 화면에 안내만.
 
+## 4-F.6: PR #45 검증 반영 — 메가 출처, 동기화 대체 진단, 보냄 후 재스캔 복구, 이미 없음 시 내 목록 숨김 (마이그레이션 0012)
+
+실DB(PR #45): 활성 386, 판정 박사행 58, 묶음 55(10묶음), 제외 사용자 태그 [다이맥스, 체육관], 메가 진화용 19. 검토 답: 재계산 청크 허용(재계산 중 박사행 잠금 유지), 그림자 메가 제외 유지, "이미 없음" 은 내 목록 행도 함께 숨김(복구 가능).
+
+- **A 메가 판정 출처**: 4-F.5 는 PvPoke gamemaster 의 "(Mega…)/(Primal…)" 항목만 보고 도감번호로 표시했다(released 미검사, 알로라·가라르·아머드 폼까지 표시). 4-F.6 — `megaFromSources(pga, pvpoke)`: **포켓몬 GO 게임 마스터 파생 pokemon-go-api 의 폼별 `hasMegaEvolution`** 이 필수이고, PvPoke 가 있으면 그 메가 항목이 `released=false` 가 아니어야 한다(둘 다 있으면 AND). PvPoke 는 기본 폼("Normal")에만 표시. 본가 게임 기준이 아니다. 조사 결과(2026-09-30 데이터): 라이츄(X/Y)·우츠보트·무장조·뮤츠(X/Y)·다부니(Audino)는 두 출처 모두에 있음(GO 게임 마스터에 데이터 존재, PvPoke `supermega` 태그·released=true) → 포함 유지. PvPoke released=false 는 폭타(Camerupt)뿐 → 제외. 알로라 라이츄·가라르 야도란·아머드 뮤츠는 제외로 바뀜. "출시" 여부의 최종 근거(나이언틱 공지)는 이 환경에서 접근 불가하므로, 실제 게임에서 메가진화 버튼이 없는 종이 있으면 알려 주면 목록으로 제외한다.
+- **B 동기화 잔여 25건**: `applySyncSupersede` 는 조회 시 **DB 에 update 를 실행**한다(메모리만이 아님: `scan_items.superseded=true, superseded_by`). 진단이 `supersede` 후보로 표시하는데 DB 가 바뀌지 않는 원인은 이 환경에서 확정할 수 없어, `GET /api/scan/diag?apply=1` 을 추가 — 계획을 즉시 적용하고 행별 결과(`applied.ok`, `applied.errors[{id,error}]`: RLS/0 rows/제약 오류 메시지)를 돌려준다. 이 결과로 원인을 확정한다.
+- **C 보냄 후 재스캔 복구**: "보냄" 상태는 `scan_items.dismissed=true`(`dismissed_reason` null) 와 `my_pokemon` 행 삭제로만 저장되며 별도 플래그는 없다. 독침붕 770 12/12/15 가 dismissed=false 인데 활성 목록에 없다면 `superseded=true`(재스캔·규칙 ③·동기화 대체)일 가능성이 높다 — `GET /api/scan/diag?species_id=15` 로 그 종의 모든 기록 상태 사슬(active / dismissed(사유) / superseded_by)과 내 목록 행을 볼 수 있다. 재스캔 복구는 `planRescanRecovery`(순수 함수, 테스트)로 고정: 숨긴 같은 개체(종·폼·그림자·개체값, CP·HP 같거나 한쪽 없음)는 새 기록으로 superseded → 새 기록이 활성. `/api/device/scan` 응답 `recovered`.
+- **이미 없음 → 내 목록 행 숨김**: 마이그레이션 `0012_my_pokemon_hidden.sql`(`my_pokemon.hidden_reason`, 부분 인덱스). `not_seen` 처리 시 행 `hidden_reason='not_seen'`, 목록 조회(`listMyPokemon`·`loadMyRows`)는 null 만, "숨김 복구" 가 함께 복구. 0012 미적용이면 컬럼 오류 시 필터 없이 조회하고 행 숨김은 건너뛴다(`rowsError`).
+- `RULES_VERSION` 변경 없음(메가 대상 변경은 예비 순위 지문으로 재계산). 새 APK 불필요(앱 변경 없음).
+
 ## 4-F.5: 태그에 막힌 박사행 정리 · 보냄 기록 누락 · 번치코 주력 · 잔여 기록 대체 · 대표 선정 원인 (`RULES_VERSION` 2026-09-30.8)
 
 실DB(PR #44 병합, APK 0.1.53, 보관함 "여유"): 활성 397, 판정 박사행 70, 정리 목록 박사행 11(묶음 2·8·1). 판정 박사행 70 중 58마리가 game_tags 보유 → `!#` 보호로 제외.

@@ -6,7 +6,7 @@ import { scanKey, findSuperseded } from "../../../lib/pokemonMatch";
 import { getFamilyOf } from "../../../lib/savePokemonServer";
 import { getPokemonDataset, findPokemon } from "../../../lib/pokemonData";
 import { cpConsistentLevel } from "../../../lib/ivCalc";
-import { CONFLICT_REASON } from "../../../lib/scanBackfill";
+import { CONFLICT_REASON, planRescanRecovery } from "../../../lib/scanBackfill";
 import { fetchActiveScanItems } from "../../../lib/scanQuery";
 import { isTrustedVersion } from "../../../lib/appVersion";
 import { buildVerdictContext, invalidateReserveCache } from "../../../lib/verdictContext";
@@ -77,7 +77,7 @@ export async function POST(req) {
   }
   // 4-C 규칙 ③: 강화·진화 후 같은 개체(같은 계열·폼·그림자·개체값, 레벨/CP 비감소)의 과거 기록(다른 세션 포함)을 superseded 로 표시.
   //   과거 후보가 서로 다른 2개 이상이면 대체하지 않고 새 기록에 recheck 표시
-  let superseded = 0;
+  let superseded = 0, recovered = 0;
   if (!existing && anyIv) {
     const fam = await getFamilyOf();
     const famIds = fam ? [...fam(item.species_id)] : [item.species_id];
@@ -114,10 +114,10 @@ export async function POST(req) {
   }
   // 4-F.5 B①: 보냄/없음 처리로 숨긴 기록과 같은 개체(종·폼·그림자·개체값, CP·HP 같거나 한쪽 없음)가 다시 스캔되면 그 숨김 기록을 새 기록으로 대체 → 새 기록이 활성으로 복구된 셈
   if (!existing && anyIv) {
-    const { data: hidden } = await sb.from("scan_items").select("id,cp,hp").eq("user_id", auth.userId).eq("dismissed", true).eq("superseded", false)
+    const { data: hidden } = await sb.from("scan_items").select("id,cp,hp,species_id,form,is_shadow,atk_iv,def_iv,sta_iv,dismissed,superseded").eq("user_id", auth.userId).eq("dismissed", true).eq("superseded", false)
       .eq("species_id", item.species_id).eq("form", item.form).eq("is_shadow", item.is_shadow).eq("atk_iv", item.atk_iv).eq("def_iv", item.def_iv).eq("sta_iv", item.sta_iv).limit(20);
-    const hit = (hidden || []).filter((h) => (item.cp == null || h.cp == null || h.cp === item.cp) && (item.hp == null || h.hp == null || h.hp === item.hp)).map((h) => h.id);
-    if (hit.length) item._supersedes = [...new Set([...(item._supersedes || []), ...hit])];
+    const hit = planRescanRecovery(hidden, item);
+    if (hit.length) { item._supersedes = [...new Set([...(item._supersedes || []), ...hit])]; recovered = hit.length; }
   }
   const supersedes = item._supersedes || []; delete item._supersedes;
   let data, error;
@@ -143,7 +143,7 @@ export async function POST(req) {
       console.log(`[scan] verdict after-response ${Date.now() - t0}ms ${data.id}`);
     } catch (e) { console.warn(`[scan] 판정 후계산 실패: ${e.message}`); }
   });
-  return NextResponse.json({ item: data, duplicate: Boolean(existing) && !cpFilled, cpFilled, superseded, cpRejected, conflicts: conflictIds.length, ms: Date.now() - started });
+  return NextResponse.json({ item: data, duplicate: Boolean(existing) && !cpFilled, cpFilled, superseded, recovered, cpRejected, conflicts: conflictIds.length, ms: Date.now() - started });
 }
 
 // 앱 → 세션 스캔 기록 조회 (?session=… 없으면 최근 200)
