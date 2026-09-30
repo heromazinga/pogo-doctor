@@ -11,17 +11,12 @@ import { upsertMyPokemon } from "../../lib/savePokemonServer";
 export const dynamic = "force-dynamic";
 
 // 4-B 스캔 기록 (웹·앱 공용, 인증: 웹 세션 또는 기기 토큰)
-// GET → { items }   POST { action: "save"|"dismiss"|"clear", ids?: [], session_id?, status? } → 저장(추천대로: 태그·상태) / 숨김 / 세션 전체 삭제
+// GET → { items, activeCount, sessions, … }   POST { action: "save"|"dismiss"|"clear", ids?: [], session_id?, status? } → 저장(추천대로: 태그·상태) / 숨김 / 세션 전체 삭제
 export async function GET(req) {
   const sb = getServiceClient();
   if (!sb) return NextResponse.json({ error: "서버 Supabase 미설정" }, { status: 503 });
   const user = await resolveUser(req);
   if (!user) return NextResponse.json({ error: "로그인이 필요합니다" }, { status: 401 });
-  // 4-D3: ?count=1 → 활성 스캔 기록 수만 (내 목록 패널 안내용, 판정 재계산·백필 없음)
-  if (new URL(req.url).searchParams.get("count") === "1") {
-    try { const { items: ids, truncated } = await fetchActiveScanItems(sb, user.userId, { select: "id" }); return NextResponse.json({ count: ids.length, truncated }); }
-    catch (e) { return NextResponse.json({ error: e.message }, { status: 500 }); }
-  }
   // 4-C: 강화·진화로 대체된(superseded) 기록은 제외 (마이그레이션 0008). 4-D: 상한 300 → 페이지네이션으로 활성 전부(≤3000)
   let items, truncated;
   try { ({ items, truncated } = await fetchActiveScanItems(sb, user.userId)); } catch (e) { return NextResponse.json({ error: e.message }, { status: 500 }); }
@@ -34,7 +29,8 @@ export async function GET(req) {
     if (items.some((it) => isStaleVerdict(it.verdict))) ({ filled, pending } = await fillMissingVerdicts(sb, items, ctx));
   } catch (e) { console.warn(`[scan] 판정 보충 실패: ${e.message}`); }
   const { data: sessions } = await sb.from("scan_sessions").select("session_id,metrics,started_at,ended_at,created_at").eq("user_id", user.userId).order("created_at", { ascending: false }).limit(20);
-  return NextResponse.json({ items, truncated, sessions: sessions || [], filled, pending, backfill: backfill ? { ran: backfill.ran, superseded: backfill.superseded, conflicts: backfill.conflicts, suspects: backfill.suspects, version: backfill.version } : null });
+  // 4-D3: activeCount = 활성 스캔 기록 수(백필 후) — 내 목록 패널 안내용(별도 호출 없음)
+  return NextResponse.json({ items, truncated, activeCount: items.length, sessions: sessions || [], filled, pending, backfill: backfill ? { ran: backfill.ran, superseded: backfill.superseded, conflicts: backfill.conflicts, suspects: backfill.suspects, version: backfill.version } : null });
 }
 
 export async function POST(req) {

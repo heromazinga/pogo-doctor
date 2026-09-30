@@ -83,7 +83,7 @@ class Phase4b6Test {
     // 4-C.2: 박사행 보호 조건 절은 태그·이로치·반짝반짝 개체를 잡지 않는다 (웹 searchBuilder.js 와 동일). 길이 상한에 포함
     @Test fun protect_suffix_excludes_tagged_shiny_lucky_and_counts_toward_maxlen() {
         val q = SearchBuilder.withProtect("700&hp154")
-        assertEquals("700&hp154&!#&!색이 다른&!반짝반짝&!xxl&!배경&!특별&!다이맥스", q)
+        assertEquals("700&hp154&!#&!색이 다른&!반짝반짝&!xxl&!xxs&!배경&!특별&!다이맥스", q)
         assertTrue(SearchBuilder.matches(q, SearchBuilder.Item("a", 700, 154, null, false)))
         assertTrue(!SearchBuilder.matches(q, SearchBuilder.Item("b", 700, 154, null, false, gameTags = listOf("즐겨찾기"))))
         assertTrue(!SearchBuilder.matches(q, SearchBuilder.Item("c", 700, 154, null, false, isShiny = true)))

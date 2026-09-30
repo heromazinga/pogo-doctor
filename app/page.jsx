@@ -272,7 +272,7 @@ export default function Home() {
       const res = await fetch("/api/scan", { headers: { ...(await authHeader()) } });
       const data = await res.json();
       if (!res.ok) { setScanError(data.error || `HTTP ${res.status}`); return; }
-      setScans(data.items || []); setScanSessions(data.sessions || []); setScanPending(data.pending || 0);
+      setScans(data.items || []); setScanSessions(data.sessions || []); setScanPending(data.pending || 0); setScanCount(data.activeCount ?? (data.items || []).length);
     } catch (e) { setScanError(e.message); } finally { setScanBusy(false); }
   };
   const scanAction = async (action, ids, extra = {}) => {
@@ -292,10 +292,9 @@ export default function Home() {
     } catch (e) { setScanError(e.message); } finally { setScanBusy(false); }
   };
   const openScans = async () => { setShowScans(true); await loadScans(); };
-  // 4-D3: 내 목록 패널을 열 때 활성 스캔 기록 수만 조회(재계산 없음) — 목록과 스캔 기록 혼동 방지 안내
+  // 4-D3: 내 목록 패널 안내의 스캔 기록 수는 /api/scan 응답(activeCount)에서 — 아직 조회 전이면 한 번 조회(별도 count 호출 없음)
   useEffect(() => {
-    if (!showCollection || !session) return;
-    (async () => { try { const res = await fetch("/api/scan?count=1", { headers: { ...(await authHeader()) } }); const d = await res.json(); if (res.ok) setScanCount(d.count ?? 0); } catch {} })();
+    if (showCollection && session && scanCount == null && !scanBusy) loadScans();
   }, [showCollection, session]); // eslint-disable-line react-hooks/exhaustive-deps
   const loadCleanup = async () => {
     if (!session) return;

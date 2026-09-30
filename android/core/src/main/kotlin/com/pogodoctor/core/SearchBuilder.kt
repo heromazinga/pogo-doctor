@@ -10,7 +10,7 @@ object SearchBuilder {
     data class Result(val groups: List<Group>, val skipped: List<Skipped>)
 
     // 4-C.2 박사행 보호 조건(항상 적용, 웹 searchBuilder.js PROTECT_SUFFIX 와 동일): 태그·이로치·반짝반짝·XXL·배경 제외. 길이 계산에 포함
-    val PROTECT_CLAUSES = listOf("!#", "!색이 다른", "!반짝반짝", "!xxl", "!배경", "!특별", "!다이맥스") // 4-D2: !특별 = 코스튬, 4-D3: !다이맥스
+    val PROTECT_CLAUSES = listOf("!#", "!색이 다른", "!반짝반짝", "!xxl", "!xxs", "!배경", "!특별", "!다이맥스") // 4-D2: !특별 = 코스튬, 4-D3: !xxs·!다이맥스
     val PROTECT_SUFFIX = "&" + PROTECT_CLAUSES.joinToString("&")
     const val NO_TAG_CLAUSE = "!#"
     fun withProtect(query: String) = query + PROTECT_SUFFIX
@@ -22,7 +22,7 @@ object SearchBuilder {
                 t == NO_TAG_CLAUSE -> x.gameTags.isEmpty()
                 t == "!색이 다른" -> !x.isShiny
                 t == "!반짝반짝" -> !x.isLucky
-                t == "!xxl" || t == "!배경" || t == "!특별" || t == "!다이맥스" || t == "!거다이맥스" -> true
+                t == "!xxl" || t == "!xxs" || t == "!배경" || t == "!특별" || t == "!다이맥스" || t == "!거다이맥스" -> true
                 t.matches(Regex("\\d+")) -> x.speciesId.toString() == t
                 t.matches(Regex("hp\\d+")) -> x.hp != null && "hp${x.hp}" == t
                 else -> Regex("cp(\\d+)(?:-(\\d+))?").matchEntire(t)?.let { m -> val cp = x.cp ?: return@let false; val lo = m.groupValues[1].toInt(); val hi = m.groupValues[2].ifEmpty { m.groupValues[1] }.toInt(); cp in lo..hi } ?: false
