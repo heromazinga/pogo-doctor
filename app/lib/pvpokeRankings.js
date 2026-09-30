@@ -1,5 +1,5 @@
 // PvPoke 리그 순위 (rankings/all/overall/rankings-{1500,2500,10000}.json) — 6시간 캐시, 장애 시 이전 캐시 유지
-// speciesId 규약: 데이터셋 pvpokeId(예: "azumarill", "raichu_alolan"), 섀도는 "_shadow" 접미사
+// speciesId 규약: 데이터셋 pvpokeId(예: "azumarill", "raichu_alolan"), 그림자는 "_shadow" 접미사
 const BASE = "https://raw.githubusercontent.com/pvpoke/pvpoke/master/src/data/rankings/all/overall/";
 export const LEAGUE_FILES = { great: "rankings-1500.json", ultra: "rankings-2500.json", master: "rankings-10000.json" };
 const CACHE_MS = 6 * 60 * 60 * 1000;

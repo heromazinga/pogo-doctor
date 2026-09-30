@@ -120,34 +120,45 @@ function evaluateCandidate(p, cand, input, ctx, rankings, { forEvolve = false } 
     const kr = TYPE_NAMES_KR[t];
     if (!top && !mid) {
       if (!beginner || cand.atk < minAtk) continue;
-      // 4-F ① 가성비 상위종: 전설·환상·UB·메가·섀도 제외 풀에서 ≤12위 (일반 개체만) → 보류
+      // 4-F ① 가성비 상위종: 전설·환상·UB·메가·그림자 제외 풀에서 ≤12위 (일반 개체만) → 보류
       const bg = !shadow ? budgetRankOf(rankings, t, p.id, p.form) : null;
       const budgetTop = Boolean(bg) && bg.budgetRank <= rule(ctx, "BUDGET_RAID_TOP_RANK");
       // 4-F ② 레이드 예비: 내 보관함 안 이 타입 개체 점수 상위 N (종 순위 무관)
       const rr = forEvolve ? null : reserveRaidRank(ctx.reserve, t, input, p, cand);
       if (!budgetTop && rr == null) continue;
       const moves = recommendedMoves(ctx.dataset, p, sp.fast, sp.charged);
-      const why = [budgetTop ? `가성비 ${bg.budgetRank}위(전설·섀도 제외 풀, 전체 ${sp.rank}위·1위 대비 ${sp.pct}%)` : null, rr != null ? `내 보관함 ${kr} ${rr}위(레이드 예비)` : null].filter(Boolean).join(" · ");
+      const why = [budgetTop ? `가성비 ${bg.budgetRank}위(전설·그림자 제외 풀, 전체 ${sp.rank}위·1위 대비 ${sp.pct}%)` : null, rr != null ? `내 보관함 ${kr} ${rr}위(레이드 예비)` : null].filter(Boolean).join(" · ");
       tags.push({ name: TAG.raid(kr), tier: "hold", reason: `${why}·공격 ${cand.atk} · ${moveLine(moves)}`, moves, metrics: { type: t, speciesRank: sp.rank, speciesPct: sp.pct, top: false, budgetRank: bg?.budgetRank ?? null, reserveRank: rr, atkIv: cand.atk, level: cand.level, beginner: true, bestMoves: [sp.fast, sp.charged], usesSpecial: sp.usesSpecial } });
       continue;
     }
     if (cand.atk < minAtk) continue;
     const indiv = indivRankBy(sameSpecies, p, (r) => ({ primary: Number.isInteger(r.atk_iv) ? r.atk_iv : -1, level: rowLevel(r, p) }), { primary: cand.atk, level: cand.level });
-    const tier = top && indiv <= RULES.RAID_MAIN_INDIV_RANK && cand.atk >= mainMinAtk ? "main" : "hold";
+    let tier = top && indiv <= RULES.RAID_MAIN_INDIV_RANK && cand.atk >= mainMinAtk ? "main" : "hold";
     const notes = [];
+    // 4-F.4 C①: 주력은 내 보관함 전체의 같은 타입 공격수 중 상위(레이드 예비 순위 ≤ RESERVE_RAID_TOP_N)일 때만 — 같은 종 1~2마리면 "내 종 중 1위" 가 항상 통과하던 결함(번치코 51% 불꽃 주력)
+    //   보관함 밖 개체(웹 분석 입력 등, reserveKey 없음)는 순위를 알 수 없어 현행 유지
+    const rr = forEvolve ? null : reserveRaidRank(ctx.reserve, t, input, p, cand);
+    if (tier === "main" && ctx.reserve && input.reserveKey) {
+      if (rr == null || rr > rule(ctx, "RESERVE_RAID_TOP_N")) { tier = "hold"; notes.push(rr == null ? `내 보관함 ${kr} 상위 ${rule(ctx, "RESERVE_RAID_TOP_N")} 밖 → 보류` : `내 보관함 ${kr} ${rr}위 → 보류`); }
+      else notes.push(`내 보관함 ${kr} ${rr}위`);
+    }
     let myScore = null;
     if (hasMoves && !forEvolve) {
       const mine = raidScoreForType(p, t, moveStats, { shadow, fastOnly: input.fast_move ? [input.fast_move] : null, chargedOnly: input.charged_moves?.length ? input.charged_moves : null });
+      let mismatch = false;
       if (mine) {
         myScore = mine.score;
-        if (sp.usesSpecial && (mine.fast !== sp.fast || mine.charged !== sp.charged)) notes.push(`특수 기술머신 필요(${moveName(ctx.dataset, sp.fast)}/${moveName(ctx.dataset, sp.charged)})`);
+        if (sp.usesSpecial && (mine.fast !== sp.fast || mine.charged !== sp.charged)) { mismatch = true; notes.push(`특수 기술머신 필요(${moveName(ctx.dataset, sp.fast)}/${moveName(ctx.dataset, sp.charged)})`); }
       } else {
+        mismatch = sp.usesSpecial;
         notes.push(sp.usesSpecial ? `특수 기술머신 필요(${moveName(ctx.dataset, sp.charged)})` : `${kr} 기술로 변경 필요`);
       }
+      // 4-F.4 C②: 핵심 특수 기술이 필요한데 현재 기술이 아니면 주력 → 보류
+      if (mismatch && tier === "main") { tier = "hold"; notes.push("특수 기술 미보유 → 보류"); }
     }
     // 4-C: 기술은 캡처하지 않는다(기술머신·이벤트로 바꾸므로). 태그마다 추천 기술(종 최적 조합)을 표시하고, 특수 기술머신이 필요하면 ⚠ 표기
     const moves = recommendedMoves(ctx.dataset, p, sp.fast, sp.charged);
-    const reason = `${kr} ${sp.rank}위(1위 대비 ${sp.pct}%)${shadow ? "(섀도)" : ""}·공격 ${cand.atk}, 내 ${p.nameKr} 중 ${indiv}위 · ${moveLine(moves)}${notes.length ? " · " + notes.join(", ") : ""}`;
+    const reason = `${kr} ${sp.rank}위(1위 대비 ${sp.pct}%)${shadow ? "(그림자)" : ""}·공격 ${cand.atk}, 내 ${p.nameKr} 중 ${indiv}위 · ${moveLine(moves)}${notes.length ? " · " + notes.join(", ") : ""}`;
     tags.push({ name: TAG.raid(kr), tier, reason, moves, metrics: { type: t, speciesRank: sp.rank, speciesPct: sp.pct, top, indivRank: indiv, atkIv: cand.atk, level: cand.level, speciesScore: sp.score, myScore, bestMoves: [sp.fast, sp.charged], usesSpecial: sp.usesSpecial, notes } });
   }
 
@@ -233,7 +244,8 @@ function evaluateCandidate(p, cand, input, ctx, rankings, { forEvolve = false } 
       // 4-A2: 최종형이 "주력"일 때 진화 후보(주력). 4-C.4: 최종형의 "리그 후보" 보류(스탯곱 ≤41, D)도 진화 후보(보류)로 이어진다
       //   (실DB 결함: 찌르꼬 0/15/14 → 찌르호크 하이퍼 스탯곱 4위가 종 순위 200위 밖이라 D 보류였는데, 주력만 세어 진화 후보가 없었고 박사행이 됐다)
       const mains = sub.tags.filter((t) => t.tier === "main");
-      const candHolds = sub.tags.filter((t) => t.tier === "hold" && t.metrics?.candidate);
+      // 4-F.4: 최종형이 레이드 상위종(top)인 보류(공격 IV·보관함 순위로 주력이 못 된 것)도 진화 후보(보류)로 잇는다 — 그림자 코일 → 그림자 자포코일(전기 상위)이 보호되지 않던 문제
+      const candHolds = sub.tags.filter((t) => t.tier === "hold" && (t.metrics?.candidate || (t.metrics?.top && t.metrics?.type)));
       const useful = mains.length ? mains : candHolds;
       if (!useful.length) continue;
       // 4-C.2: 필요 사탕 ≥200(예: 잉어킹 400)이면 등급 상한 보류 — 진화까지 멀어 주력으로 세지 않는다
@@ -374,14 +386,18 @@ export function computeVerdict(input, ctx) {
   // 4-D3: 고개체(14+/14+/14+·100%)는 종과 무관하게 박사행 → 보류(수집). 실측: 피카츄 15/14/14 가 박사행 묶음에 들어가 수동 해제가 필요했음
   let collectHold = false;
   if (tier === "transfer" && collect.some((c) => c.hold)) { tier = "hold"; collectHold = true; }
-  // 4-F.2 수집 관점(보관함 "여유"만): 같은 종·폼(섀도·정화·지역 폼 별개) 중 개체값 합 최고 1마리는 보류 "수집(종 대표)". 박사행은 "같은 종 더 좋은 개체 있음(…)" 으로 비교 대상 표기
+  // 4-F.2 수집 관점(보관함 "여유"만): 같은 종·폼(그림자·정화·지역 폼 별개) 중 개체값 합 최고 1마리는 보류 "수집(종 대표)". 박사행은 "같은 종 더 좋은 개체 있음(…)" 으로 비교 대상 표기
   let repHold = false, repNote = "";
-  const rep = Number(rule(ctx, "COLLECT_REPRESENTATIVE")) !== 0 && Number(rule(ctx, "BEGINNER_RULES")) !== 0 ? reserveRepresentative(ctx.reserve, input, p, allSame ? evals[0].cand : null) : null;
-  if (rep && !rep.other && storageMode === "relaxed") {
+  // 4-F.4 A 불변: 종·폼·그림자·정화별 대표 1마리는 보관함 여유·보통·빠듯 모두 절대 박사행이 되지 않는다 (실DB: 그림자 코일 2마리가 모두 박사행 → 종 전체 소실)
+  const rep = Number(rule(ctx, "COLLECT_REPRESENTATIVE")) !== 0 ? reserveRepresentative(ctx.reserve, input, p, allSame ? evals[0].cand : null) : null;
+  if (rep && !rep.other) {
     const rare = rareFamilyNote(dataset, p);
-    collect.push({ reason: `종 대표(내 ${p.nameKr}${shadow ? "(섀도)" : input.is_purified ? "(정화)" : ""} 중 개체값 합 최고${rare ? " · 귀한 계열: " + rare : ""})`, rep: true, hold: true });
+    collect.push({ reason: `종 대표(내 ${p.nameKr}${shadow ? "(그림자)" : input.is_purified ? "(정화)" : ""} 중 ${rep.tie ? `동점 → ${rep.basis}` : "개체값 합 최고"}${rare ? " · 귀한 계열: " + rare : ""})`, rep: true, hold: true });
     if (tier === "transfer") { tier = "hold"; repHold = true; }
   }
+  // 4-F.4 B 안농(201): 글자 폼을 구분하지 못해 전부 Normal 로 기록됨 → 글자 인식 전까지 박사행 제외·보류
+  let formUnknownHold = false;
+  if (tier === "transfer" && (rule(ctx, "FORM_UNKNOWN_HOLD_SPECIES") || []).includes(p.id)) { tier = "hold"; formUnknownHold = true; collect.push({ reason: "글자 구분 불가 — 수집 판단 보류", hold: true }); }
   // 4-F.3 박사행 사유: 탈락한 기준을 순서대로 — 리그 스탯곱 ≤500 개체는 리그 비교 먼저, 그다음 종 대표 (실측: 라이츄 1/13/15 가 종 대표와만 비교돼 표시됨)
   if (tier === "transfer") {
     const notes = [...new Set(evals.flatMap((e) => e.transferNotes || []))];
@@ -389,7 +405,7 @@ export function computeVerdict(input, ctx) {
     if (notes.length) repNote = " · " + notes.join(" · ");
   }
   const collectTag = collect.some((c) => c.collectTag);
-  const summary = buildSummary(tier, tags, collect, event, evals[0].cand, allSame, legendaryHold || collectHold || repHold, collectHold, repHold) + repNote;
+  const summary = buildSummary(tier, tags, collect, event, evals[0].cand, allSame, legendaryHold || collectHold || repHold || formUnknownHold, collectHold, repHold, formUnknownHold) + repNote;
   // 4-C.2 맥스배틀 종(공개 데이터로 확인된 목록만): 판정 대신 "다이맥스 태그 권장" 안내
   const dynamax = isMaxBattleSpecies(ctx, p);
   const keptTags = tags.filter((t) => t.tier === "main" || t.tier === "hold").map((t) => t.name);
@@ -425,7 +441,7 @@ function collectFor(p, input, cand, kept) {
     }
   }
   if (isLegendaryClass(p)) {
-    if (input.is_shadow || input.is_purified) out.push({ reason: `${input.is_shadow ? "섀도" : "정화"} 전설·환상 — 보관 권장` });
+    if (input.is_shadow || input.is_purified) out.push({ reason: `${input.is_shadow ? "그림자" : "정화"} 전설·환상 — 보관 권장` });
     else if (kept) out.push({ reason: "전설·환상 — 보관 권장" });
     else out.push({ reason: "교환용(전설·환상, 교환 시 개체값 재설정)" });
   }
@@ -452,7 +468,7 @@ export function luckyTradeReason(caughtOn) {
   return null;
 }
 
-function buildSummary(tier, tags, collect, event, cand, allSame, legendaryHold, collectHold = false, repHold = false) {
+function buildSummary(tier, tags, collect, event, cand, allSame, legendaryHold, collectHold = false, repHold = false, formUnknownHold = false) {
   const kept = tags.filter((t) => t.tier === tier && (tier === "main" || tier === "hold"));
   let s;
   if (tier === "need_appraisal") s = `${TIER_LABEL.need_appraisal}${tags.length ? ": " + tags.map((t) => t.name).join(", ") : ""}`;
@@ -462,6 +478,7 @@ function buildSummary(tier, tags, collect, event, cand, allSame, legendaryHold, 
   if (event && tier === "hold" && !kept.length) s = `${TIER_LABEL.hold}: ${event.note}`;
   else if (collectHold && !kept.length) s = `${TIER_LABEL.hold}: 고개체 수집(용도 태그 없음)`;
   else if (repHold && !kept.length) s = `${TIER_LABEL.hold}: 종 대표 수집(용도 태그 없음)`;
+  else if (formUnknownHold && !kept.length) s = `${TIER_LABEL.hold}: 글자 구분 불가 — 수집 판단 보류`;
   else if (legendaryHold && !kept.length) s = `${TIER_LABEL.hold}: 전설·환상(용도 태그 없음)`;
   if (collect.length) s += ` → 💎 수집 추천: ${collect.map((c) => c.reason).join(", ")}`;
   if (cand && allSame) s += ` [${cand.atk}/${cand.def}/${cand.sta} L${cand.level}]`;

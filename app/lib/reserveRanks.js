@@ -4,13 +4,14 @@
 //    4-F.2 하한: 개체 점수 < 가성비 풀 그 타입 1위 점수 × RESERVE_RAID_MIN_PCT% 이면 제외
 //  - 리그 예비: 종 PvPoke 순위와 무관하게, 리그 상한 도달 가능(L50 이하에서 CP ≥ 상한×0.97) AND 스탯곱 순위 ≤ LEAGUE_RESERVE_PRODUCT_RANK 이면
 //    종·리그별 최상위 1마리(스탯곱 순위 최소)만.
-//  - 4-F.2 종 대표: 같은 종·폼(섀도·정화·지역 폼 각각 별개)에서 개체값 합 최고 1마리(동률이면 CP 높은 쪽). 귀한 계열(3단 진화·최종 사탕 100, 사탕 400)은 사유에 표기
-// 키: 개체 id("scan:<id>" / "row:<id>") 우선, 없으면 서명(종:폼:섀도:개체값:레벨). 결과는 ctx.reserve 로 computeVerdict 에 전달
+//  - 4-F.2 종 대표: 같은 종·폼(그림자·정화·지역 폼 각각 별개)에서 개체값 합 최고 1마리(동률이면 CP 높은 쪽). 귀한 계열(3단 진화·최종 사탕 100, 사탕 400)은 사유에 표기
+// 키: 개체 id("scan:<id>" / "row:<id>") 우선, 없으면 서명(종:폼:그림자:개체값:레벨). 결과는 ctx.reserve 로 computeVerdict 에 전달
 import { TYPES } from "./typeChart.js";
 import { cpmForLevel, estimateLevel } from "./cpm.js";
 import { findPokemon } from "./pokemonData.js";
 import { RULES } from "./verdictRules.js";
-import { getRankings, raidRankOf, familyIds } from "./speciesRankings.js";
+import { getRankings, raidRankOf, budgetRankOf, familyIds } from "./speciesRankings.js";
+import { leagueRankOf } from "./pvpokeRankings.js";
 import { leagueProductTable } from "./verdict.js";
 
 export const sigOf = (speciesId, form, shadow, ivs, level) => `sig:${speciesId}:${form || "Normal"}:${shadow ? 1 : 0}:${ivs.atk}/${ivs.def}/${ivs.sta}:${level ?? ""}`;
@@ -49,7 +50,33 @@ export function rareFamilyNote(dataset, p, rules = RULES) {
 }
 
 // 반환 { raid: { [type]: Map<key|sig, rank> }, league: { great|ultra: Map<speciesKey, { key, sig, productRank }> }, rep: Map<speciesKey, { key, sig, ivs, cp, ivSum }>, size }
-export function buildReserveRanks(dataset, rows = [], scans = [], { rules = RULES, maxLeagueLevel = RULES.LEAGUE_MAX_LEVEL } = {}) {
+// 4-F.4 종의 용도: 레이드 가치(어느 타입이든 상위/중위 또는 가성비 ≤12위) / 리그 가치(PvPoke 슈퍼·하이퍼 ≤ LEAGUE_CANDIDATE_SPECIES_RANK)
+function speciesUsage(rankings, leagueRankings, p, shadow, rules) {
+  let raid = false;
+  for (const t of TYPES) {
+    const sp = raidRankOf(rankings, t, p.id, p.form, shadow);
+    if (sp && ((sp.rank <= rules.RAID_MID_RANK && sp.pct >= rules.RAID_MID_SCORE_PCT))) { raid = true; break; }
+    if (!shadow) { const bg = budgetRankOf(rankings, t, p.id, p.form); if (bg && bg.budgetRank <= rules.BUDGET_RAID_TOP_RANK) { raid = true; break; } }
+  }
+  let league = false;
+  for (const lg of ["great", "ultra"]) { const sp = leagueRankOf(leagueRankings, lg, p.pvpokeId, shadow); if (sp && sp.rank <= rules.LEAGUE_CANDIDATE_SPECIES_RANK) { league = true; break; } }
+  return { raid, league };
+}
+// 4-F.4 종 대표 선택: 합 최고 ±REP_TIE_MARGIN 안의 후보 중 — 레이드 종은 공격, 리그 종은 스탯곱(슈퍼, 없으면 하이퍼), 그 외 합 → 공격 → CP
+function pickRepresentative(cands, usage, rules, maxLeagueLevel) {
+  const maxSum = Math.max(...cands.map((c) => c.ivSum));
+  const pool = cands.filter((c) => c.ivSum >= maxSum - (rules.REP_TIE_MARGIN ?? 0));
+  const byCp = (a, b) => (b.cp || 0) - (a.cp || 0);
+  let sorted;
+  if (usage.raid) sorted = [...pool].sort((a, b) => b.ivs.atk - a.ivs.atk || b.ivSum - a.ivSum || byCp(a, b));
+  else if (usage.league) {
+    const prod = (c) => { for (const cap of [RULES.LEAGUE_CAPS.great, RULES.LEAGUE_CAPS.ultra]) { const me = leagueProductTable(c.p, cap, maxLeagueLevel).rank.get(`${c.ivs.atk},${c.ivs.def},${c.ivs.sta}`); if (me && me.level != null) return me.product; } return 0; };
+    sorted = [...pool].map((c) => ({ c, pr: prod(c) })).sort((a, b) => b.pr - a.pr || b.c.ivSum - a.c.ivSum || byCp(a.c, b.c)).map((x) => x.c);
+  } else sorted = [...pool].sort((a, b) => b.ivSum - a.ivSum || b.ivs.atk - a.ivs.atk || byCp(a, b));
+  return { pick: sorted[0], basis: usage.raid ? "레이드 종 → 공격" : usage.league ? "리그 종 → 스탯곱" : "합 → 공격" };
+}
+
+export function buildReserveRanks(dataset, rows = [], scans = [], { rules = RULES, maxLeagueLevel = RULES.LEAGUE_MAX_LEVEL, leagueRankings = null } = {}) {
   const rankings = getRankings(dataset);
   const entries = [...scans.map((r) => entryOf("scan", r, dataset)), ...rows.map((r) => entryOf("row", r, dataset))].filter(Boolean);
   const topN = rules.RESERVE_RAID_TOP_N, minAtk = rules.RAID_MIN_ATK_IV, reserveRank = rules.LEAGUE_RESERVE_PRODUCT_RANK, reachPct = rules.LEAGUE_CAP_REACH_PCT, minPct = rules.RESERVE_RAID_MIN_PCT ?? 0;
@@ -90,13 +117,18 @@ export function buildReserveRanks(dataset, rows = [], scans = [], { rules = RULE
     for (const l of lists.values()) l.sort((a, b) => a.productRank - b.productRank);
     league[lg] = lists;
   }
-  // 4-F.2 종 대표: 종·폼·섀도·정화별 개체값 합 최고(동률 CP 높은 쪽, 그다음 먼저 온 것)
+  // 4-F.2 종 대표: 종·폼·그림자·정화별 개체값 합 최고. 4-F.4 동점(합 차이 ≤1)은 용도별(pickRepresentative)
   const rep = new Map();
+  const bySpecies = new Map();
   for (const e of entries) {
     const sk = speciesKeyOf(e.p, e.shadow, e.purified);
-    const ivSum = e.ivs.atk + e.ivs.def + e.ivs.sta;
-    const cur = rep.get(sk);
-    if (!cur || ivSum > cur.ivSum || (ivSum === cur.ivSum && (e.cp || 0) > (cur.cp || 0))) rep.set(sk, { key: e.key, sig: e.sig, ivs: e.ivs, cp: e.cp, ivSum });
+    if (!bySpecies.has(sk)) bySpecies.set(sk, []);
+    bySpecies.get(sk).push({ ...e, ivSum: e.ivs.atk + e.ivs.def + e.ivs.sta });
+  }
+  for (const [sk, cands] of bySpecies) {
+    const usage = speciesUsage(rankings, leagueRankings, cands[0].p, cands[0].shadow, rules);
+    const { pick, basis } = pickRepresentative(cands, usage, rules, maxLeagueLevel);
+    rep.set(sk, { key: pick.key, sig: pick.sig, ivs: pick.ivs, cp: pick.cp, ivSum: pick.ivSum, basis, tie: cands.filter((c) => c.ivSum >= pick.ivSum - (rules.REP_TIE_MARGIN ?? 0)).length > 1 });
   }
   return { raid, league, rep, size: entries.length };
 }

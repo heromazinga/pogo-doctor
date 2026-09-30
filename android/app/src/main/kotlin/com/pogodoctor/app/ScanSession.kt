@@ -15,12 +15,12 @@ import java.util.Locale
 
 // 4-B 연속 스캔 세션 상태·순수 로직 (프레임 지문, 안정 판정, 중복 키, 측정값). 서비스가 캡처·OCR·API 를 붙인다.
 // 절대 규칙: 화면을 읽기만 한다. 터치·스와이프 자동 조작 없음.
-// mode(4-D): normal | shadow | purified — 세션 동안 고정. shadow 면 기록에 is_shadow=true(섀도 판정), purified 면 is_purified=true
+// mode(4-D): normal | shadow | purified — 세션 동안 고정. shadow 면 기록에 is_shadow=true(그림자 판정), purified 면 is_purified=true
 // fullSync(4-F.2): 검색어 없이 보관함 전체를 넘기는 "전체 동기화" 세션 — 서버 metrics.fullSync 로 표시, 웹이 종료 후 "다시 보이지 않은 기록 숨김" 을 제안
 class ScanSession(val id: String = newId(), val mode: String = "normal", val fullSync: Boolean = false) {
     val isShadow: Boolean get() = mode == "shadow"
     val isPurified: Boolean get() = mode == "purified"
-    val modeLabel: String get() = when (mode) { "shadow" -> "섀도"; "purified" -> "정화"; else -> "일반" }
+    val modeLabel: String get() = when (mode) { "shadow" -> "그림자"; "purified" -> "정화"; else -> "일반" }
     companion object {
         fun newId(): String = SimpleDateFormat("yyyyMMdd-HHmm", Locale.US).format(Date()) + "-" + (1000 + (Math.random() * 9000).toInt())
 

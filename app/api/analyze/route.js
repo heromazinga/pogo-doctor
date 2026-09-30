@@ -10,7 +10,7 @@ const STATUS_KR = { keep: "보관", transfer: "박사에게 보낼 예정" };
 const PURPOSE_KR = { raid: "레이드", great: "슈퍼리그", ultra: "하이퍼리그", master: "마스터리그" };
 function collLine(c) {
   const iv = Number.isFinite(c.ivPercent) ? `/IV${c.ivPercent}%` : "";
-  const tags = [c.isShadow ? "섀도" : null, c.isShiny ? "이로치" : null, STATUS_KR[c.status] || null, ...((c.purposes || []).map((p) => PURPOSE_KR[p] || p))].filter(Boolean);
+  const tags = [c.isShadow ? "그림자" : null, c.isShiny ? "이로치" : null, STATUS_KR[c.status] || null, ...((c.purposes || []).map((p) => PURPOSE_KR[p] || p))].filter(Boolean);
   return `${c.name}(CP${c.cp || "?"}${iv}${tags.length ? "/" + tags.join("·") : ""})`;
 }
 
@@ -348,7 +348,7 @@ export async function POST(req) {
       if (!team || !Array.isArray(team.team)) return NextResponse.json({ error: "team 결과가 필요합니다" }, { status: 400 });
       systemPrompt = TEAM_SYSTEM_PROMPT;
       const mv = (en) => mvName(dataset, en);
-      const memberLine = (m, i) => `${i + 1}. ${m.nameKr || m.name}${m.shadow ? "(섀도)" : ""} CP${m.cp || "?"} L${m.level}${m.levelAssumed ? "(추정)" : ""} ${m.ivAssumed ? "개체값 추정 10/10/10" : `개체값 ${m.ivs.atk}/${m.ivs.def}/${m.ivs.sta}`} · ${mv(m.fast)} + ${mv(m.charged)}${m.movesAssumed ? " (기술 가정)" : ""}`;
+      const memberLine = (m, i) => `${i + 1}. ${m.nameKr || m.name}${m.shadow ? "(그림자)" : ""} CP${m.cp || "?"} L${m.level}${m.levelAssumed ? "(추정)" : ""} ${m.ivAssumed ? "개체값 추정 10/10/10" : `개체값 ${m.ivs.atk}/${m.ivs.def}/${m.ivs.sta}`} · ${mv(m.fast)} + ${mv(m.charged)}${m.movesAssumed ? " (기술 가정)" : ""}`;
       let detail = "";
       if (team.mode === "raid") {
         const b = team.boss || {};

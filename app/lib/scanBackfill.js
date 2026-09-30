@@ -1,11 +1,11 @@
 // 4-C.2/4-C.3 스캔 기록 백필 (멱등, 규칙 버전당 사용자별 1회: user_settings.scan_backfill_version)
 //   실DB 검증에서 기존 중복이 남아 있었다(insert 시점에만 대체 처리했기 때문). 과거 기록끼리도 정리한다.
-//   대체(superseded) 규칙 — 같은 계열·폼·섀도·개체값(확정) 묶음 안에서:
+//   대체(superseded) 규칙 — 같은 계열·폼·그림자·개체값(확정) 묶음 안에서:
 //     ⓪ 종·CP·HP 까지 모두 같은 기록(재기록) → 오래된 쪽 대체 (뚜벅쵸 9/4/4 사례, CP 검증 불필요)
 //     ① CP 가 없는 기록: 같은 종·HP 또는 같은 세션에 CP 있는 기록이 있으면 그쪽으로 대체 (리자몽·썬더·번치코 사례, 레벨 없어도)
 //     ② CP 가 개체값·HP 와 맞지 않는 기록: 같은 HP·세션의 검증된 기록으로 대체 (괴력몬 2634 vs 263 사례)
 //     ③ 검증된 기록끼리 시간순으로 규칙 ③(레벨/CP 비감소·포획일 호환) 재생 → 최신 유지. 서로 다른 과거 후보 2개 이상이면 건드리지 않는다
-//   재확인(recheck) 규칙 — 같은 종·폼·섀도·CP·HP 인데 개체값이 다른 활성 기록(막대 오판독 의심): 둘 다 recheck + "재스캔 필요" (박사행·태그 묶음 제외)
+//   재확인(recheck) 규칙 — 같은 종·폼·그림자·CP·HP 인데 개체값이 다른 활성 기록(막대 오판독 의심): 둘 다 recheck + "재스캔 필요" (박사행·태그 묶음 제외)
 import { RULES_VERSION } from "./verdictRules.js";
 import { findPokemon } from "./pokemonData.js";
 import { familyOfFactory, notDowngraded } from "./pokemonMatch.js";
@@ -82,9 +82,9 @@ export function planSupersede(items, dataset) {
   return out;
 }
 
-// 4-D2 순수 계산: 스캔 모드(섀도/정화) 신뢰 기록이 같은 종·폼·CP·HP·개체값의 "일반 모드" 기록과 만나면 일반 기록을 대체(모드 기록이 정확한 속성).
-//   반대 방향(일반이 섀도를 대체)은 하지 않는다. 실측: 섀도 모드 37건이 전날 일반 기록과 둘 다 활성 → population 508(실제 470)
-//   4-D3: 한쪽 CP 가 null 이면 종·폼·HP·개체값 일치만으로 모드 기록이 우선 (실DB: CP 없는 섀도 기록 2건이 일반 기록과 중복으로 남음)
+// 4-D2 순수 계산: 스캔 모드(그림자/정화) 신뢰 기록이 같은 종·폼·CP·HP·개체값의 "일반 모드" 기록과 만나면 일반 기록을 대체(모드 기록이 정확한 속성).
+//   반대 방향(일반이 그림자를 대체)은 하지 않는다. 실측: 그림자 모드 37건이 전날 일반 기록과 둘 다 활성 → population 508(실제 470)
+//   4-D3: 한쪽 CP 가 null 이면 종·폼·HP·개체값 일치만으로 모드 기록이 우선 (실DB: CP 없는 그림자 기록 2건이 일반 기록과 중복으로 남음)
 export function planModeSupersede(items) {
   const groups = new Map();
   for (const r of items) {
@@ -106,7 +106,7 @@ export function planModeSupersede(items) {
   return out;
 }
 
-// 순수 계산: 같은 종·폼·섀도·CP·HP 인데 개체값이 다른 활성 기록 → { recheck: [id], supersede: [{id, superseded_by}] }
+// 순수 계산: 같은 종·폼·그림자·CP·HP 인데 개체값이 다른 활성 기록 → { recheck: [id], supersede: [{id, superseded_by}] }
 //   4-D: 그중 신뢰 기록(앱 ≥0.1.38)이 있으면 미신뢰 기록은 최신 신뢰 기록으로 대체하고, 남은 신뢰 기록끼리 개체값이 갈릴 때만 recheck
 export function planConflicts(items) {
   const groups = new Map();
@@ -142,12 +142,21 @@ export async function backfillSuperseded(sb, userId, items, ctx) {
   }
   let gone = new Set(plan.map((p) => p.id));
   let remaining = items.filter((it) => !gone.has(it.id));
-  // 4-D2 모드 기록(섀도/정화)이 같은 종·CP·HP·개체값의 일반 기록을 대체
+  // 4-D2 모드 기록(그림자/정화)이 같은 종·CP·HP·개체값의 일반 기록을 대체
   for (const p of planModeSupersede(remaining)) {
     const { error } = await sb.from("scan_items").update({ superseded: true, superseded_by: p.superseded_by }).eq("user_id", userId).eq("id", p.id);
     if (!error) { n++; gone.add(p.id); } else console.warn(`[backfill] mode-supersede ${p.id}: ${error.message}`);
   }
   remaining = remaining.filter((it) => !gone.has(it.id));
+  // 4-F.4 F: 최근 전체 동기화 세션과 일치하는 이전 기록 대체(일회성 정리도 여기서). 실DB: 0.1.38 세션 25건이 동기화 후에도 활성으로 남음
+  try {
+    const sync = await latestFullSyncSession(sb, userId);
+    for (const p of planSyncSupersede(remaining, sync)) {
+      const { error } = await sb.from("scan_items").update({ superseded: true, superseded_by: p.superseded_by }).eq("user_id", userId).eq("id", p.id);
+      if (!error) { n++; gone.add(p.id); } else console.warn(`[backfill] sync-supersede ${p.id}: ${error.message}`);
+    }
+    remaining = remaining.filter((it) => !gone.has(it.id));
+  } catch (e) { console.warn(`[backfill] sync-supersede 건너뜀: ${e.message}`); }
   const cplan = planConflicts(remaining);
   for (const p of cplan.supersede) {
     const { error } = await sb.from("scan_items").update({ superseded: true, superseded_by: p.superseded_by }).eq("user_id", userId).eq("id", p.id);
@@ -181,4 +190,33 @@ export function planNotSeen(items, session) {
   const end = new Date(session.ended_at).getTime();
   if (!Number.isFinite(end)) return [];
   return items.filter((it) => it.session_id !== session.session_id && !it.dismissed && !it.superseded && new Date(it.created_at).getTime() < end).map((it) => it.id);
+}
+
+// 4-F.4 F 전체 동기화 대체: 전체 동기화 세션(metrics.fullSync, 종료됨)의 기록과 종·폼·그림자·정화·개체값이 같고 CP·HP 가 같거나 한쪽이 없는
+//   이전 활성 기록(다른 세션, 세션 종료 전)은 그 세션의 기록(최신)으로 superseded. 앱은 한 세션 안에서 같은 개체(종·CP·HP·개체값)를 한 번만 기록하므로
+//   같은 새 기록에 이전 기록 여러 건이 대체될 수 있다. 순수 계산 → [{ id, superseded_by }]
+export function planSyncSupersede(items, session) {
+  if (!session || !session.session_id || !session.ended_at || !session.metrics?.fullSync) return [];
+  const end = new Date(session.ended_at).getTime();
+  if (!Number.isFinite(end)) return [];
+  const key = (r) => `${r.species_id}|${r.form || "Normal"}|${r.is_shadow ? 1 : 0}|${r.is_purified ? 1 : 0}|${ivKey(r)}`;
+  const fresh = new Map();
+  for (const r of items) {
+    if (r.session_id !== session.session_id || !hasIv(r) || r.dismissed || r.superseded) continue;
+    const k = key(r); if (!fresh.has(k)) fresh.set(k, []); fresh.get(k).push(r);
+  }
+  const out = [];
+  for (const r of items) {
+    if (r.session_id === session.session_id || !hasIv(r) || r.dismissed || r.superseded) continue;
+    if (!(new Date(r.created_at).getTime() < end)) continue;
+    const cands = (fresh.get(key(r)) || []).filter((o) => (r.cp == null || o.cp == null || o.cp === r.cp) && (r.hp == null || o.hp == null || o.hp === r.hp))
+      .sort((a, b) => String(a.created_at).localeCompare(String(b.created_at)));
+    if (cands.length) out.push({ id: r.id, superseded_by: cands[cands.length - 1].id });
+  }
+  return out;
+}
+// 최근 전체 동기화 세션(종료됨) 하나
+export async function latestFullSyncSession(sb, userId) {
+  const { data } = await sb.from("scan_sessions").select("session_id,metrics,ended_at,created_at").eq("user_id", userId).order("created_at", { ascending: false }).limit(20);
+  return (data || []).find((s) => s.metrics?.fullSync && s.ended_at) || null;
 }

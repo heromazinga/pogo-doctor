@@ -75,7 +75,7 @@ export async function POST(req) {
     const { data: prev } = await q;
     if (prev?.length) { existing = prev[0]; cpFilled = true; }
   }
-  // 4-C 규칙 ③: 강화·진화 후 같은 개체(같은 계열·폼·섀도·개체값, 레벨/CP 비감소)의 과거 기록(다른 세션 포함)을 superseded 로 표시.
+  // 4-C 규칙 ③: 강화·진화 후 같은 개체(같은 계열·폼·그림자·개체값, 레벨/CP 비감소)의 과거 기록(다른 세션 포함)을 superseded 로 표시.
   //   과거 후보가 서로 다른 2개 이상이면 대체하지 않고 새 기록에 recheck 표시
   let superseded = 0;
   if (!existing && anyIv) {
@@ -90,7 +90,7 @@ export async function POST(req) {
     const ids = [...(r.ambiguous ? [] : r.superseded.map((x) => x.id)), ...untrusted.map((x) => x.id)];
     if (ids.length) item._supersedes = ids;
   }
-  // 4-C.3 개체값 충돌: 같은 종·폼·섀도·CP·HP 인데 개체값이 다른 활성 기록이 있으면(막대 오판독 의심) 새 기록과 그 기록 모두 recheck "재스캔 필요"
+  // 4-C.3 개체값 충돌: 같은 종·폼·그림자·CP·HP 인데 개체값이 다른 활성 기록이 있으면(막대 오판독 의심) 새 기록과 그 기록 모두 recheck "재스캔 필요"
   let conflictIds = [];
   if (!existing && anyIv && item.cp != null && item.hp != null) {
     const { data: same } = await sb.from("scan_items").select("id,atk_iv,def_iv,sta_iv,app_version").eq("user_id", auth.userId).eq("dismissed", false).eq("superseded", false)
@@ -102,7 +102,7 @@ export async function POST(req) {
     if (oldOnes.length) item._supersedes = [...new Set([...(item._supersedes || []), ...oldOnes.map((x) => x.id)])];
     if (conflictIds.length) { item.recheck = true; item.recheck_reason = CONFLICT_REASON; item._supersedes = undefined; }
   }
-  // 4-D2: 스캔 모드(섀도/정화) 신뢰 기록은 같은 종·폼·CP·HP·개체값의 "일반 모드" 활성 기록을 대체 (반대 방향 없음)
+  // 4-D2: 스캔 모드(그림자/정화) 신뢰 기록은 같은 종·폼·CP·HP·개체값의 "일반 모드" 활성 기록을 대체 (반대 방향 없음)
   //   4-D3: 모드 기록 CP 가 null 이면 종·폼·HP·개체값 일치(CP 무관)로 대체, CP 가 있으면 CP 같거나 없는 일반 기록만
   if (!existing && anyIv && trustedNew && (item.is_shadow || item.is_purified) && item.hp != null) {
     let nq = sb.from("scan_items").select("id,cp").eq("user_id", auth.userId).eq("dismissed", false).eq("superseded", false)

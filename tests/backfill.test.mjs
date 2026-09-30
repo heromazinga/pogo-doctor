@@ -1,7 +1,7 @@
 // 4-C.2 스캔 기록 superseded 백필(planSupersede) + CP 검증(cpConsistentLevel)
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { planSupersede, planConflicts, planSuspects, isSuspectBars, planModeSupersede, planNotSeen } from "../app/lib/scanBackfill.js";
+import { planSupersede, planConflicts, planSuspects, isSuspectBars, planModeSupersede, planNotSeen, planSyncSupersede } from "../app/lib/scanBackfill.js";
 import { cpConsistentLevel } from "../app/lib/ivCalc.js";
 import { calcCP } from "../app/lib/cpm.js";
 import { calcHP } from "../app/lib/ivCalc.js";
@@ -99,10 +99,10 @@ test("4-C.4 과거 기록 의심 휴리스틱(planSuspects): 방어·HP ≤8 이
   assert.deepEqual(planSuspects([{ id: "a", atk_iv: 15, def_iv: 6, sta_iv: 8 }, { id: "b", atk_iv: 15, def_iv: 6, sta_iv: 8, recheck: true }, { id: "c", atk_iv: 15, def_iv: 15, sta_iv: 15 }]), ["a"]);
 });
 
-test("4-D2 스캔 모드 기록 우선(planModeSupersede): 섀도/정화 신뢰 기록이 같은 종·CP·HP·개체값의 일반 기록을 대체, 반대 방향·미신뢰 모드 기록·다른 개체값은 대체 없음", () => {
+test("4-D2 스캔 모드 기록 우선(planModeSupersede): 그림자/정화 신뢰 기록이 같은 종·CP·HP·개체값의 일반 기록을 대체, 반대 방향·미신뢰 모드 기록·다른 개체값은 대체 없음", () => {
   const normal = { ...item("n", 68, [15, 12, 14], 31), cp: 2634, hp: 163, app_version: "0.1.38", is_shadow: false, is_purified: false };
   const shadow = { ...item("s", 68, [15, 12, 14], 31), cp: 2634, hp: 163, app_version: "0.1.40", is_shadow: true, is_purified: false };
-  assert.deepEqual(planModeSupersede([normal, shadow]), [{ id: "n", superseded_by: "s" }], "섀도 모드 기록이 전날 일반 기록을 대체");
+  assert.deepEqual(planModeSupersede([normal, shadow]), [{ id: "n", superseded_by: "s" }], "그림자 모드 기록이 전날 일반 기록을 대체");
   assert.deepEqual(planModeSupersede([shadow, normal]), [{ id: "n", superseded_by: "s" }], "순서 무관(일반이 나중이어도)");
   const purified = { ...shadow, id: "p", is_shadow: false, is_purified: true };
   assert.deepEqual(planModeSupersede([normal, purified]), [{ id: "n", superseded_by: "p" }], "정화 모드도 동일");
@@ -142,4 +142,25 @@ test("4-F.2 전체 동기화 planNotSeen: fullSync·종료된 세션만, 다른 
   assert.deepEqual(planNotSeen(items, sess), ["old1"]);
   assert.deepEqual(planNotSeen(items, { ...sess, metrics: {} }), [], "부분 스캔(fullSync 없음)");
   assert.deepEqual(planNotSeen(items, { ...sess, ended_at: null }), [], "끝나지 않은 세션");
+});
+
+test("4-F.4 F 전체 동기화 대체 planSyncSupersede: 새 세션 기록과 종·폼·그림자·정화·개체값 같고 CP·HP 같거나 한쪽 없음 → 이전 기록 superseded, 불일치는 남김(not_seen 후보), 부분 스캔 세션은 없음", () => {
+  const sess = { session_id: "S2", ended_at: "2026-09-30T10:00:00Z", metrics: { fullSync: true } };
+  const mk = (id, sid, at, sp, ivs, cp, hp, extra = {}) => ({ id, session_id: sid, created_at: at, species_id: sp, form: "Normal", atk_iv: ivs[0], def_iv: ivs[1], sta_iv: ivs[2], cp, hp, is_shadow: false, is_purified: false, dismissed: false, superseded: false, ...extra });
+  const items = [
+    mk("o1", "S1", "2026-09-29T10:00:00Z", 5, [13, 10, 11], 905, 90),   // 리자드 905 → 새 기록 n1 과 일치
+    mk("o2", "S1", "2026-09-29T10:01:00Z", 5, [15, 14, 1], 900, 88),    // 새 기록 CP null → 대체
+    mk("o3", "S1", "2026-09-29T10:02:00Z", 25, [10, 10, 10], 500, 50),  // 피카츄 두 마리(같은 개체값) → 같은 새 기록으로 둘 다 대체
+    mk("o4", "S1", "2026-09-29T10:03:00Z", 25, [10, 10, 10], 500, 50),
+    mk("o5", "S1", "2026-09-29T10:04:00Z", 22, [13, 14, 13], 839, 80),  // 깨비드릴조: 새 기록 없음 → 남김
+    mk("o6", "S1", "2026-09-29T10:05:00Z", 5, [13, 10, 11], 905, 90, { is_shadow: true }), // 그림자는 별개 → 남김
+    mk("n1", "S2", "2026-09-30T09:00:00Z", 5, [13, 10, 11], 905, 90),
+    mk("n2", "S2", "2026-09-30T09:01:00Z", 5, [15, 14, 1], null, 88),
+    mk("n3", "S2", "2026-09-30T09:02:00Z", 25, [10, 10, 10], 500, 50),
+  ];
+  const plan = planSyncSupersede(items, sess).sort((a, b) => a.id.localeCompare(b.id));
+  assert.deepEqual(plan, [{ id: "o1", superseded_by: "n1" }, { id: "o2", superseded_by: "n2" }, { id: "o3", superseded_by: "n3" }, { id: "o4", superseded_by: "n3" }]);
+  assert.deepEqual(planSyncSupersede(items, { ...sess, metrics: {} }), [], "부분 스캔");
+  const left = new Set(plan.map((p) => p.id));
+  assert.deepEqual(planNotSeen(items.filter((it) => !left.has(it.id)), sess), ["o5", "o6"], "대체되지 않은 이전 기록만 not_seen 후보");
 });

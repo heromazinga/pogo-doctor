@@ -196,7 +196,7 @@ test("전설 상위종(뮤츠) 5/7/3 → 공격 IV 하한 미달로 레이드 �
   assert.equal(tagOf(v2, TAG.raid("에스퍼")).tier, "main");
 });
 
-test("4-B6 레이드 공격 IV 하한: 0/15/15 → 레이드 태그 없음, 10~11 → 보류(주력 불가), 12+ → 주력. 섀도도 동일. 기준 덮어쓰기(rulesOverride)", () => {
+test("4-B6 레이드 공격 IV 하한: 0/15/15 → 레이드 태그 없음, 10~11 → 보류(주력 불가), 12+ → 주력. 그림자도 동일. 기준 덮어쓰기(rulesOverride)", () => {
   const none = computeVerdict({ species_id: 815, ivs: { atk: 0, def: 15, sta: 15 }, level: 40 }, ctx());
   assert.equal(tagOf(none, TAG.raid("불꽃")), undefined, "저승갓숭 사례: 공격 0 은 레이드 묶음에 들어가면 안 됨");
   assert.equal(tagOf(computeVerdict({ species_id: 815, ivs: { atk: 9, def: 15, sta: 15 }, level: 40 }, ctx()), TAG.raid("불꽃")), undefined);
@@ -472,11 +472,11 @@ test("30일 내 커뮤니티 데이 대상 종(진화 계열 포함) → 박사�
   assert.equal(v0.tier, "transfer");
 });
 
-test("종족 순위: 메가 제외·중복 폼 제거·섀도 별도, 체육관은 전설 제외", () => {
+test("종족 순위: 메가 제외·중복 폼 제거·그림자 별도, 체육관은 전설 제외", () => {
   const r = getRankings(dataset);
   assert.ok(r.raid.fire.normal.length >= 3);
   assert.ok(!r.gym.some((g) => g.id === 150), "전설 뮤츠는 체육관 순위 제외");
-  assert.ok(r.raid.fire.shadow.find((x) => x.id === 815).score > r.raid.fire.normal.find((x) => x.id === 815).score, "섀도 점수 > 일반");
+  assert.ok(r.raid.fire.shadow.find((x) => x.id === 815).score > r.raid.fire.normal.find((x) => x.id === 815).score, "그림자 점수 > 일반");
 });
 
 test("태그 → purposes 파생", () => {
@@ -527,15 +527,18 @@ test("4-A2 진화 대기는 최종형이 주력일 때만: 리자몽 주력이�
   // 내 목록에 리자몽 15/15/15 가 6마리 → 최종형 기준 순위 7 = 보류 → 진화 대기 없음
   const myRows = Array.from({ length: 6 }, (_, i) => ({ id: `z${i}`, species_id: 6, form: "Normal", atk_iv: 15, def_iv: 15, sta_iv: 15, level: 50, is_shadow: false, status: "keep", tags: [] }));
   const v2 = computeVerdict({ species_id: 4, ivs: { atk: 14, def: 15, sta: 15 }, level: 20 }, ctx({ myRows }));
-  assert.equal(tagOf(v2, TAG.evolve("리자몽")), undefined);
-  assert.equal(v2.tier, "hold", "4-D3: 14/15/15 는 고개체 수집 보류(진화 대기 태그는 없음)");
+  // 4-F.4: 최종형이 레이드 상위종(top)이면 보류급이어도 진화 후보(보류)로 잇는다 (그림자 코일 → 그림자 자포코일 보호)
+  assert.equal(tagOf(v2, TAG.evolve("리자몽"))?.tier, "hold");
+  assert.equal(v2.tier, "hold");
   const v3 = computeVerdict({ species_id: 4, ivs: { atk: 13, def: 15, sta: 15 }, level: 20 }, ctx({ myRows }));
-  assert.equal(tagOf(v3, TAG.evolve("리자몽")), undefined); assert.equal(v3.tier, "transfer");
+  assert.equal(tagOf(v3, TAG.evolve("리자몽"))?.tier, "hold", "리자몽 보류(내 리자몽 중 7위)여도 상위종 → 진화 후보 보류"); assert.equal(v3.tier, "hold");
+  const v4 = computeVerdict({ species_id: 4, ivs: { atk: 9, def: 15, sta: 15 }, level: 20 }, ctx({ myRows }));
+  assert.equal(tagOf(v4, TAG.evolve("리자몽")), undefined, "공격 IV 하한 미달이면 최종형 레이드 태그 자체가 없어 진화 후보 없음"); assert.equal(v4.tier, "transfer");
 });
 
-test("4-A2 섀도 순위는 PvPoke shadoweligible 종만", () => {
+test("4-A2 그림자 순위는 PvPoke shadoweligible 종만", () => {
   const r = getRankings(dataset);
-  assert.ok(!r.raid.normal.shadow.some((x) => x.id === 474), "폴리곤Z(shadowEligible:false) 는 섀도 순위 제외");
+  assert.ok(!r.raid.normal.shadow.some((x) => x.id === 474), "폴리곤Z(shadowEligible:false) 는 그림자 순위 제외");
   assert.ok(r.raid.fire.shadow.some((x) => x.id === 815));
   assert.equal(r.raid.fire.normal[0].pct, 100);
 });
@@ -566,16 +569,18 @@ test("4-F ③ 리그 예비: 라이츄 3/13/13(슈퍼 스탯곱 391위, CP1480 �
   const relaxed = beginnerCtx({ reserve, storageMode: "relaxed", rulesOverride: { COLLECT_REPRESENTATIVE: 0 } });
   assert.equal(verdictForItem(a, relaxed).tier, "hold"); const vb2 = verdictForItem(b, relaxed);
   assert.equal(vb2.tier, "hold", vb2.summary); assert.ok(vb2.tags.find((t) => t.name === TAG.great)?.reason.includes("내 라이츄 중 2위"), vb2.summary);
-  // 빠듯이면 현행(박사행)
-  assert.equal(verdictForItem(a, beginnerCtx({ reserve, storageMode: "tight" })).tier, "transfer");
-  // BEGINNER_RULES=0 이면 적용 전(박사행)
-  assert.equal(verdictForItem(a, beginnerCtx({ reserve, rulesOverride: { BEGINNER_RULES: 0 } })).tier, "transfer");
+  // 빠듯이면 리그 예비는 없지만 4-F.4 종 대표 불변으로 보류(종 대표 끄면 박사행)
+  const vt = verdictForItem(a, beginnerCtx({ reserve, storageMode: "tight" }));
+  assert.equal(vt.tier, "hold"); assert.equal(vt.tags.find((t) => t.name === TAG.great), undefined, "빠듯: 리그 예비 없음"); assert.ok(vt.summary.includes("종 대표"));
+  assert.equal(verdictForItem(a, beginnerCtx({ reserve, storageMode: "tight", rulesOverride: { COLLECT_REPRESENTATIVE: 0 } })).tier, "transfer");
+  // BEGINNER_RULES=0 + 종 대표 끄면 적용 전(박사행)
+  assert.equal(verdictForItem(a, beginnerCtx({ reserve, rulesOverride: { BEGINNER_RULES: 0, COLLECT_REPRESENTATIVE: 0 } })).tier, "transfer");
   // 스탯곱 500위 밖(15/15/15 = 742위)은 예비 아님
   const c = scanRow("c", 26, [15, 15, 15], 24);
   assert.equal(buildReserveRanks(dataset, [], [c]).league.great.size, 0);
 });
 
-test("4-F ① 가성비 상위종: 전설·섀도 제외 풀 ≤12위 → 보류 '○○ 레이드'(공격 IV ≥10), 섀도 개체·공격 9 는 제외", () => {
+test("4-F ① 가성비 상위종: 전설·그림자 제외 풀 ≤12위 → 보류 '○○ 레이드'(공격 IV ≥10), 그림자 개체·공격 9 는 제외", () => {
   const r = getRankings2(dataset);
   const bg = budgetRankOf(r, "electric", 26, "Normal");
   assert.ok(bg && bg.budgetRank <= 12 && !bg.legendary, JSON.stringify(bg));
@@ -586,7 +591,7 @@ test("4-F ① 가성비 상위종: 전설·섀도 제외 풀 ≤12위 → 보류
   assert.ok(tag && tag.tier === "hold" && tag.reason.includes("가성비") && tag.metrics.beginner, JSON.stringify(tag));
   assert.equal(v.tier, "hold");
   assert.equal(computeVerdict({ species_id: 26, ivs: { atk: 9, def: 5, sta: 5 }, level: 30 }, beginnerCtx()).tags.find((x) => x.name === TAG.raid("전기")), undefined, "공격 IV 하한 10");
-  assert.equal(computeVerdict({ species_id: 26, ivs: { atk: 12, def: 5, sta: 5 }, level: 30, is_shadow: true }, beginnerCtx()).tags.find((x) => x.name === TAG.raid("전기") && x.metrics.budgetRank), undefined, "섀도는 가성비 풀 제외");
+  assert.equal(computeVerdict({ species_id: 26, ivs: { atk: 12, def: 5, sta: 5 }, level: 30, is_shadow: true }, beginnerCtx()).tags.find((x) => x.name === TAG.raid("전기") && x.metrics.budgetRank), undefined, "그림자는 가성비 풀 제외");
   assert.equal(computeVerdict({ species_id: 26, ivs: { atk: 12, def: 5, sta: 5 }, level: 30 }, ctx()).tier, "transfer", "초보자 기준 끄면 현행");
 });
 
@@ -612,14 +617,14 @@ test("4-F ② 레이드 예비: 타입마다 내 보관함 개체 점수 상위 
   assert.equal(r2.get("scan:h"), 1); assert.equal(r2.get("scan:l"), 2);
 });
 
-test("4-F.2 종 대표(보관함 여유만): 같은 종 3마리 중 개체값 합 최고만 보류 '수집(종 대표)', 나머지 박사행 사유에 비교 대상, 섀도·지역 폼은 별개 1마리", () => {
+test("4-F.2 종 대표(보관함 여유만): 같은 종 3마리 중 개체값 합 최고만 보류 '수집(종 대표)', 나머지 박사행 사유에 비교 대상, 그림자·지역 폼은 별개 1마리", () => {
   const a = scanRow("a", 26, [5, 6, 7], 20, { cp: 900 }), b = scanRow("b", 26, [10, 9, 8], 20, { cp: 1200 }), c = scanRow("c", 26, [4, 4, 4], 20, { cp: 800 });
   const sh = scanRow("s", 26, [3, 3, 3], 20, { is_shadow: true, cp: 700 });
   const al = { ...scanRow("al", 26, [2, 2, 2], 20, { cp: 650 }), form: "Alola" };
   // 레이드 예비(공격 10 인 b 가 전기 1위)가 섞이지 않도록 RESERVE_RAID_TOP_N 0 으로 만든 예비 순위로 종 대표만 검증
   const reserve = buildReserveRanks(dataset, [], [a, b, c, sh, al], { rules: { ...RULES, RESERVE_RAID_TOP_N: 0 } });
   assert.equal(reserve.rep.get("26:Normal:0:0")?.key, "scan:b");
-  assert.equal(reserve.rep.get("26:Normal:1:0")?.key, "scan:s", "섀도는 별개 대표");
+  assert.equal(reserve.rep.get("26:Normal:1:0")?.key, "scan:s", "그림자는 별개 대표");
   assert.equal(reserve.rep.get("26:Alola:0:0")?.key, "scan:al", "지역 폼은 별개 대표");
   // 가성비·레이드 예비 영향을 끄고(BUDGET 0, RESERVE_RAID_MIN_PCT 100) 종 대표만 검증
   const relaxed = beginnerCtx({ reserve, storageMode: "relaxed", rulesOverride: { BUDGET_RAID_TOP_RANK: 0 } });
@@ -627,12 +632,12 @@ test("4-F.2 종 대표(보관함 여유만): 같은 종 3마리 중 개체값 �
   assert.equal(vb.tier, "hold", vb.summary); assert.ok(vb.recommendedTags.includes(TAG.collectRep), JSON.stringify(vb.recommendedTags)); assert.ok(vb.summary.includes("종 대표"), vb.summary);
   assert.equal(va.tier, "transfer", va.summary); assert.ok(va.summary.includes("종 대표: 10/9/8 CP1200"), va.summary);
   assert.equal(verdictForItem(c, relaxed).tier, "transfer");
-  assert.equal(vs.tier, "hold", "섀도 대표"); assert.equal(val.tier, "hold", "알로라 대표");
-  // 보통·빠듯은 현행(대표도 박사행), 문구는 표시
+  assert.equal(vs.tier, "hold", "그림자 대표"); assert.equal(val.tier, "hold", "알로라 대표");
+  // 4-F.4 A 불변: 보통·빠듯에서도 대표는 절대 박사행이 아님
   const normal = beginnerCtx({ reserve, storageMode: "normal", rulesOverride: { BUDGET_RAID_TOP_RANK: 0 } });
-  assert.equal(verdictForItem(b, normal).tier, "transfer"); assert.ok(!verdictForItem(b, normal).recommendedTags.includes(TAG.collectRep));
+  assert.equal(verdictForItem(b, normal).tier, "hold"); assert.ok(verdictForItem(b, normal).recommendedTags.includes(TAG.collectRep));
   assert.ok(verdictForItem(a, normal).summary.includes("종 대표: 10/9/8 CP1200"));
-  assert.equal(verdictForItem(b, beginnerCtx({ reserve, storageMode: "tight", rulesOverride: { BUDGET_RAID_TOP_RANK: 0 } })).tier, "transfer");
+  assert.equal(verdictForItem(b, beginnerCtx({ reserve, storageMode: "tight", rulesOverride: { BUDGET_RAID_TOP_RANK: 0 } })).tier, "hold");
   // 끄기
   assert.equal(verdictForItem(b, beginnerCtx({ reserve, storageMode: "relaxed", rulesOverride: { BUDGET_RAID_TOP_RANK: 0, COLLECT_REPRESENTATIVE: 0 } })).tier, "transfer");
 });
@@ -652,4 +657,66 @@ test("4-F.2 레이드 예비 하한: 개체 점수가 가성비 풀 타입 1위�
   assert.equal(r.get("scan:hi"), 1); assert.equal(r.get("scan:lo"), undefined);
   const r0 = buildReserveRanks(dataset, [], [lo, hi], { rules: { ...RULES, RESERVE_RAID_MIN_PCT: 0 } }).raid.electric;
   assert.equal(r0.get("scan:lo"), 2, "하한 0 이면 포함");
+});
+
+// ─── 4-F.4 ───
+test("4-F.4 A 불변: 종·폼·그림자·정화별 대표 1마리는 어떤 보관함 여유에서도 박사행이 아니다 (그림자 코일 8/5/4 CP null · 11/2/15 CP285 → 대표 1마리 보류)", () => {
+  // 코일(81) 은 데이터셋에 없으므로 라이츄 그림자로 재현: 두 마리 모두 약한 개체, 한쪽 CP 없음(HP 로 레벨 후보)
+  const s1 = scanRow("s1", 26, [8, 5, 4], null, { is_shadow: true, cp: null, hp: 40 }), s2 = scanRow("s2", 26, [11, 2, 15], 10, { is_shadow: true, cp: 285 });
+  const reserve = buildReserveRanks(dataset, [], [s1, s2], { rules: { ...RULES, RESERVE_RAID_TOP_N: 0, BUDGET_RAID_TOP_RANK: 0 } });
+  const rep = reserve.rep.get("26:Normal:1:0"); assert.ok(rep, "그림자 대표 존재");
+  for (const mode of ["relaxed", "normal", "tight"]) {
+    const c = beginnerCtx({ reserve, storageMode: mode, rulesOverride: { BUDGET_RAID_TOP_RANK: 0 } });
+    const tiers = { s1: verdictForItem(s1, c).tier, s2: verdictForItem(s2, c).tier };
+    const repId = rep.key.replace("scan:", "");
+    assert.notEqual(tiers[repId], "transfer", `${mode}: 대표 ${repId} 는 박사행 금지 (${JSON.stringify(tiers)})`);
+    assert.ok(Object.values(tiers).some((t) => t !== "transfer"), `${mode}: 종 전체가 사라지면 안 됨`);
+  }
+});
+
+test("4-F.4 B 안농(201): 폼 미구분 → 박사행 제외·보류 '글자 구분 불가 — 수집 판단 보류'", () => {
+  const ds = { ...dataset, pokemon: [...dataset.pokemon, sp(201, "Unown", "안농", ["psychic"], 136, 91, 134, [], [])] };
+  const v = computeVerdict({ species_id: 201, ivs: { atk: 3, def: 4, sta: 5 }, level: 15 }, ctx({ dataset: ds }));
+  assert.equal(v.tier, "hold"); assert.ok(v.collect.some((c) => c.reason === "글자 구분 불가 — 수집 판단 보류"), JSON.stringify(v.collect)); assert.ok(v.summary.includes("글자 구분 불가"), v.summary);
+  assert.equal(computeVerdict({ species_id: 201, ivs: { atk: 3, def: 4, sta: 5 }, level: 15 }, ctx({ dataset: ds, rulesOverride: { BEGINNER_RULES: 0, FORM_UNKNOWN_HOLD_SPECIES: [] } })).tier, "transfer", "끄면 현행");
+});
+
+test("4-F.4 C 레이드 주력 보완: 상위종이라도 내 보관함 같은 타입 상위 6 밖이면 보류(번치코형), 특수 기술 필요한데 현재 기술이 아니면 보류", () => {
+  // 불꽃: 에이스번 15/x/x L40 ×6 이 상위 6 을 채움 → 리자몽 12/5/5 L20(리자몽 1마리뿐이라 '내 리자몽 중 1위' 는 통과) 는 보관함 순위 밖 → 보류
+  const strong = Array.from({ length: 6 }, (_, i) => scanRow(`c${i}`, 815, [15, 10, 10], 40));
+  const weak = scanRow("z", 6, [12, 5, 5], 20);
+  const reserve = buildReserveRanks(dataset, [], [...strong, weak]);
+  const cx = beginnerCtx({ reserve, rulesOverride: { COLLECT_REPRESENTATIVE: 0 } });
+  const inp = { id: "z", reserveKey: "scan:z", species_id: 6, ivs: { atk: 12, def: 5, sta: 5 }, level: 20 };
+  const t = computeVerdict(inp, cx).tags.find((x) => x.name === TAG.raid("불꽃"));
+  assert.ok(t && t.tier === "hold" && /상위 6 밖|위 → 보류/.test(t.reason), JSON.stringify(t));
+  // 같은 개체가 상위 6 안이면 주력
+  const t2 = computeVerdict(inp, beginnerCtx({ reserve: buildReserveRanks(dataset, [], [weak]), rulesOverride: { COLLECT_REPRESENTATIVE: 0 } })).tags.find((x) => x.name === TAG.raid("불꽃"));
+  assert.ok(t2 && t2.tier === "main" && t2.reason.includes("내 보관함 불꽃 1위"), JSON.stringify(t2));
+  // 보관함 밖 개체(reserveKey 없음, 웹 분석 입력)는 현행(주력)
+  assert.equal(computeVerdict({ species_id: 6, ivs: { atk: 12, def: 5, sta: 5 }, level: 20 }, cx).tags.find((x) => x.name === TAG.raid("불꽃"))?.tier, "main");
+  // C②: 에이스번은 블라스트번(특수) 기준 상위 — 현재 기술이 Flamethrower 면 주력 → 보류
+  const v = computeVerdict({ species_id: 815, ivs: { atk: 15, def: 14, sta: 14 }, level: 40, fast_move: "Fire Spin", charged_moves: ["Flamethrower"] }, ctx());
+  const tg = v.tags.find((x) => x.name === TAG.raid("불꽃"));
+  assert.ok(tg && tg.tier === "hold" && tg.reason.includes("특수 기술 미보유 → 보류"), JSON.stringify(tg));
+  assert.equal(computeVerdict({ species_id: 815, ivs: { atk: 15, def: 14, sta: 14 }, level: 40, fast_move: "Fire Spin", charged_moves: ["Blast Burn"] }, ctx()).tags.find((x) => x.name === TAG.raid("불꽃"))?.tier, "main");
+});
+
+test("4-F.4 D 종 대표 동점(합 차이 ≤1)은 용도별: 레이드 종은 공격, 리그 종은 스탯곱, 그 외 합→공격", () => {
+  // 라이츄(레이드 종: 가성비 1위): 15/13/15 vs 13/15/15 (합 43 동일) → 공격 15
+  const r1 = scanRow("r1", 26, [15, 13, 15], 20), r2 = scanRow("r2", 26, [13, 15, 15], 20);
+  const rr = buildReserveRanks(dataset, [], [r1, r2], { leagueRankings }).rep.get("26:Normal:0:0");
+  assert.equal(rr.key, "scan:r1"); assert.equal(rr.basis, "레이드 종 → 공격"); assert.ok(rr.tie);
+  // 마릴리(리그 종: 슈퍼 1위): 0/15/15(합 30, 스탯곱 1위) vs 1/15/15(합 31) → 합 차이 1 → 스탯곱 높은 0/15/15
+  const m1 = scanRow("m1", 184, [0, 15, 15], 20), m2 = scanRow("m2", 184, [1, 15, 15], 20);
+  // 테스트 풀이 작아 마릴리도 물 가성비 ≤12위(레이드 종)로 잡히므로 레이드 기준을 끄고 리그 종만 남긴다 (우선순위: 레이드 > 리그 > 합)
+  const noRaid = { ...RULES, BUDGET_RAID_TOP_RANK: 0, RAID_MID_RANK: 0 };
+  const rm = buildReserveRanks(dataset, [], [m1, m2], { leagueRankings, rules: noRaid }).rep.get("184:Normal:0:0");
+  assert.equal(rm.key, "scan:m1"); assert.equal(rm.basis, "리그 종 → 스탯곱");
+  // 합 차이 2 이상이면 합이 우선
+  assert.equal(buildReserveRanks(dataset, [], [m1, scanRow("m3", 184, [2, 15, 15], 20)], { leagueRankings, rules: noRaid }).rep.get("184:Normal:0:0").key, "scan:m3");
+  // 용도 없는 종(약한몬 999 는 전설이라 제외 → 도치마론 650): 합 → 공격
+  const d1 = scanRow("d1", 650, [10, 10, 10], 20), d2 = scanRow("d2", 650, [12, 9, 9], 20);
+  const rd = buildReserveRanks(dataset, [], [d1, d2], { leagueRankings, rules: noRaid }).rep.get("650:Normal:0:0");
+  assert.equal(rd.key, "scan:d2"); assert.equal(rd.basis, "합 → 공격");
 });

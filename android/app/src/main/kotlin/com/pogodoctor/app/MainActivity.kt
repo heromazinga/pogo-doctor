@@ -49,7 +49,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 // 4-D 스캔 모드 표시명
-private fun scanModeLabel(m: String) = when (m) { "shadow" -> "섀도"; "purified" -> "정화"; else -> "일반" }
+private fun scanModeLabel(m: String) = when (m) { "shadow" -> "그림자"; "purified" -> "정화"; else -> "일반" }
 
 // 4-E 첫 화면(카드 4개): 연결 상태 / 연속 스캔(모드 선택 시작·중지) / 정리(박사행·태그 목록) / 웹 열기. 나머지는 "고급 설정"(접힘).
 // 사용자 흐름: 스캔 → 정리 목록에서 복사 → 게임 검색창 붙여넣기 → 수 확인 → 전체 선택 → 보내기. 게임 조작 없음.
@@ -156,10 +156,10 @@ class MainActivity : ComponentActivity() {
                         if (scanMode != "normal") Text("${CaptureService.modeEmoji(scanMode)} ${scanModeLabel(scanMode)} 모드 — 기록이 ${scanModeLabel(scanMode)} 개체로 저장됩니다. 세션이 끝나면 일반으로 돌아갑니다.", fontSize = 14.sp, color = Color(0xFFFFD93D))
                         Button(onClick = { stopScan(); scanMode = "normal" }) { Text("스캔 중지") }
                     } else {
-                        Text("모드를 골라 시작하세요. 섀도/정화는 게임 검색으로 먼저 거른 뒤 스캔합니다(세션이 끝나면 일반으로 복귀). 이로치·배경·XXL·XXS·코스튬·다이맥스는 박사행 보호 조건이 지킵니다.", fontSize = 12.sp, color = dim)
+                        Text("모드를 골라 시작하세요. 그림자/정화는 게임 검색으로 먼저 거른 뒤 스캔합니다(세션이 끝나면 일반으로 복귀). 이로치·배경·XXL·XXS·코스튬·다이맥스는 박사행 보호 조건이 지킵니다.", fontSize = 12.sp, color = dim)
                         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                             Button(enabled = paired, onClick = { scanMode = "normal"; startScan("normal") }) { Text("일반 스캔 시작") }
-                            OutlinedButton(enabled = paired, onClick = { scanMode = "shadow"; startScan("shadow") }) { Text("👤 섀도") }
+                            OutlinedButton(enabled = paired, onClick = { scanMode = "shadow"; startScan("shadow") }) { Text("👤 그림자") }
                             OutlinedButton(enabled = paired, onClick = { scanMode = "purified"; startScan("purified") }) { Text("✨ 정화") }
                         }
                         // 4-F.2 전체 동기화: 게임에서 수동으로 정리해 기록과 실제 보관함이 다를 때. 세션이 끝나면 웹이 "다시 보이지 않은 이전 기록" 숨김을 제안(확인창·복구 가능). 태그 필터 등 부분 스캔에는 쓰지 말 것
