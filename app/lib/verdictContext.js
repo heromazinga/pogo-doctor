@@ -52,7 +52,7 @@ export async function buildVerdictContext(req, { storageMode, myRows, scanItems 
   else {
     let scans = Array.isArray(scanItems) ? scanItems : [];
     if (!Array.isArray(scanItems) && user && sb) { try { scans = (await fetchActiveScanItems(sb, user.userId)).items; } catch (e) { console.warn(`[verdict] 스캔 기록 조회 실패(예비 순위 생략): ${e.message}`); } }
-    try { reserve = buildReserveRanks(dataset, rows, scans); if (user) reserveCache.set(user.userId, { at: Date.now(), reserve, datasetAt: dataset.generatedAt }); } catch (e) { console.warn(`[verdict] 예비 순위 계산 실패: ${e.message}`); }
+    try { reserve = buildReserveRanks(dataset, rows, scans, { leagueRankings }); if (user) reserveCache.set(user.userId, { at: Date.now(), reserve, datasetAt: dataset.generatedAt }); } catch (e) { console.warn(`[verdict] 예비 순위 계산 실패: ${e.message}`); }
   }
   return {
     ctx: { dataset, leagueRankings, eventTargets: events.targets || [], myRows: rows, storageMode: mode, now: Date.now(), settings, maxBattleSpecies, reserve },

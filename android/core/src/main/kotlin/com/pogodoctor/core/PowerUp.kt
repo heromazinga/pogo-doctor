@@ -10,7 +10,7 @@ object PowerUp {
 
     data class Cost(val stardust: Int, val candy: Int, val xlCandy: Int)
 
-    // 현재 레벨에서 한 단계(0.5) 강화 비용. 섀도(×1.2)·정화(×0.9) 배율은 호출측에서 적용
+    // 현재 레벨에서 한 단계(0.5) 강화 비용. 그림자(×1.2)·정화(×0.9) 배율은 호출측에서 적용
     fun costAt(level: Double): Cost? {
         val i = level.toInt() - 1
         if (level < 1.0 || i >= STARDUST.size) return null
@@ -19,7 +19,7 @@ object PowerUp {
         return Cost(STARDUST[i], candy, xl)
     }
 
-    // OCR 로 읽은 비용(일부 null 가능)과 일치하는 현재 레벨 목록 (0.5 단위). 섀도/정화 배율 후보도 함께 허용
+    // OCR 로 읽은 비용(일부 null 가능)과 일치하는 현재 레벨 목록 (0.5 단위). 그림자/정화 배율 후보도 함께 허용
     fun levelsForCost(stardust: Int?, candy: Int?, xlCandy: Int?): List<Double> {
         if (stardust == null && candy == null && xlCandy == null) return emptyList()
         val out = ArrayList<Double>()

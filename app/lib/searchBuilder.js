@@ -12,7 +12,7 @@ export const PROTECT_NOTE = "박사행 검색어에는 보호 조건(&!#&!색이
 
 const key = (x) => `${x.species_id}|${x.hp ?? ""}|${x.cp ?? ""}|${x.is_shadow ? 1 : 0}`;
 
-// 검색식이 개체 x 를 잡는가 (도감번호 OR, hp OR, cp 범위 OR 로 판단. 폼·섀도는 검색식에 넣지 않으므로 잡힌다고 본다)
+// 검색식이 개체 x 를 잡는가 (도감번호 OR, hp OR, cp 범위 OR 로 판단. 폼·그림자는 검색식에 넣지 않으므로 잡힌다고 본다)
 // 4-C.2 박사행 보호 조건(항상 적용): 태그 없음·이로치 아님·반짝반짝 아님·XXL 아님·배경 없음. 검색어 길이 계산에 포함.
 //   한국어판 동작은 사용자 확인("색이 다른" 띄어쓰기 포함). 코스튬은 검색어가 없어 사용자가 태그로 보호한다.
 // 4-D2: !특별 = 코스튬. 4-D3: !다이맥스 = 맥스배틀 개체(한국어판 검색어, 사용자 확인). 거다이맥스가 "다이맥스" 검색에 포함되지 않으면 "!거다이맥스" 추가 예정(사용자 확인 후)
@@ -55,7 +55,7 @@ export function buildGroups(targets, population, { maxLen = DEFAULT_MAX_LEN, str
     if (t.hp == null) { skipped.push({ id: t.id, reason: "HP 없음" }); continue; }
     usable.push(t);
   }
-  // 섀도 여부·폼별로 분리(검색식에 섀도·폼 키워드를 쓰지 않으므로 같은 묶음에 섞지 않는다)
+  // 그림자 여부·폼별로 분리(검색식에 그림자·폼 키워드를 쓰지 않으므로 같은 묶음에 섞지 않는다)
   const buckets = new Map();
   for (const t of usable) { const b = `${t.is_shadow ? 1 : 0}|${t.form || "Normal"}`; if (!buckets.has(b)) buckets.set(b, []); buckets.get(b).push(t); }
   const nonTargets = population.filter((p) => !targetIds.has(p.id));

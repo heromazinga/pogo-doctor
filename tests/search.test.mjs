@@ -39,7 +39,7 @@ test("같은 종·HP 의 보관 개체: 검증된 CP 로 좁히고, CP 도 같�
   assert.equal(g3.groups.length, 0, "CP 까지 같으면 안전한 검색식 없음");
 });
 
-test("HP 없는 대상은 제외, 섀도·폼은 별도 묶음, 길이 상한 분할", () => {
+test("HP 없는 대상은 제외, 그림자·폼은 별도 묶음, 길이 상한 분할", () => {
   const targets = [t("a", 700, null), t("b", 700, 154, null, { is_shadow: true }), t("c", 381, 118), t("d", 26, 120, null, { form: "Alolan" })];
   const { groups, skipped } = buildGroups(targets, targets);
   assert.equal(skipped[0].reason, "HP 없음");

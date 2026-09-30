@@ -1,7 +1,7 @@
 // 4-B 목록 매칭 규칙 (앱 저장 /api/device/pokemon 과 웹 저장 공용, 순수 함수 → 테스트)
 //  ① 종(진화 계열 내 변경 허용)·폼·개체값(공/방/HP 셋 다 확정·동일)·포획일(둘 다 있고 동일)
 //  ② 종·폼·CP·HP (둘 다 있고 동일)  — 개체값 미확정·포획일 없을 때
-//  ③ (4-C) 강화·진화 후 갱신: 같은 진화 계열·폼·섀도, 개체값 3개 확정·동일, 새 레벨 ≥ 기존 레벨(레벨이 없으면 CP 로 비교).
+//  ③ (4-C) 강화·진화 후 갱신: 같은 진화 계열·폼·그림자, 개체값 3개 확정·동일, 새 레벨 ≥ 기존 레벨(레벨이 없으면 CP 로 비교).
 //     후보가 2개 이상이면 병합하지 않고 { ambiguous:true, candidates } 를 돌려준다(호출측이 재확인 표시).
 //  일치하면 새 행 대신 갱신: CP·HP·레벨·기술·종(계열 내)·플래그를 새 값으로, 사용자가 편집한 memo·tags·status·purposes·game_tags 는 유지.
 const hasIv = (r) => [r.atk_iv, r.def_iv, r.sta_iv].every((v) => Number.isInteger(v));
@@ -31,7 +31,7 @@ export function findMatch(rows, incoming, familyOf = null) {
     const m = (rows || []).find((r) => r.species_id === incoming.species_id && sameForm(r, incoming) && shadowEq(r) && r.cp === incoming.cp && r.hp === incoming.hp);
     if (m) return { row: m, rule: "cp+hp" };
   }
-  // ③ 계열·폼·섀도·개체값 동일 + 강화·진화(레벨/CP 비감소). 포획일이 둘 다 있고 다르면 다른 개체
+  // ③ 계열·폼·그림자·개체값 동일 + 강화·진화(레벨/CP 비감소). 포획일이 둘 다 있고 다르면 다른 개체
   if (hasIv(incoming)) {
     const cands = (rows || []).filter((r) => sameFamily(r) && sameForm(r, incoming) && shadowEq(r) && sameIv(r, incoming) && caughtCompatible(r, incoming) && notDowngraded(r, incoming) === true);
     if (cands.length === 1) return { row: cands[0], rule: "iv+level" };

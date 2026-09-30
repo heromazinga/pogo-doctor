@@ -30,7 +30,7 @@ export async function GET(req) {
   const { ctx } = await buildVerdictContext(req, { scanItems: scans });
   ctx.rulesOverride = override;
   // 4-F: 예비 순위 상수를 덮어쓰면 보관함 상대 순위도 그 값으로 다시 계산
-  if (["RESERVE_RAID_TOP_N", "RESERVE_RAID_MIN_PCT", "LEAGUE_RESERVE_PRODUCT_RANK", "RAID_MIN_ATK_IV"].some((k) => override[k] != null)) ctx.reserve = buildReserveRanks(ctx.dataset, ctx.myRows || [], scans, { rules: { ...RULES, ...override } });
+  if (["RESERVE_RAID_TOP_N", "RESERVE_RAID_MIN_PCT", "LEAGUE_RESERVE_PRODUCT_RANK", "RAID_MIN_ATK_IV"].some((k) => override[k] != null)) ctx.reserve = buildReserveRanks(ctx.dataset, ctx.myRows || [], scans, { rules: { ...RULES, ...override }, leagueRankings: ctx.leagueRankings });
   const tiers = { main: 0, hold: 0, transfer: 0, need_appraisal: 0 };
   const holdReasons = {}, mainTags = {};
   const tally = (v) => {

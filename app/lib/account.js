@@ -97,7 +97,7 @@ export async function verifySignInEmail(email, token) {
   return { error: null, user: data?.user || null, session: data?.session || null };
 }
 
-// 중복 기준: 종·폼·CP·개체값(공/방/HP)·섀도 동일
+// 중복 기준: 종·폼·CP·개체값(공/방/HP)·그림자 동일
 const dupKey = (r) => [r.species_id, r.form || "Normal", r.cp ?? "", r.atk_iv ?? "", r.def_iv ?? "", r.sta_iv ?? "", r.is_shadow ? 1 : 0].join("|");
 
 // 익명 목록(스냅샷)을 현재 로그인 계정으로 병합. 중복은 건너뜀. 반환 { inserted, skipped, error }

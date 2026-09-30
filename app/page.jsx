@@ -1987,7 +1987,7 @@ export default function Home() {
       )}
 
 
-      {/* ─── 4-E 내 보관함 Panel: 스캔 기록(활성 전체) + 저장 목록 통합. 판정 등급·추천 태그·개체값·섀도/정화·출처 표시, 검색·필터 ─── */}
+      {/* ─── 4-E 내 보관함 Panel: 스캔 기록(활성 전체) + 저장 목록 통합. 판정 등급·추천 태그·개체값·그림자/정화·출처 표시, 검색·필터 ─── */}
       {showStorage && (() => {
         const items = [
           ...scans.map((it) => ({ key: "scan:" + it.id, kind: "scan", id: it.id, speciesId: it.species_id, name: it.name_kr || `#${it.species_id}`, form: it.form, cp: it.cp, hp: it.hp, atk: it.atk_iv, def: it.def_iv, sta: it.sta_iv, level: it.level, isShadow: !!it.is_shadow, isPurified: !!it.is_purified, isShiny: false, verdict: it.verdict, tags: it.verdict?.recommendedTags || [], gameTags: it.game_tags || [], recheck: !!it.recheck, recheckReason: it.recheck_reason, at: it.created_at, session: it.session_id })),
@@ -2048,7 +2048,7 @@ export default function Home() {
                   <button key={k} onClick={() => setStorageSrc(k)} style={storageSrc === k ? s.chipActive : s.chip}>{label}</button>
                 ))}
                 <span style={{ width: 1, background: "#2a3a5c", margin: "0 2px", alignSelf: "stretch" }} />
-                {[["all", "모드 전체"], ["normal", "일반"], ["shadow", "👤 섀도"], ["purified", "✨ 정화"]].map(([k, label]) => (
+                {[["all", "모드 전체"], ["normal", "일반"], ["shadow", "👤 그림자"], ["purified", "✨ 정화"]].map(([k, label]) => (
                   <button key={k} onClick={() => setStorageForm(k)} style={storageForm === k ? s.chipActive : s.chip}>{label}</button>
                 ))}
                 <span style={{ width: 1, background: "#2a3a5c", margin: "0 2px", alignSelf: "stretch" }} />
@@ -2075,7 +2075,7 @@ export default function Home() {
                       <div style={{ flex: 1, minWidth: 0 }}>
                         <div style={{ fontSize: 13, fontWeight: 700, color: "#e0e0e0" }}>
                           {x.isShiny ? "✨" : ""}{x.name}{x.kind === "scan" && x.form && x.form !== "Normal" ? ` (${x.form})` : ""}
-                          {x.isShadow && <span style={{ ...s.tagBadge, color: "#d0a8ff", marginLeft: 4 }}>👤 섀도</span>}
+                          {x.isShadow && <span style={{ ...s.tagBadge, color: "#d0a8ff", marginLeft: 4 }}>👤 그림자</span>}
                           {x.isPurified && <span style={{ ...s.tagBadge, color: "#9cd3ff", marginLeft: 4 }}>✨ 정화</span>}
                           <span style={{ ...s.tagBadge, color: x.kind === "scan" ? "#4ecdc4" : "#8899aa", marginLeft: 4 }}>{x.kind === "scan" ? "📷 스캔" : "📋 저장"}</span>
                           {x.kind === "row" && <span style={{ ...s.tagBadge, color: x.status === "transfer" ? "#ff6b6b" : "#4ecdc4", marginLeft: 4 }}>{STATUS_LABELS[x.status] || x.status}</span>}

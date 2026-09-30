@@ -69,7 +69,7 @@ test("레벨 추정: 반 레벨(25.5) 왕복", () => {
   assert.equal(estimateLevel(cp, base, ivs).level, 25.5);
 });
 
-test("prepareMember: 개체값·기술 미입력 → 추정 플래그, 섀도 보정", () => {
+test("prepareMember: 개체값·기술 미입력 → 추정 플래그, 그림자 보정", () => {
   const m = prepareMember(rows[3], dataset.pokemon.find((p) => p.id === 6), { moveStats });
   assert.equal(m.ivAssumed, true);
   assert.equal(m.movesAssumed, true);
@@ -77,8 +77,8 @@ test("prepareMember: 개체값·기술 미입력 → 추정 플래그, 섀도 �
   assert.ok(m.fastPool.length >= 2 && m.chargedPool.length >= 2, "미입력이면 종의 검증 기술 전체가 후보");
   const shadow = prepareMember(rows[1], dataset.pokemon.find((p) => p.id === 68), { moveStats });
   const normal = prepareMember({ ...rows[1], is_shadow: false }, dataset.pokemon.find((p) => p.id === 68), { moveStats });
-  assert.ok(Math.abs(shadow.atk / normal.atk - 1.2) < 1e-9, "섀도 공격 ×1.2");
-  assert.ok(Math.abs(shadow.def / normal.def - 0.833) < 1e-9, "섀도 방어 ×0.833");
+  assert.ok(Math.abs(shadow.atk / normal.atk - 1.2) < 1e-9, "그림자 공격 ×1.2");
+  assert.ok(Math.abs(shadow.def / normal.def - 0.833) < 1e-9, "그림자 방어 ×0.833");
 });
 
 test("레이드 팀: 마기라스 보스 → 격투 타입 상위, 박사행 제외, 부족분 채움", () => {

@@ -3,7 +3,7 @@ import { getServiceClient } from "../../lib/supabaseServer";
 import { rateLimit, clientIp } from "../../lib/deviceAuth";
 import { resolveUser, buildVerdictContext } from "../../lib/verdictContext";
 import { fillMissingVerdicts, isStaleVerdict } from "../../lib/scanVerdict";
-import { backfillSuperseded, planNotSeen, NOT_SEEN_REASON } from "../../lib/scanBackfill";
+import { backfillSuperseded, planNotSeen, planSyncSupersede, NOT_SEEN_REASON } from "../../lib/scanBackfill";
 import { invalidateReserveCache } from "../../lib/verdictContext";
 import { fetchActiveScanItems } from "../../lib/scanQuery";
 import { isTrustedVersion, MIN_TRUSTED_APP_VERSION } from "../../lib/appVersion";
@@ -53,7 +53,7 @@ export async function POST(req) {
     return NextResponse.json({ ok: true });
   }
   // 4-D2: 구버전 앱 기록 숨김(복구 가능: dismissed_reason='before_session' 유지) — 신뢰 아닌 기록(app_version < 0.1.38 또는 null)만.
-  //   4-D 의 "최신 세션 이전" 기준은 섀도/정화 모드 세션 후 누르면 전체 스캔 기록까지 숨겨져 폐지
+  //   4-D 의 "최신 세션 이전" 기준은 그림자/정화 모드 세션 후 누르면 전체 스캔 기록까지 숨겨져 폐지
   if (b.action === "dismiss_untrusted" || b.action === "dismiss_before") {
     let active;
     try { ({ items: active } = await fetchActiveScanItems(sb, user.userId, { select: "id,app_version" })); } catch (e) { return NextResponse.json({ error: e.message }, { status: 500 }); }
@@ -74,9 +74,14 @@ export async function POST(req) {
     if (!session) return NextResponse.json({ error: "세션 없음" }, { status: 404 });
     if (!session.metrics?.fullSync || !session.ended_at) return NextResponse.json({ error: "전체 동기화 세션이 아니거나 아직 끝나지 않았습니다" }, { status: 400 });
     let active;
-    try { ({ items: active } = await fetchActiveScanItems(sb, user.userId, { select: "id,session_id,created_at,dismissed,superseded" })); } catch (e) { return NextResponse.json({ error: e.message }, { status: 500 }); }
-    const ids = planNotSeen(active, session);
-    if (b.action === "not_seen_count") return NextResponse.json({ ok: true, count: ids.length, session_id: sid });
+    try { ({ items: active } = await fetchActiveScanItems(sb, user.userId, { select: "id,session_id,created_at,dismissed,superseded,species_id,form,is_shadow,is_purified,cp,hp,atk_iv,def_iv,sta_iv" })); } catch (e) { return NextResponse.json({ error: e.message }, { status: 500 }); }
+    // 4-F.4 F: 새 기록과 일치하는 이전 기록은 숨김이 아니라 superseded(대체). 나머지가 not_seen 후보
+    const sup = planSyncSupersede(active, session);
+    const supIds = new Set(sup.map((x) => x.id));
+    const ids = planNotSeen(active.filter((it) => !supIds.has(it.id)), session);
+    if (b.action === "not_seen_count") return NextResponse.json({ ok: true, count: ids.length, superseded: sup.length, session_id: sid });
+    let superseded = 0;
+    for (const x of sup) { const { error } = await sb.from("scan_items").update({ superseded: true, superseded_by: x.superseded_by }).eq("user_id", user.userId).eq("id", x.id); if (!error) superseded++; }
     let count = 0;
     for (let i = 0; i < ids.length; i += 200) {
       const chunk = ids.slice(i, i + 200);
@@ -85,7 +90,7 @@ export async function POST(req) {
       count += chunk.length;
     }
     invalidateReserveCache(user.userId);
-    return NextResponse.json({ ok: true, count, session_id: sid });
+    return NextResponse.json({ ok: true, count, superseded, session_id: sid });
   }
   if (b.action === "restore_dismissed") {
     const { data: rows, error } = await sb.from("scan_items").update({ dismissed: false, dismissed_reason: null }).eq("user_id", user.userId).eq("dismissed", true).in("dismissed_reason", ["before_session", NOT_SEEN_REASON]).select("id");

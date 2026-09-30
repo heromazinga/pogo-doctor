@@ -29,7 +29,7 @@ export function calcCP(base, ivs, level) {
 }
 
 // CP·개체값·종족값으로 레벨 추정. 정확히 일치하는 레벨이 있으면 exact=true, 없으면 가장 가까운 레벨(추정)
-// 섀도 포켓몬도 CP 계산은 동일(공격 보정은 전투에서만 적용)
+// 그림자 포켓몬도 CP 계산은 동일(공격 보정은 전투에서만 적용)
 export function estimateLevel(cp, base, ivs) {
   if (!cp || !base) return { level: null, exact: false };
   let best = null;

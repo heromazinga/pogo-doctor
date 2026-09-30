@@ -25,7 +25,7 @@ test("② 종·폼·CP·HP 일치 → 갱신 (개체값 미확정·포획일 없
   assert.equal(findMatch(rows, { species_id: 4, form: "Normal", cp: 500, hp: 60 }, familyOf)?.rule, "cp+hp");
   assert.equal(findMatch(rows, { species_id: 4, form: "Normal", cp: 500, hp: 61 }, familyOf), null);
   assert.equal(findMatch(rows, { species_id: 5, form: "Normal", cp: 500, hp: 60 }, familyOf), null, "②는 계열 확장 없음");
-  assert.equal(findMatch(rows, { species_id: 4, form: "Normal", cp: 500, hp: 60, is_shadow: true }, familyOf), null, "섀도 여부 다르면 별개");
+  assert.equal(findMatch(rows, { species_id: 4, form: "Normal", cp: 500, hp: 60, is_shadow: true }, familyOf), null, "그림자 여부 다르면 별개");
   assert.equal(findMatch(rows, { species_id: 4, form: "Normal", cp: 500 }, familyOf), null, "HP 없으면 ② 불가");
 });
 

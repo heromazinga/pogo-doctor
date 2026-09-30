@@ -29,7 +29,7 @@ class Phase31cTest {
         assertEquals(listOf(37.0, 37.5, 38.0, 38.5), PowerUp.levelsForCost(9000, 12, null), "9000·12사탕은 L37~38.5")
         assertEquals(listOf(39.0, 39.5, 40.0, 40.5), PowerUp.levelsForCost(10000, null, null))
         assertEquals(listOf(43.0, 43.5), PowerUp.levelsForCost(12000, null, 12))
-        assertTrue(PowerUp.levelsForCost(3600, null, null).contains(21.0), "섀도 ×1.2 (3000→3600)")
+        assertTrue(PowerUp.levelsForCost(3600, null, null).contains(21.0), "그림자 ×1.2 (3000→3600)")
         assertTrue(PowerUp.levelsForCost(123, null, null).isEmpty())
     }
 
