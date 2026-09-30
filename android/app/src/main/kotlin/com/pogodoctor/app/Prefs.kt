@@ -73,6 +73,10 @@ class Prefs(ctx: Context) {
     var scanMode: String
         get() = plain.getString("scan_mode", "normal")!!.takeIf { it in listOf("normal", "shadow", "purified") } ?: "normal"
         set(v) = plain.edit().putString("scan_mode", v).apply()
+    // 4-E.2 박사행 묶음 상태(검색어 → "copied"|"done"), 앱 재시작 후에도 유지. JSON 객체 문자열
+    var cleanupStates: String
+        get() = plain.getString("cleanup_states", "{}")!!
+        set(v) = plain.edit().putString("cleanup_states", v).apply()
     var lastScanReport: String
         get() = plain.getString("last_scan_report", "")!!
         set(v) = plain.edit().putString("last_scan_report", v).apply()

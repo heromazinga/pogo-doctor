@@ -111,6 +111,18 @@ export default function Home() {
   const [cleanupDone, setCleanupDone] = useState({}); // query → true
   const [scanPending, setScanPending] = useState(0); // 4-D2: 판정 재계산 청크 남은 수
   const [scanCount, setScanCount] = useState(null); // 4-D3: 활성 스캔 기록 수 (내 목록 패널 안내용)
+  // 4-E 내 보관함: 스캔 기록(활성 전체) + 저장 목록을 한 화면에. 기본 화면(세션 준비 후 1회 자동 열림). 검색·필터(판정/태그/출처/모드)
+  const [showStorage, setShowStorage] = useState(false);
+  const [storageQ, setStorageQ] = useState("");
+  const [storageTier, setStorageTier] = useState("all");
+  const [storageTag, setStorageTag] = useState("all");
+  const [storageSrc, setStorageSrc] = useState("all");
+  const [storageForm, setStorageForm] = useState("all");
+  const storageAutoOpened = useRef(false);
+  // 4-E.2: window.confirm 대체(앱 WebView 는 WebChromeClient 없이는 confirm 이 즉시 false → 버튼 무반응 실측). 브라우저·WebView 동일 동작
+  const [confirmBox, setConfirmBox] = useState(null); // { message, resolve }
+  const askConfirm = (message) => new Promise((resolve) => setConfirmBox({ message, resolve }));
+  const answerConfirm = (ok) => { const c = confirmBox; setConfirmBox(null); c?.resolve(ok); };
   const [copied, setCopied] = useState(null);
   const [editing, setEditing] = useState(null); // { id, status, purposes, memo }
   const [thinking, setThinking] = useState(false); // 첫 텍스트 도착 전(모델 thinking 구간)
@@ -292,6 +304,10 @@ export default function Home() {
     } catch (e) { setScanError(e.message); } finally { setScanBusy(false); }
   };
   const openScans = async () => { setShowScans(true); await loadScans(); };
+  // 4-E: 보관함 열기 = 스캔 기록 조회(판정 보충 포함) + 저장 목록 판정. 세션이 준비되면 1회 자동으로 연다(기본 화면)
+  const openStorage = async () => { setShowStorage(true); await loadScans(); if (collection.length && !Object.keys(verdicts).length) loadVerdicts(); };
+  // 4-E.2: 자동 열기는 앱 WebView(UA PogoDoctorApp)에서만. PC·크롬은 기존 첫 화면(분석)
+  useEffect(() => { if (session && inApp && !storageAutoOpened.current) { storageAutoOpened.current = true; openStorage(); } }, [session, inApp]); // eslint-disable-line react-hooks/exhaustive-deps
   // 4-D3: 내 목록 패널 안내의 스캔 기록 수는 /api/scan 응답(activeCount)에서 — 아직 조회 전이면 한 번 조회(별도 count 호출 없음)
   useEffect(() => {
     if (showCollection && session && scanCount == null && !scanBusy) loadScans();
@@ -314,7 +330,7 @@ export default function Home() {
     const isTransfer = cat.category === "transfer";
     const rows = g.targetIds.filter((x) => x.startsWith("row:")).length;
     const msg = isTransfer ? `이 묶음 ${g.expected}마리를 게임에서 박사에게 보냈습니까? 스캔 기록을 정리하고${rows ? ` 내 목록 ${rows}건을 삭제합니다` : ""}. 계속할까요?` : `이 묶음 ${g.expected}마리에 게임에서 태그를 달았습니까? 스캔 기록을 정리합니다(내 목록은 유지).`;
-    if (!window.confirm(msg)) return;
+    if (!(await askConfirm(msg))) return;
     setCleanupBusy(true);
     try {
       const res = await fetch("/api/cleanup", { method: "POST", headers: { "Content-Type": "application/json", ...(await authHeader()) }, body: JSON.stringify({ action: "done", targetIds: g.targetIds, deleteRows: isTransfer }) });
@@ -328,7 +344,7 @@ export default function Home() {
   const purgeTransferred = async () => {
     const targets = collection.filter((c) => c.status === "transfer");
     if (!targets.length) return;
-    if (!window.confirm(`박사에게 보낼 예정 ${targets.length}마리를 목록에서 삭제합니다 (게임에서 실제로 보낸 뒤 누르세요). 계속할까요?`)) return;
+    if (!(await askConfirm(`박사에게 보낼 예정 ${targets.length}마리를 목록에서 삭제합니다 (게임에서 실제로 보낸 뒤 누르세요). 계속할까요?`))) return;
     let fail = 0;
     for (const t of targets) { const { error } = await deleteMyPokemon(t.id); if (error) fail++; }
     await reloadCollection();
@@ -1776,9 +1792,10 @@ export default function Home() {
       </div>
 
       {/* ─── Collection FAB ─── */}
-      <button style={s.fab} onClick={() => setShowCollection(true)}>
-        📋
-        {collection.length > 0 && <span style={s.fabBadge}>{collection.length}</span>}
+      {/* 4-E: FAB 는 통합 보관함(스캔 기록 + 저장 목록). 저장 목록 단독 패널은 보관함 안의 "고급" 으로 */}
+      <button style={s.fab} onClick={openStorage} title="내 보관함">
+        📦
+        {(scans.length + collection.length > 0 || scanCount > 0) && <span style={s.fabBadge}>{scans.length ? scans.length + collection.length : (scanCount || 0) + collection.length}</span>}
       </button>
 
       {/* ─── 내 포켓몬 목록 Panel ─── */}
@@ -1786,7 +1803,7 @@ export default function Home() {
         <div style={s.collOverlay}>
           <div style={s.collPanel}>
             <div style={s.collHeader}>
-              <h2 style={{ fontSize: 18, fontWeight: 800, color: "#e0e0e0" }}>📋 내 포켓몬 목록 ({collection.length})</h2>
+              <h2 style={{ fontSize: 18, fontWeight: 800, color: "#e0e0e0" }}>📋 저장 목록 ({collection.length}) <span style={{ fontSize: 11, color: "#8899aa", fontWeight: 400 }}>고급</span></h2>
               <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
                 <button onClick={openScans} style={{ background: "none", border: "1px solid #2a3a5c", borderRadius: 8, color: "#4ecdc4", fontSize: 11, padding: "4px 8px", cursor: "pointer", fontFamily: "'Outfit',sans-serif" }}>📷 스캔 기록</button>
                 <button onClick={openCleanup} style={{ background: "none", border: "1px solid #2a3a5c", borderRadius: 8, color: "#ffd93d", fontSize: 11, padding: "4px 8px", cursor: "pointer", fontFamily: "'Outfit',sans-serif" }}>🧹 정리 도우미</button>
@@ -1796,10 +1813,10 @@ export default function Home() {
                 <button style={s.collClose} onClick={() => { setShowCollection(false); setEditing(null); setCollStatusFilter("all"); setCollPurposeFilter("all"); setCollTierFilter("all"); setCollTagFilter("all"); }}>✕</button>
               </div>
             </div>
-            {/* 4-D3: 내 목록(저장한 개체) ≠ 스캔 기록(판정·정리 대상) 혼동 방지 */}
+            {/* 4-D3/4-E: 저장 목록(직접 저장한 개체)만 편집하는 고급 화면. 스캔 기록까지 합친 화면은 📦 내 보관함 */}
             <div style={{ ...s.sourceNotice, marginBottom: 10, display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
-              <span>ℹ️ 이 목록은 <b>직접 저장한 개체</b>입니다. 앱 연속 스캔으로 기록된 <b>스캔 기록 {scanCount == null ? "…" : `${scanCount}마리`}(판정·정리 대상)</b>는 스캔 기록 패널에 있습니다.</span>
-              <button onClick={openScans} style={{ ...s.chip, fontSize: 11 }}>📷 스캔 기록으로 이동</button>
+              <span>ℹ️ 여기는 <b>직접 저장한 개체</b>의 편집 화면입니다. 스캔 기록 {scanCount == null ? "…" : `${scanCount}마리`}까지 합친 화면은 <b>📦 내 보관함</b>입니다.</span>
+              <button onClick={() => { setShowCollection(false); openStorage(); }} style={{ ...s.chip, fontSize: 11 }}>📦 내 보관함으로</button>
             </div>
             {sessionNotice && <div style={s.sourceNotice}>{sessionNotice}</div>}
             {collError && <div style={s.error}>{collError}</div>}
@@ -1963,6 +1980,127 @@ export default function Home() {
         </div>
       )}
 
+
+      {/* ─── 4-E 내 보관함 Panel: 스캔 기록(활성 전체) + 저장 목록 통합. 판정 등급·추천 태그·개체값·섀도/정화·출처 표시, 검색·필터 ─── */}
+      {showStorage && (() => {
+        const items = [
+          ...scans.map((it) => ({ key: "scan:" + it.id, kind: "scan", id: it.id, speciesId: it.species_id, name: it.name_kr || `#${it.species_id}`, form: it.form, cp: it.cp, hp: it.hp, atk: it.atk_iv, def: it.def_iv, sta: it.sta_iv, level: it.level, isShadow: !!it.is_shadow, isPurified: !!it.is_purified, isShiny: false, verdict: it.verdict, tags: it.verdict?.recommendedTags || [], gameTags: it.game_tags || [], recheck: !!it.recheck, recheckReason: it.recheck_reason, at: it.created_at, session: it.session_id })),
+          ...collection.map((c) => ({ key: "row:" + c.id, kind: "row", id: c.id, speciesId: c.pokemonId, name: c.name, form: c.form, cp: c.cp || null, hp: c.raw.hp, atk: c.atkIv, def: c.defIv, sta: c.staIv, level: c.raw.level, isShadow: c.isShadow, isPurified: c.isPurified, isShiny: c.isShiny, verdict: verdicts[c.id], tags: [...new Set([...(c.tags || []), ...(verdicts[c.id]?.recommendedTags || [])])], gameTags: c.raw.game_tags || [], recheck: false, status: c.status, memo: c.memo, at: c.raw.created_at, entry: c })),
+        ];
+        const tierOf = (x) => (x.recheck ? "recheck" : x.verdict?.tier || "none");
+        const q = storageQ.trim().toLowerCase();
+        const list = items
+          .filter((x) => (!q || String(x.name).toLowerCase().includes(q) || String(x.speciesId) === q)
+            && (storageTier === "all" || tierOf(x) === storageTier)
+            && (storageTag === "all" || x.tags.includes(storageTag))
+            && (storageSrc === "all" || x.kind === storageSrc)
+            && (storageForm === "all" || (storageForm === "shadow" ? x.isShadow : storageForm === "purified" ? x.isPurified : !x.isShadow && !x.isPurified)))
+          .sort((a, b) => a.speciesId - b.speciesId || (b.cp || 0) - (a.cp || 0));
+        const counts = {}; for (const x of items) counts[tierOf(x)] = (counts[tierOf(x)] || 0) + 1;
+        const allTags = [...new Set(items.flatMap((x) => x.tags))].sort();
+        const tierLabels = { all: "전체", main: "✅ 주력", hold: "🟡 보류", transfer: "❌ 박사행", need_appraisal: "❔ 판정 필요", recheck: "⚠️ 재확인", none: "판정 전" };
+        const ivText = (x) => (Number.isInteger(x.atk) && Number.isInteger(x.def) && Number.isInteger(x.sta) ? `${x.atk}/${x.def}/${x.sta} (${Math.round(((x.atk + x.def + x.sta) / 45) * 100)}%)` : "개체값 없음");
+        return (
+          <div style={s.collOverlay}>
+            <div style={s.collPanel}>
+              <div style={s.collHeader}>
+                <h2 style={{ fontSize: 18, fontWeight: 800, color: "#e0e0e0" }}>📦 내 보관함 ({items.length})</h2>
+                <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap", justifyContent: "flex-end" }}>
+                  <button onClick={loadScans} disabled={scanBusy} style={{ ...s.chip, fontSize: 10 }} title="새로고침">🔄</button>
+                  <button onClick={openCleanup} style={{ background: "none", border: "1px solid #2a3a5c", borderRadius: 8, color: "#ffd93d", fontSize: 11, padding: "4px 8px", cursor: "pointer", fontFamily: "'Outfit',sans-serif" }}>🧹 정리 도우미</button>
+                  <button onClick={() => { setShowStorage(false); setShowCollection(true); }} style={{ background: "none", border: "1px solid #2a3a5c", borderRadius: 8, color: "#8899aa", fontSize: 11, padding: "4px 8px", cursor: "pointer", fontFamily: "'Outfit',sans-serif" }} title="직접 저장한 개체 편집·내보내기">📋 저장 목록(고급)</button>
+                  <button onClick={() => { setShowStorage(false); openScans(); }} style={{ background: "none", border: "1px solid #2a3a5c", borderRadius: 8, color: "#8899aa", fontSize: 11, padding: "4px 8px", cursor: "pointer", fontFamily: "'Outfit',sans-serif" }} title="세션 측정값·일괄 저장/숨김">📷 스캔 기록(고급)</button>
+                  <button style={s.collClose} onClick={() => setShowStorage(false)}>✕</button>
+                </div>
+              </div>
+              <div style={{ fontSize: 11, color: "#8899aa", lineHeight: 1.6, marginBottom: 8 }}>
+                앱 연속 스캔 기록 <b style={{ color: "#c8d6e5" }}>{scans.length}</b> + 직접 저장 <b style={{ color: "#c8d6e5" }}>{collection.length}</b>. 판정·정리는 이 기록 전체가 대상입니다.
+                흐름: 스캔 → <b style={{ color: "#ffd93d" }}>🧹 정리 도우미</b>에서 복사 → 게임 검색창에 붙여넣기 → 수 확인 → 전체 선택 → 보내기/태그.
+              </div>
+              {scanError && <div style={s.error}>{scanError}</div>}
+              {collError && <div style={s.error}>{collError}</div>}
+              {scanPending > 0 && <div style={{ ...s.sourceNotice, marginBottom: 8 }}>⏳ 판정 갱신 중 — {scanPending}건 남음 (한 번에 100건씩, 🔄 로 이어서)</div>}
+              {saveNotice && <div style={s.collNote}>{saveNotice} <button onClick={() => setSaveNotice(null)} style={{ ...s.chip, fontSize: 10, marginLeft: 8, padding: "2px 6px" }}>닫기</button></div>}
+              <input style={{ ...s.input, fontSize: 13, padding: "9px 12px", marginBottom: 8 }} placeholder="🔍 이름 또는 도감번호로 검색" value={storageQ} onChange={(e) => setStorageQ(e.target.value)} />
+              <div style={s.collFilterRow}>
+                {Object.entries(tierLabels).filter(([k]) => k === "all" || counts[k]).map(([k, label]) => (
+                  <button key={k} onClick={() => setStorageTier(k)} style={storageTier === k ? s.collFilterActive : s.collFilterBtn}>
+                    <span style={{ fontSize: 11 }}>{label}</span>
+                    <span style={{ fontSize: 10, opacity: 0.5 }}>{k === "all" ? items.length : counts[k] || 0}</span>
+                  </button>
+                ))}
+              </div>
+              <div style={{ ...s.collFilterRow, alignItems: "center" }}>
+                {[["all", "출처 전체"], ["scan", "📷 스캔"], ["row", "📋 저장"]].map(([k, label]) => (
+                  <button key={k} onClick={() => setStorageSrc(k)} style={storageSrc === k ? s.chipActive : s.chip}>{label}</button>
+                ))}
+                <span style={{ width: 1, background: "#2a3a5c", margin: "0 2px", alignSelf: "stretch" }} />
+                {[["all", "모드 전체"], ["normal", "일반"], ["shadow", "👤 섀도"], ["purified", "✨ 정화"]].map(([k, label]) => (
+                  <button key={k} onClick={() => setStorageForm(k)} style={storageForm === k ? s.chipActive : s.chip}>{label}</button>
+                ))}
+                <span style={{ width: 1, background: "#2a3a5c", margin: "0 2px", alignSelf: "stretch" }} />
+                <select style={{ ...s.select, fontSize: 11, padding: "6px 28px 6px 8px", width: "auto" }} value={storageTag} onChange={(e) => setStorageTag(e.target.value)}>
+                  <option value="all">태그 전체</option>
+                  {allTags.map((t) => <option key={t} value={t}>{t}</option>)}
+                </select>
+              </div>
+              {items.length === 0 && !scanBusy && (
+                <div style={s.collEmpty}>
+                  <div style={{ fontSize: 40, marginBottom: 12 }}>📦</div>
+                  <div>아직 기록이 없습니다</div>
+                  <div style={{ fontSize: 12, marginTop: 4, opacity: 0.5 }}>앱에서 "연속 스캔" 을 켜고 포켓몬GO 평가 화면을 넘기세요</div>
+                </div>
+              )}
+              {scanBusy && items.length === 0 && <div style={{ fontSize: 12, color: "#8899aa" }}>불러오는 중…</div>}
+              {items.length > 0 && list.length === 0 && <div style={{ textAlign: "center", padding: "30px 20px", color: "#8899aa", fontSize: 13 }}>조건에 맞는 포켓몬이 없습니다</div>}
+              <div style={{ fontSize: 10, color: "#576574", marginBottom: 6 }}>{list.length}마리 표시</div>
+              <div style={s.collList}>
+                {list.map((x) => (
+                  <div key={x.key} style={{ ...s.collItem, flexDirection: "column", alignItems: "stretch" }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                      <img src={`https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/${x.speciesId}.png`} alt="" style={{ width: 36, height: 36, imageRendering: "pixelated" }} />
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <div style={{ fontSize: 13, fontWeight: 700, color: "#e0e0e0" }}>
+                          {x.isShiny ? "✨" : ""}{x.name}{x.kind === "scan" && x.form && x.form !== "Normal" ? ` (${x.form})` : ""}
+                          {x.isShadow && <span style={{ ...s.tagBadge, color: "#d0a8ff", marginLeft: 4 }}>👤 섀도</span>}
+                          {x.isPurified && <span style={{ ...s.tagBadge, color: "#9cd3ff", marginLeft: 4 }}>✨ 정화</span>}
+                          <span style={{ ...s.tagBadge, color: x.kind === "scan" ? "#4ecdc4" : "#8899aa", marginLeft: 4 }}>{x.kind === "scan" ? "📷 스캔" : "📋 저장"}</span>
+                          {x.kind === "row" && <span style={{ ...s.tagBadge, color: x.status === "transfer" ? "#ff6b6b" : "#4ecdc4", marginLeft: 4 }}>{STATUS_LABELS[x.status] || x.status}</span>}
+                        </div>
+                        <div style={{ fontSize: 11, color: "#8899aa" }}>CP{x.cp || "?"} HP{x.hp || "?"} · {ivText(x)}{x.level ? ` L${x.level}` : ""}{x.recheck ? ` · ⚠️ ${x.recheckReason || "재확인 필요"}` : ""}{x.gameTags.length ? ` · 🏷 게임 태그(${x.gameTags.join(", ")})` : ""}</div>
+                        {x.verdict ? <div style={{ fontSize: 11, color: TIER_COLORS[x.verdict.tier] || "#8899aa", marginTop: 2, whiteSpace: "pre-wrap" }} title={(x.verdict.tags || []).map((t) => `${t.name}: ${t.reason}`).join("\n")}>{x.verdict.summary}</div> : <div style={{ fontSize: 10, color: "#576574", marginTop: 2 }}>판정 계산 중 — 🔄 로 새로고침</div>}
+                        {x.tags.length > 0 && <div style={{ display: "flex", gap: 4, flexWrap: "wrap", marginTop: 3 }}>{x.tags.map((t) => <span key={t} style={{ ...s.tagBadge, color: "#4ecdc4", border: "1px solid rgba(78,205,196,0.3)" }}>🏷 {t}</span>)}</div>}
+                        {x.memo && <div style={{ fontSize: 10, color: "#ffd93d", marginTop: 2 }}>📝 {x.memo}</div>}
+                      </div>
+                    </div>
+                    <div style={{ display: "flex", gap: 6, marginTop: 6 }}>
+                      {x.kind === "scan" ? <>
+                        <button onClick={() => scanAction("save", [x.id], { status: "keep" })} disabled={scanBusy} style={{ ...s.chip, fontSize: 11, flex: 1 }}>저장 목록에 보관{x.tags.length ? ` (${x.tags.join(", ")})` : ""}</button>
+                        <button onClick={() => scanAction("dismiss", [x.id])} disabled={scanBusy} style={{ ...s.chip, fontSize: 11, color: "#8899aa" }}>숨김</button>
+                      </> : <>
+                        <button onClick={() => { setShowStorage(false); setShowCollection(true); }} style={{ ...s.chip, fontSize: 11, flex: 1 }}>✏️ 저장 목록에서 편집</button>
+                      </>}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+        );
+      })()}
+      {/* ─── 4-E.2 페이지 내 확인 모달 (window.confirm 대체) ─── */}
+      {confirmBox && (
+        <div style={{ position: "fixed", inset: 0, background: "rgba(10,22,40,0.75)", zIndex: 400, display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }} onClick={() => answerConfirm(false)}>
+          <div style={{ background: "#1a2744", border: "1px solid #2a3a5c", borderRadius: 14, padding: 18, maxWidth: 420, width: "100%" }} onClick={(e) => e.stopPropagation()}>
+            <div style={{ fontSize: 14, color: "#e0e0e0", lineHeight: 1.6, whiteSpace: "pre-wrap" }}>{confirmBox.message}</div>
+            <div style={{ display: "flex", gap: 8, marginTop: 14 }}>
+              <button onClick={() => answerConfirm(true)} style={{ ...s.keepBtn, flex: 1, padding: 10 }}>확인</button>
+              <button onClick={() => answerConfirm(false)} style={{ ...s.resetBtn, flex: 1, margin: 0, padding: 10 }}>취소</button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* ─── 4-B5 정리 도우미 Panel ─── */}
       {showCleanup && (
         <div style={s.collOverlay}>
@@ -1993,6 +2131,15 @@ export default function Home() {
                   <div key={g.query} style={{ ...s.collItem, flexDirection: "column", alignItems: "stretch", marginTop: 6, opacity: cleanupDone[g.query] ? 0.5 : 1 }}>
                     <div style={{ fontSize: 11, color: "#8899aa" }}>{cat.fixed ? <b style={{ color: "#a890f0" }}>{g.label}</b> : <>묶음 {i + 1}/{cat.groups.length} · <b style={{ color: "#ffd93d" }}>{cat.protect ? `게임 결과 ≤ 예상 ${g.expected}마리` : `예상 ${g.expected}마리`}</b></>}{g.withCp ? " · CP 조건 포함" : ""}{g.overlap > 0 ? <span style={{ color: "#ff6b6b" }}> · ⚠️ 다른 개체 최대 {g.overlap}마리 포함 가능</span> : ""}{cat.fixed ? " · 예상 수 없음(앱이 모르는 정보 — 게임 결과를 보고 태그)" : ` · ${g.targetIds.map((id) => cleanup.names[id]).filter(Boolean).slice(0, 8).join(", ")}${g.targetIds.length > 8 ? " …" : ""}`}</div>
                     <code style={{ fontSize: 12, color: "#e0e0e0", wordBreak: "break-all", marginTop: 4, userSelect: "all" }}>{g.query}</code>
+                    {/* 4-E.2 포함 포켓몬 보기: 보내기 전 남길 개체를 알아보고 태그를 달 수 있게 */}
+                    {!cat.fixed && g.targetIds.length > 0 && cleanup.members && (
+                      <details style={{ marginTop: 4 }}>
+                        <summary style={{ fontSize: 10, color: "#8899aa", cursor: "pointer" }}>포함 포켓몬 {g.targetIds.length}마리 보기</summary>
+                        {g.targetIds.map((id) => { const m = cleanup.members[id]; if (!m) return <div key={id} style={{ fontSize: 10, color: "#576574" }}>{cleanup.names[id] || id}</div>; return (
+                          <div key={id} style={{ fontSize: 10, color: "#c8d6e5", padding: "1px 0" }}>{m.is_shadow ? "👤 " : ""}{m.is_purified ? "✨ " : ""}{m.name}{m.form && m.form !== "Normal" ? ` (${m.form})` : ""} · CP{m.cp ?? "?"} HP{m.hp ?? "?"} · {Number.isInteger(m.atk) ? `${m.atk}/${m.def}/${m.sta} (${Math.round(((m.atk + m.def + m.sta) / 45) * 100)}%)` : "개체값 없음"}{m.level ? ` L${m.level}` : ""} <span style={{ color: "#576574" }}>{id.startsWith("scan:") ? "스캔" : "저장"}</span></div>
+                        ); })}
+                      </details>
+                    )}
                     <div style={{ display: "flex", gap: 6, marginTop: 6 }}>
                       <button onClick={() => copyQuery(g)} style={{ ...s.chip, fontSize: 11, flex: 1 }}>{copied === g.query ? "복사됨 ✓" : "📋 복사"}</button>
                       {!cleanupDone[g.query] && !cat.fixed && <button onClick={() => cleanupGroupDone(cat, g)} disabled={cleanupBusy} style={{ ...s.chip, fontSize: 11, color: cat.category === "transfer" ? "#ff6b6b" : "#4ecdc4" }}>{cat.category === "transfer" ? "보냄 처리 완료" : "완료(정리)"}</button>}
@@ -2013,7 +2160,7 @@ export default function Home() {
         <div style={s.collOverlay}>
           <div style={s.collPanel}>
             <div style={s.collHeader}>
-              <h2 style={{ fontSize: 18, fontWeight: 800, color: "#e0e0e0" }}>📷 스캔 기록 ({scans.length})</h2>
+              <h2 style={{ fontSize: 18, fontWeight: 800, color: "#e0e0e0" }}>📷 스캔 기록 ({scans.length}) <span style={{ fontSize: 11, color: "#8899aa", fontWeight: 400 }}>고급 · 세션 측정값</span></h2>
               <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
                 <button onClick={loadScans} disabled={scanBusy} style={{ ...s.chip, fontSize: 10 }}>🔄</button>
                 <button style={s.collClose} onClick={() => setShowScans(false)}>✕</button>
@@ -2026,9 +2173,9 @@ export default function Home() {
               <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 10 }}>
                 <button onClick={() => scanAction("save", scans.map((x) => x.id))} disabled={scanBusy} style={{ ...s.keepBtn, width: "auto", padding: "8px 12px" }}>✅ 추천대로 전부 저장 ({scans.length})</button>
                 <button onClick={() => scanAction("save", scans.filter((x) => x.verdict?.tier !== "transfer").map((x) => x.id))} disabled={scanBusy} style={{ ...s.chip, fontSize: 11 }}>보관 추천만 저장 ({scans.filter((x) => x.verdict?.tier !== "transfer").length})</button>
-                <button onClick={() => { if (window.confirm("스캔 기록을 모두 지웁니다 (내 목록은 그대로). 계속할까요?")) scanAction("clear", []); }} disabled={scanBusy} style={{ ...s.chip, fontSize: 11, color: "#ff6b6b" }}>전부 지우기</button>
+                <button onClick={async () => { if (await askConfirm("스캔 기록을 모두 지웁니다 (내 목록은 그대로). 계속할까요?")) scanAction("clear", []); }} disabled={scanBusy} style={{ ...s.chip, fontSize: 11, color: "#ff6b6b" }}>전부 지우기</button>
                 {/* 4-D: 전체 스캔 세션 이전 기록 숨김(복구 가능) — 최신 세션 기준 */}
-                <button onClick={() => { if (window.confirm("구버전 앱(0.1.38 미만 또는 버전 없음)으로 기록된 스캔 기록을 모두 숨깁니다(내 목록은 그대로, \"숨김 복구\" 로 되돌릴 수 있음). 계속할까요?")) scanAction("dismiss_untrusted", []); }} disabled={scanBusy} style={{ ...s.chip, fontSize: 11, color: "#ffd93d" }}>구버전 앱 기록 숨김</button>
+                <button onClick={async () => { if (await askConfirm("구버전 앱(0.1.38 미만 또는 버전 없음)으로 기록된 스캔 기록을 모두 숨깁니다(내 목록은 그대로, \"숨김 복구\" 로 되돌릴 수 있음). 계속할까요?")) scanAction("dismiss_untrusted", []); }} disabled={scanBusy} style={{ ...s.chip, fontSize: 11, color: "#ffd93d" }}>구버전 앱 기록 숨김</button>
                 <button onClick={() => scanAction("restore_dismissed", [])} disabled={scanBusy} style={{ ...s.chip, fontSize: 11, color: "#8899aa" }}>숨김 복구</button>
               </div>
             )}

@@ -48,8 +48,12 @@ export async function GET(req) {
   // 4-D2: 판정 재계산이 남아 있으면(pending) 박사행 묶음은 잠금 — 되돌릴 수 없으므로 옛 규칙 판정으로 보내지 않게. 태그·수집은 유지(되돌릴 수 있음)
   for (const cat of categories) if (cat.category === "transfer" && fill.pending > 0) { cat.locked = true; cat.lockReason = `판정 재계산 중 ${fill.pending}건 — 잠시 후 다시 열기`; }
   const names = Object.fromEntries(all.map((x) => [x.id, x.name_kr]));
+  // 4-E.2 묶음 "포함 포켓몬 보기" 용 개체 요약 (이름·폼·CP·HP·개체값·레벨·섀도/정화)
+  const members = {};
+  for (const it of items) members[`scan:${it.id}`] = { name: it.name_kr, form: it.form || "Normal", cp: it.cp, hp: it.hp, atk: it.atk_iv, def: it.def_iv, sta: it.sta_iv, level: it.level, is_shadow: Boolean(it.is_shadow), is_purified: Boolean(it.is_purified) };
+  for (const r of rows) members[`row:${r.id}`] = { name: r.name_kr, form: r.form || "Normal", cp: r.cp, hp: r.hp, atk: r.atk_iv, def: r.def_iv, sta: r.sta_iv, level: r.level, is_shadow: Boolean(r.is_shadow), is_purified: Boolean(r.is_purified) };
   const gameTagged = all.filter((x) => (x.game_tags || []).length).length;
-  return NextResponse.json({ categories, names, population: all.length, scans: items.length, truncated, filled: fill.filled, pending: fill.pending, gameTagged, maxLen, protect: PROTECT_SUFFIX, note: EXPECTED_LIMIT_NOTE, protectNote: PROTECT_NOTE, backfill: backfill ? { ran: backfill.ran, superseded: backfill.superseded, conflicts: backfill.conflicts, suspects: backfill.suspects, version: backfill.version } : null, at: new Date().toISOString() });
+  return NextResponse.json({ categories, names, members, population: all.length, scans: items.length, truncated, filled: fill.filled, pending: fill.pending, gameTagged, maxLen, protect: PROTECT_SUFFIX, note: EXPECTED_LIMIT_NOTE, protectNote: PROTECT_NOTE, backfill: backfill ? { ran: backfill.ran, superseded: backfill.superseded, conflicts: backfill.conflicts, suspects: backfill.suspects, version: backfill.version } : null, at: new Date().toISOString() });
 }
 
 export async function POST(req) {

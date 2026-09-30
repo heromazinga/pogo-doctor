@@ -63,6 +63,10 @@ class CaptureService : Service() {
         const val ACTION_CAPTURE_DELAYED = "com.pogodoctor.app.CAPTURE_DELAYED"
         const val ACTION_SCAN_TOGGLE = "com.pogodoctor.app.SCAN_TOGGLE"   // 4-B 연속 스캔 켜기/끄기
         const val ACTION_REFRESH_NOTIF = "com.pogodoctor.app.REFRESH_NOTIF" // 4-B5 알림 갱신(정리 복사 상태)
+        const val ACTION_SCAN_START = "com.pogodoctor.app.SCAN_START"     // 4-E 모드를 지정해 연속 스캔 시작 (EXTRA_MODE: normal|shadow|purified)
+        const val ACTION_SCAN_STOP = "com.pogodoctor.app.SCAN_STOP"       // 4-E 연속 스캔 중지
+        const val EXTRA_MODE = "mode"
+        fun modeEmoji(m: String?) = when (m) { "shadow" -> "👤"; "purified" -> "✨"; else -> "📷" }
         @Volatile var scanning = false
         @Volatile var scanLine: String = ""
         private const val CHANNEL = "capture"
@@ -83,6 +87,7 @@ class CaptureService : Service() {
     private var width = 0; private var height = 0; private var dpi = 0
 
     private var bubble: BubbleView? = null
+    private var menu: View? = null        // 4-E 오버레이 아이콘 메뉴
     private var card: View? = null
     private var busy = false
 
@@ -116,6 +121,15 @@ class CaptureService : Service() {
                 if (scanning) stopScan() else startScan()
                 return START_NOT_STICKY
             }
+            // 4-E: 모드를 정해 시작(앱 첫 화면·오버레이 메뉴). 이미 스캔 중이면 그 세션을 끝내고 새 모드로 시작
+            ACTION_SCAN_START -> {
+                if (projection == null) { toast("캡처 서비스가 실행 중이 아닙니다 — 앱에서 오버레이 시작"); return START_NOT_STICKY }
+                val m = intent?.getStringExtra(EXTRA_MODE)?.takeIf { it in listOf("normal", "shadow", "purified") } ?: "normal"
+                if (scanning) stopScan()
+                prefs.scanMode = m; startScan()
+                return START_NOT_STICKY
+            }
+            ACTION_SCAN_STOP -> { if (scanning) stopScan(); return START_NOT_STICKY }
             ACTION_CAPTURE_DELAYED -> {
                 if (projection == null) { toast("캡처 서비스가 실행 중이 아닙니다 — 앱에서 오버레이 시작"); return START_NOT_STICKY }
                 val delay = prefs.captureDelayMs.toLong()
@@ -152,17 +166,21 @@ class CaptureService : Service() {
         val copyTransfer = PendingIntent.getActivity(this, 5, Intent(this, TrampolineActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK).putExtra(TrampolineActivity.EXTRA_ACTION, "copy_transfer"), flags)
         val copyTag = PendingIntent.getActivity(this, 6, Intent(this, TrampolineActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK).putExtra(TrampolineActivity.EXTRA_ACTION, "choose_tag"), flags)
         val icon = Icon.createWithResource(this, R.drawable.ic_notif)
-        val title = if (scanning) "연속 스캔 중(${scan?.modeLabel ?: "일반"}) — 평가 화면을 넘기세요" else getString(R.string.notif_title)
+        // 4-E: 섀도/정화 모드 중에는 제목에 모드를 크게(앞에) 표시
+        val sm = scan
+        val title = if (scanning && sm != null && sm.mode != "normal") "${modeEmoji(sm.mode)} ${sm.modeLabel} 모드 스캔 중 — 평가 화면을 넘기세요 (끝나면 일반으로 복귀)"
+            else if (scanning) "연속 스캔 중(일반) — 평가 화면을 넘기세요" else getString(R.string.notif_title)
         val b = Notification.Builder(this, CHANNEL)
             .setSmallIcon(R.drawable.ic_notif).setContentTitle(title).setContentText(text ?: (if (scanning) scanLine else getString(R.string.notif_text)))
             .setStyle(Notification.BigTextStyle().bigText(text ?: (if (scanning) scanLine else getString(R.string.notif_text))))
             .setContentIntent(open).setOnlyAlertOnce(true).setOngoing(true)
         // 알림 액션은 3개까지 표시된다. 스캔 중·스캔 기록이 있으면 정리 액션(4-B5 박사행 복사 / 4-B6 태그 선택 목록)을 넣는다
         val cleanupMode = scanning || (scan == null && hadScanRecords)
+        // 4-E.2: 게임 부스터가 ⚡ 버튼을 숨기는 환경 대비 "캡처" 복원. 정리 목록(박사행)에서 태그 목록으로 전환 가능하므로 액션 3개로 맞춤
         if (cleanupMode) {
             b.addAction(Notification.Action.Builder(icon, if (scanning) "스캔 중지" else "연속 스캔", scanToggle).build())
-            b.addAction(Notification.Action.Builder(icon, "박사행 복사", copyTransfer).build())
-            b.addAction(Notification.Action.Builder(icon, "태그 선택", copyTag).build())
+            b.addAction(Notification.Action.Builder(icon, "캡처", capture).build())
+            b.addAction(Notification.Action.Builder(icon, "정리 목록", copyTransfer).build())
         } else {
             b.addAction(Notification.Action.Builder(icon, "캡처", capture).build())
             b.addAction(Notification.Action.Builder(icon, "연속 스캔", scanToggle).build())
@@ -182,10 +200,10 @@ class CaptureService : Service() {
     private fun startScan() {
         val session = ScanSession(mode = prefs.scanMode); session.metrics.batteryStart = batteryPct()   // 4-D 스캔 모드(일반/섀도/정화)는 시작 시점 설정으로 고정
         scan = session; scanning = true; scanStartedAt = System.currentTimeMillis(); gate = ScanGate(prefs.scanStableMs.toLong(), 3, 300)
-        hideCard(); bubble?.text = "📷"
-        if (prefs.scanStrip) showStrip()   // 상단 띠는 기본 끔(설정에서 켜기). 결과는 알림 한 줄
+        hideCard(); hideMenu(); bubble?.text = modeEmoji(session.mode)
+        if (prefs.scanStrip) showStrip(session.mode)   // 상단 띠(설정). 4-E: 섀도/정화 모드면 색·글자 크게
         queue.start(scope)
-        refreshScanLine("[${session.modeLabel}] 평가 화면(막대 3개)을 켜고 좌우로 넘기세요")
+        refreshScanLine(if (session.mode == "normal") "평가 화면(막대 3개)을 켜고 좌우로 넘기세요" else "${modeEmoji(session.mode)} ${session.modeLabel} 모드 — 게임 검색 \"${session.modeLabel}\" 로 거른 뒤 평가 화면을 넘기세요")
         DebugLog.add(this, "scan", emptyList(), "연속 스캔 시작 세션 ${session.id} 모드 ${session.mode} 간격 ${prefs.scanIntervalMs}ms 안정 ${prefs.scanStableMs}ms 대기열 ${queue.pending}")
         handler.removeCallbacks(scanTick); handler.post(scanTick)
     }
@@ -202,13 +220,16 @@ class CaptureService : Service() {
         // 세션 측정값도 서버에 남긴다(대기열 경유, 웹 스캔 기록에서 표시)
         queue.enqueue("session", session.sessionBody()); queue.start(scope)
         hideStrip(); bubble?.text = "⚡"
-        updateNotification("스캔 종료 · 기록 ${session.metrics.recorded}건 · 전송 대기 ${queue.pending} — 웹 내 목록 → 📷 스캔 기록에서 검토·저장")
-        toast("연속 스캔 종료: 기록 ${session.metrics.recorded}건 (웹 📷 스캔 기록에서 저장)")
+        // 4-E: 세션이 끝나면 스캔 모드를 "일반" 으로 되돌린다 (섀도/정화 모드가 다음 세션에 남지 않도록)
+        val reverted = session.mode != "normal"; prefs.scanMode = "normal"
+        updateNotification("스캔 종료 · 기록 ${session.metrics.recorded}건 · 전송 대기 ${queue.pending}${if (reverted) " · 모드 일반으로 복귀" else ""} — 웹 📦 내 보관함에서 확인, 정리는 ⚡ 메뉴 → 박사행/태그 목록")
+        toast("연속 스캔 종료: 기록 ${session.metrics.recorded}건${if (reverted) " · ${session.modeLabel} 모드 → 일반으로 복귀" else ""}")
     }
     private fun refreshScanLine(head: String? = null) {
         val session = scan ?: return
         val base = head ?: session.lastLine
-        val line = "✅ 기록 ${session.metrics.recorded} · 전송 ${queue.sent}/대기 ${queue.pending}${queue.lastError?.let { " (오류: ${it.take(30)})" } ?: ""} · $base"
+        val modeHead = if (session.mode == "normal") "" else "${modeEmoji(session.mode)} ${session.modeLabel} 모드 · "
+        val line = "$modeHead✅ 기록 ${session.metrics.recorded} · 전송 ${queue.sent}/대기 ${queue.pending}${queue.lastError?.let { " (오류: ${it.take(30)})" } ?: ""} · $base"
         setStrip(line); updateNotification(line)
     }
     private fun vibrateShort() {
@@ -364,9 +385,11 @@ class CaptureService : Service() {
         }
     }
     // 작은 띠 오버레이: 터치 통과(FLAG_NOT_TOUCHABLE), 불투명도 0.8 (Android 12 untrusted touch 규칙). 포켓몬GO 가 숨기면 알림만 보인다
-    private fun showStrip() {
+    private fun showStrip(mode: String = "normal") {
         hideStrip()
-        val tv = TextView(this).apply { text = "📷 연속 스캔 시작"; textSize = 12f; setTextColor(Color.WHITE); setBackgroundColor(0xCC0F2035.toInt()); setPadding(dp(10), dp(6), dp(10), dp(6)); alpha = 0.8f }
+        // 4-E: 섀도(보라)·정화(파랑) 모드는 배경색과 글자를 키워 모드를 놓치지 않게 한다
+        val bg = when (mode) { "shadow" -> 0xCC5B2A86.toInt(); "purified" -> 0xCC1E5AA8.toInt(); else -> 0xCC0F2035.toInt() }
+        val tv = TextView(this).apply { text = "${modeEmoji(mode)} 연속 스캔 시작"; textSize = if (mode == "normal") 12f else 15f; setTextColor(Color.WHITE); setBackgroundColor(bg); setPadding(dp(10), dp(6), dp(10), dp(6)); alpha = 0.8f }
         val lp = WindowManager.LayoutParams(WindowManager.LayoutParams.MATCH_PARENT, WindowManager.LayoutParams.WRAP_CONTENT, WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
             WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE or WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN, PixelFormat.TRANSLUCENT)
         lp.gravity = Gravity.TOP; lp.y = dp(28); lp.alpha = 0.8f
@@ -442,11 +465,44 @@ class CaptureService : Service() {
             when (e.actionMasked) {
                 MotionEvent.ACTION_DOWN -> { downX = e.rawX; downY = e.rawY; startX = lp.x; startY = lp.y; moved = false; true }
                 MotionEvent.ACTION_MOVE -> { val dx = e.rawX - downX; val dy = e.rawY - downY; if (abs(dx) > 12 || abs(dy) > 12) moved = true; lp.x = startX + dx.toInt(); lp.y = startY + dy.toInt(); wm.updateViewLayout(v, lp); true }
-                MotionEvent.ACTION_UP -> { if (!moved) captureAndAnalyze(viaActivity = false); true }
+                MotionEvent.ACTION_UP -> { if (!moved) toggleMenu(lp); true }   // 4-E: 탭 → 작은 메뉴 (1장 캡처는 메뉴 항목)
                 else -> false
             }
         }
         wm.addView(tv, lp); bubble = tv
+    }
+
+    // ─── 4-E 오버레이 아이콘 메뉴: 연속 스캔 시작(모드)/중지 · 1장 캡처 · 박사행 목록 · 태그 목록. 게임 조작 없음(검색어 복사·화면 읽기만) ───
+    private fun toggleMenu(bubbleLp: WindowManager.LayoutParams) { if (menu != null) hideMenu() else showMenu(bubbleLp) }
+    private fun hideMenu() { menu?.let { runCatching { wm.removeView(it) } }; menu = null }
+    private fun showMenu(bubbleLp: WindowManager.LayoutParams) {
+        hideMenu()
+        val col = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setBackgroundColor(0xF21B2430.toInt()); setPadding(dp(6), dp(6), dp(6), dp(6)) }
+        fun item(label: String, color: Int = Color.WHITE, onClick: () -> Unit) {
+            val tv = TextView(this).apply { text = label; textSize = 14f; setTextColor(color); setPadding(dp(12), dp(10), dp(12), dp(10)); setOnClickListener { hideMenu(); onClick() } }
+            col.addView(tv)
+        }
+        val s = scan
+        if (scanning && s != null) item("■ 연속 스캔 중지 (${s.modeLabel} · 기록 ${s.metrics.recorded})", 0xFFFF6B6B.toInt()) { stopScan() }
+        else {
+            item("📷 연속 스캔 시작 — 일반") { prefs.scanMode = "normal"; startScan() }
+            item("👤 섀도 모드로 스캔 (게임 검색 \"섀도\" 후)", 0xFFD0A8FF.toInt()) { prefs.scanMode = "shadow"; startScan() }
+            item("✨ 정화 모드로 스캔 (게임 검색 \"정화\" 후)", 0xFF9CD3FF.toInt()) { prefs.scanMode = "purified"; startScan() }
+        }
+        item("⚡ 1장 캡처(상세·평가 화면)") { captureAndAnalyze(viaActivity = false) }
+        item("❌ 박사행 복사 목록", 0xFFFF6B6B.toInt()) { openCleanup(CleanupActivity.KIND_TRANSFER) }
+        item("🏷 태그 복사 목록", 0xFF4ECDC4.toInt()) { openCleanup(CleanupActivity.KIND_TAG) }
+        item("닫기", 0xFF8899AA.toInt()) { }
+        val lp = WindowManager.LayoutParams(WindowManager.LayoutParams.WRAP_CONTENT, WindowManager.LayoutParams.WRAP_CONTENT, WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
+            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN, PixelFormat.TRANSLUCENT)
+        lp.gravity = Gravity.TOP or Gravity.START
+        lp.x = bubbleLp.x + dp(56); lp.y = bubbleLp.y
+        if (lp.x > width - dp(240)) lp.x = maxOf(0, bubbleLp.x - dp(240))
+        runCatching { wm.addView(col, lp); menu = col }.onFailure { toast("메뉴를 띄우지 못했습니다: ${it.message}") }
+    }
+    private fun openCleanup(kind: String) {
+        if (!prefs.isPaired) { toast("기기 연결이 필요합니다 (앱 첫 화면)"); return }
+        startActivity(Intent(this, CleanupActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK).putExtra(CleanupActivity.EXTRA_KIND, kind))
     }
 
     // ─── 캡처 → 분석 → 표시 ───
@@ -581,7 +637,7 @@ class CaptureService : Service() {
         if (scanning) stopScan()
         queue.stop()   // 남은 대기열은 파일에 보존됨 (다음 시작 때 전송)
         running = false; scanning = false
-        handler.removeCallbacks(delayedCapture); handler.removeCallbacks(scanTick); hideStrip()
+        handler.removeCallbacks(delayedCapture); handler.removeCallbacks(scanTick); hideStrip(); hideMenu()
         hideCard(); bubble?.let { runCatching { wm.removeView(it) } }; bubble = null
         display?.release(); reader?.close(); projection?.stop()
         scope.cancel()
