@@ -11,19 +11,11 @@ class TrampolineActivity : Activity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         val extra = intent?.getStringExtra(EXTRA_ACTION)
-        if (extra == "choose_tag") {
-            // 4-B6: 알림 액션 "태그 선택" → 카테고리 목록(반투명 대화상자). 순환 복사 폐지
-            startActivity(Intent(this, CleanupActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+        if (extra == "choose_tag" || extra == "copy_transfer") {
+            // 4-B6: 알림 액션 "태그 선택" → 카테고리 목록. 4-E: "박사행 복사" 도 순환 복사 대신 묶음 목록(복사·보냄 처리)
+            val kind = if (extra == "copy_transfer") CleanupActivity.KIND_TRANSFER else CleanupActivity.KIND_TAG
+            startActivity(Intent(this, CleanupActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK).putExtra(CleanupActivity.EXTRA_KIND, kind))
             finish(); overridePendingTransition(0, 0)
-            return
-        }
-        if (extra == "copy_transfer") {
-            // 4-B5: 알림 액션 → 박사행 검색어 복사 (클립보드 쓰기는 포그라운드 액티비티에서). 서버 묶음 갱신 후 복사, 끝나면 종료
-            val prefs = Prefs(this)
-            Thread {
-                CleanupCopier.refresh(prefs)
-                runOnUiThread { CleanupCopier.copyNextTransfer(this); startService(Intent(this, CaptureService::class.java).setAction(CaptureService.ACTION_REFRESH_NOTIF)); finish(); overridePendingTransition(0, 0) }
-            }.start()
             return
         }
         if (CaptureService.running) {

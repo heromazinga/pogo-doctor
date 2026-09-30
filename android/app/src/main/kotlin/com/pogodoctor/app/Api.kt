@@ -92,6 +92,14 @@ class Api(private val prefs: Prefs) {
         catch (e: ApiException) { if (e.status == 401) prefs.deviceToken = null; throw e }
     }
 
+    // 4-E 박사행 묶음 보냄 처리 (웹 🧹 패널의 "보냄 처리 완료" 와 같은 API): 스캔 기록 dismissed + 내 목록 행 삭제
+    fun cleanupDone(targetIds: List<String>, deleteRows: Boolean): JSONObject {
+        val token = prefs.deviceToken ?: throw ApiException(401, "기기 연결 필요")
+        val body = JSONObject().put("action", "done").put("targetIds", org.json.JSONArray(targetIds)).put("deleteRows", deleteRows)
+        try { return request("POST", "/api/cleanup", body, token, timeoutMs = 20000) }
+        catch (e: ApiException) { if (e.status == 401) prefs.deviceToken = null; throw e }
+    }
+
     fun savePokemon(row: JSONObject): JSONObject {
         val token = prefs.deviceToken ?: throw ApiException(401, "기기 연결 필요")
         try { return request("POST", "/api/device/pokemon", row, token) }
