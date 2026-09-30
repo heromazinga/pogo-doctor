@@ -24,7 +24,7 @@ export async function GET(req) {
   let filled = 0, pending = 0, backfill = null;
   // 4-B6.2: 규칙 버전이 다른(낡은) 판정도 다시 계산 (isStaleVerdict). 4-C.2: 그때 superseded 백필도 1회(버전 플래그). 4-D2: 청크(100건·15s)만 처리, 나머지는 pending
   try {
-    const { ctx } = await buildVerdictContext(req, { myRows: undefined });
+    const { ctx } = await buildVerdictContext(req, { myRows: undefined, scanItems: items }); // 4-F: 예비 순위는 이 조회의 활성 기록으로
     try { backfill = await backfillSuperseded(sb, user.userId, items, ctx); if (backfill.changed) items = backfill.items; } catch (e) { console.warn(`[scan] 백필 실패: ${e.message}`); }
     if (items.some((it) => isStaleVerdict(it.verdict))) ({ filled, pending } = await fillMissingVerdicts(sb, items, ctx));
   } catch (e) { console.warn(`[scan] 판정 보충 실패: ${e.message}`); }

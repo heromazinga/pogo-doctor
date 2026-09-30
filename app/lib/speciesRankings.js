@@ -70,7 +70,9 @@ export function getRankings(dataset) {
     normal.sort((a, b) => b.score - a.score); shadow.sort((a, b) => b.score - a.score);
     // pct: 그 타입 1위(전설 포함 전체 1위) 대비 점수 비율 (4-A2 기준: 순위 AND 비율)
     const withPct = (list) => { const top = list[0]?.score || 0; return list.map((x, i) => ({ ...x, rank: i + 1, pct: top ? Math.round((x.score / top) * 100) : 0 })); };
-    raid[t] = { normal: withPct(normal), shadow: withPct(shadow) };
+    // 4-F 가성비 풀: 전설·환상·UB·메가·섀도 제외(일반 목록에서 legendary 제거). budgetRank = 그 풀 안 순위, pct 는 전체 1위 대비 유지
+    const budget = withPct(normal.filter((x) => !x.legendary)).map((x, i) => ({ ...x, budgetRank: i + 1 }));
+    raid[t] = { normal: withPct(normal), shadow: withPct(shadow), budget };
   }
   const gym = pool.filter((p) => !isLegendaryClass(p)).map((p) => ({ id: p.id, form: p.form, name: p.name, nameKr: p.nameKr, bulk: (p.baseDefense + 15) * (p.baseStamina + 15) }))
     .sort((a, b) => b.bulk - a.bulk).map((x, i) => ({ ...x, rank: i + 1 }));
@@ -81,6 +83,11 @@ export function getRankings(dataset) {
 
 export function raidRankOf(rankings, type, id, form, shadow) {
   const list = rankings.raid[type]?.[shadow ? "shadow" : "normal"] || [];
+  return list.find((x) => x.id === id && x.form === form) || list.find((x) => x.id === id && (form === "Normal" || x.form === "Normal")) || null;
+}
+// 4-F 가성비 순위 (일반 개체만: 섀도는 제외 풀)
+export function budgetRankOf(rankings, type, id, form) {
+  const list = rankings.raid[type]?.budget || [];
   return list.find((x) => x.id === id && x.form === form) || list.find((x) => x.id === id && (form === "Normal" || x.form === "Normal")) || null;
 }
 export function gymRankOf(rankings, id, form) {

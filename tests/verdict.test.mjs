@@ -8,6 +8,8 @@ import { extractEventTargets, matchEvents } from "../app/lib/eventTargets.js";
 import { ivCandidates } from "../app/lib/ivCalc.js";
 import { RULES, RULES_VERSION, TAG, purposesFromTags } from "../app/lib/verdictRules.js";
 import { fillMissingVerdicts, isStaleVerdict, verdictForItem } from "../app/lib/scanVerdict.js";
+import { buildReserveRanks } from "../app/lib/reserveRanks.js";
+import { getRankings as getRankings2, budgetRankOf } from "../app/lib/speciesRankings.js";
 import { calcHP } from "../app/lib/ivCalc.js";
 
 // ── 합성 데이터셋 ──
@@ -31,6 +33,8 @@ const moveStats = {
   "Moonblast": { type: "fairy", kind: "charged", power: 130, durationMs: 3900, energy: 100 },
   "Gust": { type: "flying", kind: "fast", power: 25, durationMs: 2000, energy: 20 },
   "Hidden Power": { type: "normal", kind: "fast", power: 15, durationMs: 1500, energy: 15 },
+  "Thunder Shock": { type: "electric", kind: "fast", power: 5, durationMs: 600, energy: 8 },
+  "Thunderbolt": { type: "electric", kind: "charged", power: 80, durationMs: 2500, energy: 50 },
   "Giga Impact": { type: "normal", kind: "charged", power: 200, durationMs: 4700, energy: 100 },
 };
 const sp = (id, name, nameKr, types, atk, def, sta, fast, charged, extra = {}) => ({
@@ -59,6 +63,10 @@ const dataset = {
     sp(650, "Chespin", "도치마론", ["grass"], 110, 106, 148, [], []),
     // 4-D3 실DB 사례: 피카츄 15/14/14 가 박사행 → 고개체 수집 보류 (진화형은 테스트에 불필요)
     sp(25, "Pikachu", "피카츄", ["electric"], 112, 96, 111, ["Thunder Shock"], ["Thunderbolt"]),
+    // 4-F 실DB 사례: 라이츄(관동) 3/13/13 CP1480 슈퍼리그 스탯곱 391위(PvPoke 순위 밖)가 박사행 → 리그 예비 보류
+    sp(26, "Raichu", "라이츄", ["electric"], 193, 151, 155, ["Thunder Shock"], ["Thunderbolt"]),
+    // 4-F 가성비 풀 검증용 전설 전기(라이츄가 전체 1위 대비 <65% 가 되도록 종족값 과장)
+    sp(644, "Zekrom", "제크로무", ["dragon", "electric"], 400, 300, 300, ["Thunder Shock"], ["Thunderbolt"], { pokemonClass: "legendary", shadowEligible: false }),
     sp(150, "Mewtwo", "뮤츠", ["psychic"], 300, 182, 214, ["Confusion"], ["Psystrike"], { pokemonClass: "legendary" }),
     sp(999, "Weakmon", "약한몬", ["normal"], 50, 50, 50, [], [], { pokemonClass: "legendary" }),
     // 4-A2: 타입 1위 대비 비율 검증용. 노말 1위 폴리곤Z, 비행 1위 레쿠쟈(전설), 페어리는 님피아뿐
@@ -77,7 +85,8 @@ const dataset = {
 };
 const mk = (entries) => { const m = new Map(); entries.forEach((id, i) => m.set(id, { rank: i + 1, score: 100 - i, name: id })); return m; };
 const leagueRankings = { fetchedAt: "t", errors: {}, leagues: { great: mk(["azumarill", "cinderace"]), ultra: mk(["charizard", "annihilape", "staraptor"]), master: mk(["mewtwo"]) } };
-const ctx = (over = {}) => ({ dataset, leagueRankings, eventTargets: [], myRows: [], storageMode: "normal", ...over });
+// 4-F: 테스트 데이터셋은 종이 적어 가성비 순위가 항상 ≤12 이므로 기본 ctx 는 초보자 기준을 끈다(BEGINNER_RULES 0). 4-F 테스트만 켠다
+const ctx = (over = {}) => ({ dataset, leagueRankings, eventTargets: [], myRows: [], storageMode: "normal", rulesOverride: { BEGINNER_RULES: 0 }, ...over });
 const tagOf = (v, name) => v.tags.find((t) => t.name === name);
 
 test("에이스번 15/14/14 L40 + 블라스트번 → 불꽃 레이드 주력", () => {
@@ -534,4 +543,64 @@ test("이로치·럭키 → 💎, 데이터 없는 리그는 경고만", () => {
   const v = computeVerdict({ species_id: 129, ivs: { atk: 1, def: 1, sta: 1 }, level: 5, is_shiny: true, is_lucky: true }, ctx({ leagueRankings: { leagues: {} } }));
   assert.deepEqual(v.collect.map((c) => c.reason), ["이로치", "반짝반짝(럭키)"]);
   assert.ok(v.warnings.some((w) => w.includes("데이터 없음")));
+});
+
+// ─── 4-F 초보자 기준 판정 (보관함 여유·보통만) ───
+const beginnerCtx = (over = {}) => ({ dataset, leagueRankings, eventTargets: [], myRows: [], storageMode: "normal", rulesOverride: {}, ...over });
+const scanRow = (id, species_id, ivs, level, extra = {}) => ({ id, species_id, form: "Normal", atk_iv: ivs[0], def_iv: ivs[1], sta_iv: ivs[2], level, cp: null, hp: null, is_shadow: false, ...extra });
+
+test("4-F ③ 리그 예비: 라이츄 3/13/13(슈퍼 스탯곱 391위, CP1480 상한 도달, PvPoke 순위 없음) → 보류 '슈퍼리그' 리그 예비, 같은 종 더 나쁜 1/13/15(450위)는 박사행", () => {
+  const a = scanRow("a", 26, [3, 13, 13], 25.5), b = scanRow("b", 26, [1, 13, 15], 25.5);
+  const reserve = buildReserveRanks(dataset, [], [a, b]);
+  assert.equal(reserve.league.great.get("26:Normal:0")?.key, "scan:a", "종·리그별 최상위 1마리 = 391위");
+  const ctx1 = beginnerCtx({ reserve });
+  const va = verdictForItem(a, ctx1), vb = verdictForItem(b, ctx1);
+  assert.equal(va.tier, "hold", va.summary);
+  const tg = va.tags.find((t) => t.name === TAG.great);
+  assert.ok(tg && tg.tier === "hold" && tg.reason.includes("리그 예비") && tg.reason.includes("391/4096"), JSON.stringify(tg));
+  assert.equal(vb.tier, "transfer", vb.summary);
+  // 빠듯이면 현행(박사행)
+  assert.equal(verdictForItem(a, beginnerCtx({ reserve, storageMode: "tight" })).tier, "transfer");
+  // BEGINNER_RULES=0 이면 적용 전(박사행)
+  assert.equal(verdictForItem(a, beginnerCtx({ reserve, rulesOverride: { BEGINNER_RULES: 0 } })).tier, "transfer");
+  // 스탯곱 500위 밖(15/15/15 = 742위)은 예비 아님
+  const c = scanRow("c", 26, [15, 15, 15], 24);
+  assert.equal(buildReserveRanks(dataset, [], [c]).league.great.size, 0);
+});
+
+test("4-F ① 가성비 상위종: 전설·섀도 제외 풀 ≤12위 → 보류 '○○ 레이드'(공격 IV ≥10), 섀도 개체·공격 9 는 제외", () => {
+  const r = getRankings2(dataset);
+  const bg = budgetRankOf(r, "electric", 26, "Normal");
+  assert.ok(bg && bg.budgetRank <= 12 && !bg.legendary, JSON.stringify(bg));
+  assert.ok(!r.raid.normal?.some?.((x) => x.legendary), "budget 목록에 전설 없음");
+  for (const t of Object.keys(r.raid)) assert.ok(r.raid[t].budget.every((x) => !x.legendary), t);
+  const v = computeVerdict({ species_id: 26, ivs: { atk: 12, def: 5, sta: 5 }, level: 30 }, beginnerCtx());
+  const tag = v.tags.find((x) => x.name === TAG.raid("전기"));
+  assert.ok(tag && tag.tier === "hold" && tag.reason.includes("가성비") && tag.metrics.beginner, JSON.stringify(tag));
+  assert.equal(v.tier, "hold");
+  assert.equal(computeVerdict({ species_id: 26, ivs: { atk: 9, def: 5, sta: 5 }, level: 30 }, beginnerCtx()).tags.find((x) => x.name === TAG.raid("전기")), undefined, "공격 IV 하한 10");
+  assert.equal(computeVerdict({ species_id: 26, ivs: { atk: 12, def: 5, sta: 5 }, level: 30, is_shadow: true }, beginnerCtx()).tags.find((x) => x.name === TAG.raid("전기") && x.metrics.budgetRank), undefined, "섀도는 가성비 풀 제외");
+  assert.equal(computeVerdict({ species_id: 26, ivs: { atk: 12, def: 5, sta: 5 }, level: 30 }, ctx()).tier, "transfer", "초보자 기준 끄면 현행");
+});
+
+test("4-F ② 레이드 예비: 타입마다 내 보관함 개체 점수 상위 6(공격 ≥10) 보류, 7번째·공격 9 는 아님, 사유에 '내 보관함 ○○ n위'", () => {
+  // 전기 타입: 라이츄 8마리(공격 15..8), 레벨 같음 → 공격 순 상위 6 (공격 ≥10 → 15..10)
+  const rows = Array.from({ length: 8 }, (_, i) => scanRow(`e${i}`, 26, [15 - i, 5, 5], 20));
+  const reserve = buildReserveRanks(dataset, [], rows);
+  const m = reserve.raid.electric;
+  assert.equal(m.get("scan:e0"), 1); assert.equal(m.get("scan:e5"), 6); assert.equal(m.get("scan:e6"), undefined); assert.equal(m.get("scan:e7"), undefined);
+  // 가성비 영향을 없애기 위해 BUDGET_RAID_TOP_RANK=0 → 레이드 예비만으로 보류
+  const c2 = beginnerCtx({ reserve, rulesOverride: { BUDGET_RAID_TOP_RANK: 0 } });
+  const inp = (r) => ({ id: r.id, reserveKey: `scan:${r.id}`, species_id: 26, ivs: { atk: r.atk_iv, def: r.def_iv, sta: r.sta_iv }, level: r.level });
+  const v = computeVerdict(inp(rows[5]), c2);
+  const tag = v.tags.find((x) => x.name === TAG.raid("전기"));
+  assert.ok(tag && tag.tier === "hold" && tag.reason.includes("내 보관함 전기 6위") && tag.metrics.reserveRank === 6, JSON.stringify(tag));
+  assert.equal(v.tier, "hold");
+  assert.equal(computeVerdict(inp(rows[6]), c2).tags.find((x) => x.name === TAG.raid("전기")), undefined, "7번째는 예비 아님");
+  // id 없이 같은 개체(서명 일치)로 물어봐도 예비 순위를 찾는다 (/api/verdict 단건)
+  assert.equal(computeVerdict({ species_id: 26, ivs: { atk: 10, def: 5, sta: 5 }, level: 20 }, c2).tags.find((x) => x.name === TAG.raid("전기"))?.metrics.reserveRank, 6);
+  // 레벨 보정: 같은 공격 IV 라도 레벨이 높으면 앞선다
+  const hi = scanRow("h", 26, [12, 5, 5], 40), lo = scanRow("l", 26, [12, 5, 5], 20);
+  const r2 = buildReserveRanks(dataset, [], [lo, hi]).raid.electric;
+  assert.equal(r2.get("scan:h"), 1); assert.equal(r2.get("scan:l"), 2);
 });

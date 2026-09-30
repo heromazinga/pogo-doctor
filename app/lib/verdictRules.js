@@ -3,7 +3,7 @@
 
 // 4-B6.2 판정 규칙 버전: 저장된 판정(scan_items.verdict.rulesVersion)이 이 값과 다르면 조회 시 다시 계산해 저장한다.
 // 기준값(RULES)이나 판정 로직을 바꿀 때 반드시 올린다 (실DB 검증: 규칙 변경이 정리 도우미에 반영되지 않던 결함).
-export const RULES_VERSION = "2026-09-30.3"; // 4-D3: 고개체(14+/14+/14+) 수집 보류, CP 없는 모드 기록도 일반 기록 대체(백필 1회), 보호 조건에 !xxs·!다이맥스
+export const RULES_VERSION = "2026-09-30.4"; // 4-F 초보자 기준(가성비 상위종·레이드 예비·리그 예비, 여유/보통만). // 4-D3: 고개체(14+/14+/14+) 수집 보류, CP 없는 모드 기록도 일반 기록 대체(백필 1회), 보호 조건에 !xxs·!다이맥스
 
 export const RULES = {
   // 종족 순위 (자동 산출) — 타입별 레이드: teamScore 의 DPS^0.775 × TDO^0.225, 그 타입 기술만 사용, 중립 보스 가정
@@ -16,6 +16,11 @@ export const RULES = {
   RAID_MAIN_MIN_ATK_IV: 12, // 4-B6: 주력 등급의 최소 공격 IV (섀도도 같은 기준)
   RAID_BOSS: { baseAttack: 250, baseDefense: 200, baseStamina: 220 }, // 중립 보스 가정(타입 없음, L40·15/15/15)
   RAID_MEMBER_LEVEL: 40,    // 종족 순위 산출 시 개체 가정: L40, 15/15/15
+  // 4-F 초보자 기준 (보관함 여유·보통에만. 빠듯은 현행). BEGINNER_RULES 0 → 끔(stats 전후 비교용)
+  BEGINNER_RULES: 1,
+  BUDGET_RAID_TOP_RANK: 12,        // 가성비 풀(전설·환상·UB·메가·섀도 제외) 타입별 순위 ≤12 → "가성비 상위종" 보류 (공격 IV 하한 RAID_MIN_ATK_IV 유지)
+  RESERVE_RAID_TOP_N: 6,           // 레이드 예비: 타입마다 내 보관함(활성 스캔 기록 + 내 목록) 안 개체 점수 상위 6(공격 ≥10) 보류 "○○ 레이드"
+  LEAGUE_RESERVE_PRODUCT_RANK: 500, // 리그 예비: 종 PvPoke 순위 무관, 상한 도달 가능 AND 스탯곱 ≤500 → 종·리그별 최상위 1마리 보류 (사례: 라이츄 3/13/13 CP1480 슈퍼 391위)
 
   // 체육관 방어: 전설·환상·UB 제외, 방어×HP 내구 순위
   GYM_TOP_RANK: 20,

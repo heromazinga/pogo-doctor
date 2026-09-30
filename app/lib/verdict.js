@@ -7,7 +7,8 @@ import { TYPES, TYPE_NAMES_KR } from "./typeChart.js";
 import { cpmForLevel, levels, calcCP, estimateLevel } from "./cpm.js";
 import { findPokemon } from "./pokemonData.js";
 import { RULES, TAG, TIER_LABEL, EVOLVE_PREFIX, purposesFromTags } from "./verdictRules.js";
-import { getRankings, raidRankOf, gymRankOf, raidScoreForType, finalForms, familyIds, isLegendaryClass } from "./speciesRankings.js";
+import { getRankings, raidRankOf, budgetRankOf, gymRankOf, raidScoreForType, finalForms, familyIds, isLegendaryClass } from "./speciesRankings.js";
+import { reserveRaidRank, reserveLeagueBest } from "./reserveRanks.js";
 import { leagueRankOf } from "./pvpokeRankings.js";
 import { ivCandidates, ivPercent, calcHP } from "./ivCalc.js";
 import { matchEvents } from "./eventTargets.js";
@@ -104,6 +105,8 @@ function evaluateCandidate(p, cand, input, ctx, rankings, { forEvolve = false } 
   const pct = ivPercent(cand);
   const hasMoves = Boolean(input.fast_move) || (Array.isArray(input.charged_moves) && input.charged_moves.length > 0);
 
+  // 4-F 초보자 기준: 보관함 여유·보통에만 (빠듯은 현행). rulesOverride BEGINNER_RULES=0 으로 끔(전후 비교)
+  const beginner = Number(rule(ctx, "BEGINNER_RULES")) !== 0 && (input.storageMode || ctx.storageMode) !== "tight";
   // 1) 타입별 레이드
   for (const t of TYPES) {
     const sp = raidRankOf(rankings, t, p.id, p.form, shadow);
@@ -111,13 +114,25 @@ function evaluateCandidate(p, cand, input, ctx, rankings, { forEvolve = false } 
     // 4-A2: 순위 AND 타입 1위 대비 점수 비율 (상위 ≤12 & ≥75%, 중위 ≤30 & ≥65%)
     const top = sp.rank <= RULES.RAID_TOP_RANK && sp.pct >= RULES.RAID_TOP_SCORE_PCT;
     const mid = sp.rank <= RULES.RAID_MID_RANK && sp.pct >= RULES.RAID_MID_SCORE_PCT;
-    if (!top && !mid) continue;
     // 4-B6: 공격 IV 하한 (레이드 대미지는 공격에 비례). 미만이면 태그 없음, 주력은 별도 하한
     const minAtk = rule(ctx, "RAID_MIN_ATK_IV"), mainMinAtk = rule(ctx, "RAID_MAIN_MIN_ATK_IV");
+    const kr = TYPE_NAMES_KR[t];
+    if (!top && !mid) {
+      if (!beginner || cand.atk < minAtk) continue;
+      // 4-F ① 가성비 상위종: 전설·환상·UB·메가·섀도 제외 풀에서 ≤12위 (일반 개체만) → 보류
+      const bg = !shadow ? budgetRankOf(rankings, t, p.id, p.form) : null;
+      const budgetTop = Boolean(bg) && bg.budgetRank <= rule(ctx, "BUDGET_RAID_TOP_RANK");
+      // 4-F ② 레이드 예비: 내 보관함 안 이 타입 개체 점수 상위 N (종 순위 무관)
+      const rr = forEvolve ? null : reserveRaidRank(ctx.reserve, t, input, p, cand);
+      if (!budgetTop && rr == null) continue;
+      const moves = recommendedMoves(ctx.dataset, p, sp.fast, sp.charged);
+      const why = [budgetTop ? `가성비 ${bg.budgetRank}위(전설·섀도 제외 풀, 전체 ${sp.rank}위·1위 대비 ${sp.pct}%)` : null, rr != null ? `내 보관함 ${kr} ${rr}위(레이드 예비)` : null].filter(Boolean).join(" · ");
+      tags.push({ name: TAG.raid(kr), tier: "hold", reason: `${why}·공격 ${cand.atk} · ${moveLine(moves)}`, moves, metrics: { type: t, speciesRank: sp.rank, speciesPct: sp.pct, top: false, budgetRank: bg?.budgetRank ?? null, reserveRank: rr, atkIv: cand.atk, level: cand.level, beginner: true, bestMoves: [sp.fast, sp.charged], usesSpecial: sp.usesSpecial } });
+      continue;
+    }
     if (cand.atk < minAtk) continue;
     const indiv = indivRankBy(sameSpecies, p, (r) => ({ primary: Number.isInteger(r.atk_iv) ? r.atk_iv : -1, level: rowLevel(r, p) }), { primary: cand.atk, level: cand.level });
     const tier = top && indiv <= RULES.RAID_MAIN_INDIV_RANK && cand.atk >= mainMinAtk ? "main" : "hold";
-    const kr = TYPE_NAMES_KR[t];
     const notes = [];
     let myScore = null;
     if (hasMoves && !forEvolve) {
@@ -159,7 +174,10 @@ function evaluateCandidate(p, cand, input, ctx, rankings, { forEvolve = false } 
     // 4-D: 상한 도달 = 상한 레벨 < 50 AND 상한 레벨 CP ≥ 상한×0.97. 미도달(약한 종은 L50 에도 상한 아래 → 고개체가 스탯곱 1위)은 리그 후보·보류에서 제외
     const capReached = me.level < RULES.LEAGUE_MAX_LEVEL && me.cp >= cap * rule(ctx, "LEAGUE_CAP_REACH_PCT");
     const candidate = Boolean(sp) && sp.rank <= rule(ctx, "LEAGUE_CANDIDATE_SPECIES_RANK") && me.rank <= candidateRank && capReached;
-    if (!ranked && !candidate) continue;
+    // 4-F ③ 리그 예비(컵 리그용): 종 PvPoke 순위 무관, 상한 도달 가능 AND 스탯곱 ≤500 → 내 보관함 안 종·리그별 최상위 1마리
+    const rb = beginner && !forEvolve && capReached && me.rank <= rule(ctx, "LEAGUE_RESERVE_PRODUCT_RANK") ? reserveLeagueBest(ctx.reserve, league, input, p, cand) : null;
+    const reserve = Boolean(rb) && !rb.other;
+    if (!ranked && !candidate && !reserve) continue;
     const top = ranked && sp.rank <= RULES.LEAGUE_TOP_RANK;
     const currentCp = input.cp && !forEvolve ? input.cp : calcCP({ atk: p.baseAttack, def: p.baseDefense, sta: p.baseStamina }, cand, cand.level);
     if (currentCp > cap || cand.level > me.level) {
@@ -171,14 +189,17 @@ function evaluateCandidate(p, cand, input, ctx, rankings, { forEvolve = false } 
     const tight = (input.storageMode || ctx.storageMode) === "tight";
     const holdRank = tight ? rule(ctx, "LEAGUE_HOLD_PRODUCT_RANK_TIGHT") : rule(ctx, "LEAGUE_HOLD_PRODUCT_RANK");
     const midHoldRank = tight ? rule(ctx, "LEAGUE_MID_HOLD_PRODUCT_RANK_TIGHT") : rule(ctx, "LEAGUE_MID_HOLD_PRODUCT_RANK");
+    const normalHold = ranked && capReached && ((top && me.rank <= holdRank) || (!top && me.rank <= midHoldRank)); // 4-D: 일반 보류도 상한 도달 개체만
     if (top && me.rank <= rule(ctx, "LEAGUE_MAIN_PRODUCT_RANK")) tier = "main";
-    else if (ranked && capReached && ((top && me.rank <= holdRank) || (!top && me.rank <= midHoldRank))) tier = "hold"; // 4-D: 일반 보류도 상한 도달 개체만
+    else if (normalHold) tier = "hold";
     else if (candidate) tier = "hold";
+    else if (reserve) tier = "hold";
     if (!tier) continue;
     const moves = movesFromPvpoke(ctx.dataset, p, sp?.moveset);
-    const rankTxt = ranked ? `PvPoke ${sp.rank}위` : `PvPoke ${sp.rank}위(200위 밖)`;
-    const candTxt = !ranked || (!top && me.rank <= candidateRank && me.rank > midHoldRank) ? ` · 리그 후보(스탯곱 상위 ${candidateRank}위 이내)` : "";
-    tags.push({ name: TAG[league], tier, reason: `${rankTxt}·스탯곱 ${me.rank}/4096위 (L${me.level} CP${me.cp})${candTxt}${moves ? " · " + moveLine(moves) : ""}`, moves, metrics: { speciesRank: sp?.rank ?? null, top, productRank: me.rank, levelAtCap: me.level, cpAtCap: me.cp, capReached, candidate: !ranked || (!top && me.rank <= candidateRank) } });
+    const rankTxt = ranked ? `PvPoke ${sp.rank}위` : sp ? `PvPoke ${sp.rank}위(200위 밖)` : "PvPoke 순위 없음";
+    const candTxt = candidate && (!ranked || (!top && me.rank <= candidateRank && me.rank > midHoldRank)) ? ` · 리그 후보(스탯곱 상위 ${candidateRank}위 이내)` : "";
+    const reserveTxt = reserve && tier === "hold" && !normalHold && !candidate ? ` · 리그 예비(컵 리그용, 내 ${p.nameKr} 중 1위)` : "";
+    tags.push({ name: TAG[league], tier, reason: `${rankTxt}·스탯곱 ${me.rank}/4096위 (L${me.level} CP${me.cp})${candTxt}${reserveTxt}${moves ? " · " + moveLine(moves) : ""}`, moves, metrics: { speciesRank: sp?.rank ?? null, top, productRank: me.rank, levelAtCap: me.level, cpAtCap: me.cp, capReached, candidate: candidate && (!ranked || (!top && me.rank <= candidateRank)), reserve: Boolean(reserveTxt) } });
   }
 
   // 4) 마스터리그
@@ -428,7 +449,7 @@ function buildSummary(tier, tags, collect, event, cand, allSame, legendaryHold, 
 // my_pokemon 행 → 입력
 export function inputFromRow(r, storageMode) {
   return {
-    id: r.id, species_id: r.species_id, form: r.form || "Normal", cp: r.cp || null, hp: r.hp || null, level: r.level || null,
+    id: r.id, reserveKey: `row:${r.id}`, species_id: r.species_id, form: r.form || "Normal", cp: r.cp || null, hp: r.hp || null, level: r.level || null,
     ivs: Number.isInteger(r.atk_iv) ? { atk: r.atk_iv, def: r.def_iv, sta: r.sta_iv } : null,
     fast_move: r.fast_move || null, charged_moves: r.charged_moves || [],
     is_shadow: Boolean(r.is_shadow), is_purified: Boolean(r.is_purified), is_shiny: Boolean(r.is_shiny), is_lucky: Boolean(r.is_lucky),
