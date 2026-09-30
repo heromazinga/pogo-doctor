@@ -84,11 +84,12 @@ export function planSupersede(items, dataset) {
 
 // 4-D2 순수 계산: 스캔 모드(섀도/정화) 신뢰 기록이 같은 종·폼·CP·HP·개체값의 "일반 모드" 기록과 만나면 일반 기록을 대체(모드 기록이 정확한 속성).
 //   반대 방향(일반이 섀도를 대체)은 하지 않는다. 실측: 섀도 모드 37건이 전날 일반 기록과 둘 다 활성 → population 508(실제 470)
+//   4-D3: 한쪽 CP 가 null 이면 종·폼·HP·개체값 일치만으로 모드 기록이 우선 (실DB: CP 없는 섀도 기록 2건이 일반 기록과 중복으로 남음)
 export function planModeSupersede(items) {
   const groups = new Map();
   for (const r of items) {
-    if (!hasIv(r) || r.cp == null || r.hp == null) continue;
-    const k = `${r.species_id}|${r.form || "Normal"}|${r.cp}|${r.hp}|${ivKey(r)}`;
+    if (!hasIv(r) || r.hp == null) continue;
+    const k = `${r.species_id}|${r.form || "Normal"}|${r.hp}|${ivKey(r)}`;
     if (!groups.has(k)) groups.set(k, []);
     groups.get(k).push(r);
   }
@@ -96,8 +97,11 @@ export function planModeSupersede(items) {
   for (const list of groups.values()) {
     const modes = list.filter((r) => (r.is_shadow || r.is_purified) && isTrustedVersion(r.app_version)).sort((a, b) => String(a.created_at).localeCompare(String(b.created_at)));
     if (!modes.length) continue;
-    const winner = modes[modes.length - 1];
-    for (const r of list) if (!r.is_shadow && !r.is_purified) out.push({ id: r.id, superseded_by: winner.id });
+    for (const r of list) {
+      if (r.is_shadow || r.is_purified) continue;
+      const cand = modes.filter((m) => m.cp == null || r.cp == null || m.cp === r.cp);
+      if (cand.length) out.push({ id: r.id, superseded_by: cand[cand.length - 1].id });
+    }
   }
   return out;
 }

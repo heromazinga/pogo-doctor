@@ -57,6 +57,8 @@ const dataset = {
     sp(398, "Staraptor", "찌르호크", ["normal", "flying"], 234, 140, 198, ["Quick Attack"], ["Hyper Beam"]),
     // 4-D 실DB 사례: 도치마론(PvPoke 슈퍼 1080위, L50 에도 1500 미도달) 15/15/12 가 스탯곱 상위로 보류되던 것 → 제외
     sp(650, "Chespin", "도치마론", ["grass"], 110, 106, 148, [], []),
+    // 4-D3 실DB 사례: 피카츄 15/14/14 가 박사행 → 고개체 수집 보류 (진화형은 테스트에 불필요)
+    sp(25, "Pikachu", "피카츄", ["electric"], 112, 96, 111, ["Thunder Shock"], ["Thunderbolt"]),
     sp(150, "Mewtwo", "뮤츠", ["psychic"], 300, 182, 214, ["Confusion"], ["Psystrike"], { pokemonClass: "legendary" }),
     sp(999, "Weakmon", "약한몬", ["normal"], 50, 50, 50, [], [], { pokemonClass: "legendary" }),
     // 4-A2: 타입 1위 대비 비율 검증용. 노말 1위 폴리곤Z, 비행 1위 레쿠쟈(전설), 페어리는 님피아뿐
@@ -156,7 +158,7 @@ test("약한 종 15/15/15 → 💎 수집 추천(100%) (4-C.2: 잉어킹은 진�
   assert.equal(v.tier, "hold"); assert.equal(tagOf(v, TAG.evolve("갸라도스"))?.tier, "hold");
   assert.ok(v.recommendedTags.includes(TAG.collect));
   const w = computeVerdict({ species_id: 129, ivs: { atk: 15, def: 15, sta: 15 }, level: 10 }, ctx({ dataset: { ...dataset, pokemon: dataset.pokemon.map((p) => (p.id === 129 ? { ...p, evolutions: [] } : p)) } }));
-  assert.equal(w.tier, "transfer");
+  assert.equal(w.tier, "hold", "4-D3: 100% 도 고개체 규칙(14+/14+/14+)으로 보류");
   assert.ok(v.collect.some((c) => c.reason === "개체값 100%"));
   assert.ok(v.summary.includes("💎"));
 });
@@ -332,6 +334,21 @@ test("4-D 진화 후보 단일 태그: 이름은 '진화 후보' 하나, 진화�
   assert.ok(ev2[0].reason.includes("다른 진화형 1"), ev2[0].reason); assert.equal(ev2[0].metrics.alternatives.length, 1);
 });
 
+test("4-D3 고개체 수집 보류: 피카츄 15/14/14·14/14/14 → 보류 + '수집' 태그(종 무관), 14/14/13 은 기존 판정(박사행)", () => {
+  for (const ivs of [{ atk: 15, def: 14, sta: 14 }, { atk: 14, def: 14, sta: 14 }, { atk: 14, def: 15, sta: 14 }]) {
+    const v = computeVerdict({ species_id: 25, ivs, level: 20 }, ctx());
+    assert.equal(v.tier, "hold", JSON.stringify(ivs));
+    assert.ok(v.recommendedTags.includes(TAG.collect), "수집 태그");
+    assert.ok(v.collect.some((c) => c.reason === "고개체(14+/14+/14+)" && c.hold), JSON.stringify(v.collect));
+    assert.ok(v.summary.includes("고개체 수집"), v.summary);
+  }
+  const w = computeVerdict({ species_id: 25, ivs: { atk: 14, def: 14, sta: 13 }, level: 20 }, ctx());
+  assert.equal(w.tier, "transfer"); assert.equal(w.collect.length, 0); assert.ok(!w.recommendedTags.includes(TAG.collect));
+  const h = computeVerdict({ species_id: 25, ivs: { atk: 15, def: 15, sta: 15 }, level: 20 }, ctx());
+  assert.equal(h.tier, "hold"); assert.equal(h.collect.filter((c) => c.collectTag).length, 1, "100% 는 한 항목(고개체 중복 표기 없음)");
+  assert.equal(RULES.COLLECT_HIGH_IV_MIN, 14);
+});
+
 test("4-C.2 C 수집 태그: 100%·0%·반짝반짝·오래 전 포획 → recommendedTags 에 '수집'(등급 무관), 이로치만으로는 아님", () => {
   assert.ok(computeVerdict({ species_id: 999, ivs: { atk: 15, def: 15, sta: 15 }, level: 20 }, ctx()).recommendedTags.includes(TAG.collect), "100%");
   assert.ok(computeVerdict({ species_id: 999, ivs: { atk: 0, def: 0, sta: 0 }, level: 20 }, ctx()).recommendedTags.includes(TAG.collect), "0%");
@@ -501,7 +518,9 @@ test("4-A2 진화 대기는 최종형이 주력일 때만: 리자몽 주력이�
   const myRows = Array.from({ length: 6 }, (_, i) => ({ id: `z${i}`, species_id: 6, form: "Normal", atk_iv: 15, def_iv: 15, sta_iv: 15, level: 50, is_shadow: false, status: "keep", tags: [] }));
   const v2 = computeVerdict({ species_id: 4, ivs: { atk: 14, def: 15, sta: 15 }, level: 20 }, ctx({ myRows }));
   assert.equal(tagOf(v2, TAG.evolve("리자몽")), undefined);
-  assert.equal(v2.tier, "transfer");
+  assert.equal(v2.tier, "hold", "4-D3: 14/15/15 는 고개체 수집 보류(진화 대기 태그는 없음)");
+  const v3 = computeVerdict({ species_id: 4, ivs: { atk: 13, def: 15, sta: 15 }, level: 20 }, ctx({ myRows }));
+  assert.equal(tagOf(v3, TAG.evolve("리자몽")), undefined); assert.equal(v3.tier, "transfer");
 });
 
 test("4-A2 섀도 순위는 PvPoke shadoweligible 종만", () => {

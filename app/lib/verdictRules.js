@@ -3,7 +3,7 @@
 
 // 4-B6.2 판정 규칙 버전: 저장된 판정(scan_items.verdict.rulesVersion)이 이 값과 다르면 조회 시 다시 계산해 저장한다.
 // 기준값(RULES)이나 판정 로직을 바꿀 때 반드시 올린다 (실DB 검증: 규칙 변경이 정리 도우미에 반영되지 않던 결함).
-export const RULES_VERSION = "2026-09-30.2"; // 4-D2: 스캔 모드(섀도/정화) 기록이 일반 기록을 대체(백필 1회), 보호 조건에 !특별(코스튬)
+export const RULES_VERSION = "2026-09-30.3"; // 4-D3: 고개체(14+/14+/14+) 수집 보류, CP 없는 모드 기록도 일반 기록 대체(백필 1회), 보호 조건에 !xxs·!다이맥스
 
 export const RULES = {
   // 종족 순위 (자동 산출) — 타입별 레이드: teamScore 의 DPS^0.775 × TDO^0.225, 그 타입 기술만 사용, 중립 보스 가정
@@ -50,6 +50,7 @@ export const RULES = {
   // 수집 추천
   COLLECT_HUNDO_PCT: 100,
   COLLECT_NUNDO_SUM: 0,
+  COLLECT_HIGH_IV_MIN: 14,  // 4-D3: 공격·방어·HP 모두 ≥14 (14/14/14 ~ 15/15/15) → 종과 무관하게 "수집" 보류. 사례: 피카츄 15/14/14 가 박사행으로 판정됨
   // 교환 시 반짝반짝(럭키) — 4-A2 활성. 근거(사용자 확인): Niantic 공식 "older Pokémon have a higher chance of triggering a Lucky Trade"(수치 비공개),
   // 2018-09-05 공지: 2016년 7~8월 포획분은 교환 시 반짝반짝 확정(반짝반짝 보유 10마리 미만 조건). 출처 pokemongohub.net/post/guide/lucky-pokemon-mechanics-in-pokemon-go/
   LUCKY_TRADE_YEAR: 2019,                       // 이 연도 이전(미만) 포획 → "확률↑"

@@ -344,7 +344,10 @@ export function computeVerdict(input, ctx) {
   const collect = collectFor(p, input, allSame ? evals[0].cand : null, !legendaryHold && (tier === "main" || tier === "hold"));
   // 4-C.2 "수집" 태그: 100%·0%·반짝반짝·오래 전 포획(교환 시 반짝반짝). 이로치·배경·XXL 은 게임 검색어로 묶는다(정리 도우미)
   const collectTag = collect.some((c) => c.collectTag);
-  const summary = buildSummary(tier, tags, collect, event, evals[0].cand, allSame, legendaryHold);
+  // 4-D3: 고개체(14+/14+/14+·100%)는 종과 무관하게 박사행 → 보류(수집). 실측: 피카츄 15/14/14 가 박사행 묶음에 들어가 수동 해제가 필요했음
+  let collectHold = false;
+  if (tier === "transfer" && collect.some((c) => c.hold)) { tier = "hold"; collectHold = true; }
+  const summary = buildSummary(tier, tags, collect, event, evals[0].cand, allSame, legendaryHold || collectHold, collectHold);
   // 4-C.2 맥스배틀 종(공개 데이터로 확인된 목록만): 판정 대신 "다이맥스 태그 권장" 안내
   const dynamax = isMaxBattleSpecies(ctx, p);
   const keptTags = tags.filter((t) => t.tier === "main" || t.tier === "hold").map((t) => t.name);
@@ -372,6 +375,12 @@ function collectFor(p, input, cand, kept) {
     const pct = ivPercent(cand);
     if (pct >= RULES.COLLECT_HUNDO_PCT) out.push({ reason: "개체값 100%", collectTag: true });
     if (cand.atk + cand.def + cand.sta === RULES.COLLECT_NUNDO_SUM) out.push({ reason: "개체값 0%(0/0/0)", collectTag: true });
+    // 4-D3 고개체: 세 값 모두 ≥14 → 수집 보류(100% 는 위에서 이미 표기). 사용자 규칙: 박사행 대상에서 제외, 게임에서 "수집" 태그로 관리
+    const m = RULES.COLLECT_HIGH_IV_MIN;
+    if (m != null && cand.atk >= m && cand.def >= m && cand.sta >= m) {
+      const hundo = out.find((c) => c.reason === "개체값 100%");
+      if (hundo) hundo.hold = true; else out.push({ reason: `고개체(${m}+/${m}+/${m}+)`, collectTag: true, hold: true });
+    }
   }
   if (isLegendaryClass(p)) {
     if (input.is_shadow || input.is_purified) out.push({ reason: `${input.is_shadow ? "섀도" : "정화"} 전설·환상 — 보관 권장` });
@@ -401,7 +410,7 @@ export function luckyTradeReason(caughtOn) {
   return null;
 }
 
-function buildSummary(tier, tags, collect, event, cand, allSame, legendaryHold) {
+function buildSummary(tier, tags, collect, event, cand, allSame, legendaryHold, collectHold = false) {
   const kept = tags.filter((t) => t.tier === tier && (tier === "main" || tier === "hold"));
   let s;
   if (tier === "need_appraisal") s = `${TIER_LABEL.need_appraisal}${tags.length ? ": " + tags.map((t) => t.name).join(", ") : ""}`;
@@ -409,6 +418,7 @@ function buildSummary(tier, tags, collect, event, cand, allSame, legendaryHold) 
   else if (kept.length) s = `${TIER_LABEL[tier]}: ${kept[0].name} (${kept[0].reason})${kept.length > 1 ? " 외 " + (kept.length - 1) : ""}`;
   else s = `${TIER_LABEL[tier]}`;
   if (event && tier === "hold" && !kept.length) s = `${TIER_LABEL.hold}: ${event.note}`;
+  else if (collectHold && !kept.length) s = `${TIER_LABEL.hold}: 고개체 수집(용도 태그 없음)`;
   else if (legendaryHold && !kept.length) s = `${TIER_LABEL.hold}: 전설·환상(용도 태그 없음)`;
   if (collect.length) s += ` → 💎 수집 추천: ${collect.map((c) => c.reason).join(", ")}`;
   if (cand && allSame) s += ` [${cand.atk}/${cand.def}/${cand.sta} L${cand.level}]`;

@@ -110,6 +110,7 @@ export default function Home() {
   const [cleanupError, setCleanupError] = useState(null);
   const [cleanupDone, setCleanupDone] = useState({}); // query → true
   const [scanPending, setScanPending] = useState(0); // 4-D2: 판정 재계산 청크 남은 수
+  const [scanCount, setScanCount] = useState(null); // 4-D3: 활성 스캔 기록 수 (내 목록 패널 안내용)
   const [copied, setCopied] = useState(null);
   const [editing, setEditing] = useState(null); // { id, status, purposes, memo }
   const [thinking, setThinking] = useState(false); // 첫 텍스트 도착 전(모델 thinking 구간)
@@ -271,7 +272,7 @@ export default function Home() {
       const res = await fetch("/api/scan", { headers: { ...(await authHeader()) } });
       const data = await res.json();
       if (!res.ok) { setScanError(data.error || `HTTP ${res.status}`); return; }
-      setScans(data.items || []); setScanSessions(data.sessions || []); setScanPending(data.pending || 0);
+      setScans(data.items || []); setScanSessions(data.sessions || []); setScanPending(data.pending || 0); setScanCount(data.activeCount ?? (data.items || []).length);
     } catch (e) { setScanError(e.message); } finally { setScanBusy(false); }
   };
   const scanAction = async (action, ids, extra = {}) => {
@@ -291,6 +292,10 @@ export default function Home() {
     } catch (e) { setScanError(e.message); } finally { setScanBusy(false); }
   };
   const openScans = async () => { setShowScans(true); await loadScans(); };
+  // 4-D3: 내 목록 패널 안내의 스캔 기록 수는 /api/scan 응답(activeCount)에서 — 아직 조회 전이면 한 번 조회(별도 count 호출 없음)
+  useEffect(() => {
+    if (showCollection && session && scanCount == null && !scanBusy) loadScans();
+  }, [showCollection, session]); // eslint-disable-line react-hooks/exhaustive-deps
   const loadCleanup = async () => {
     if (!session) return;
     setCleanupBusy(true); setCleanupError(null);
@@ -1790,6 +1795,11 @@ export default function Home() {
                 )}
                 <button style={s.collClose} onClick={() => { setShowCollection(false); setEditing(null); setCollStatusFilter("all"); setCollPurposeFilter("all"); setCollTierFilter("all"); setCollTagFilter("all"); }}>✕</button>
               </div>
+            </div>
+            {/* 4-D3: 내 목록(저장한 개체) ≠ 스캔 기록(판정·정리 대상) 혼동 방지 */}
+            <div style={{ ...s.sourceNotice, marginBottom: 10, display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+              <span>ℹ️ 이 목록은 <b>직접 저장한 개체</b>입니다. 앱 연속 스캔으로 기록된 <b>스캔 기록 {scanCount == null ? "…" : `${scanCount}마리`}(판정·정리 대상)</b>는 스캔 기록 패널에 있습니다.</span>
+              <button onClick={openScans} style={{ ...s.chip, fontSize: 11 }}>📷 스캔 기록으로 이동</button>
             </div>
             {sessionNotice && <div style={s.sourceNotice}>{sessionNotice}</div>}
             {collError && <div style={s.error}>{collError}</div>}

@@ -109,7 +109,10 @@ test("4-D2 스캔 모드 기록 우선(planModeSupersede): 섀도/정화 신뢰 
   assert.deepEqual(planModeSupersede([shadow]), [], "일반 기록 없으면 없음");
   assert.deepEqual(planModeSupersede([normal, { ...shadow, app_version: "0.1.30" }]), [], "미신뢰 모드 기록은 대체 안 함");
   assert.deepEqual(planModeSupersede([normal, { ...shadow, def_iv: 6 }]), [], "개체값 다르면 다른 개체(충돌 규칙이 처리)");
-  assert.deepEqual(planModeSupersede([normal, { ...shadow, cp: null }]), [], "CP 없으면 판단 불가");
+  assert.deepEqual(planModeSupersede([normal, { ...shadow, cp: null }]), [{ id: "n", superseded_by: "s" }], "4-D3: 모드 기록 CP 없으면 종·HP·개체값 일치로 대체");
+  assert.deepEqual(planModeSupersede([{ ...normal, cp: null }, shadow]), [{ id: "n", superseded_by: "s" }], "4-D3: 일반 기록 CP 없어도 대체");
+  assert.deepEqual(planModeSupersede([normal, { ...shadow, cp: 2000 }]), [], "CP 둘 다 있고 다르면 다른 개체");
+  assert.deepEqual(planModeSupersede([normal, { ...shadow, hp: 100, cp: null }]), [], "HP 다르면 없음");
   assert.deepEqual(planModeSupersede([normal, shadow, { ...shadow, id: "s2", created_at: "2026-09-30T00:00:00Z" }]).map((p) => p.superseded_by), ["s2"], "최신 모드 기록으로");
 });
 
