@@ -119,6 +119,10 @@ export default function Home() {
   const [storageSrc, setStorageSrc] = useState("all");
   const [storageForm, setStorageForm] = useState("all");
   const storageAutoOpened = useRef(false);
+  // 4-E.2: window.confirm 대체(앱 WebView 는 WebChromeClient 없이는 confirm 이 즉시 false → 버튼 무반응 실측). 브라우저·WebView 동일 동작
+  const [confirmBox, setConfirmBox] = useState(null); // { message, resolve }
+  const askConfirm = (message) => new Promise((resolve) => setConfirmBox({ message, resolve }));
+  const answerConfirm = (ok) => { const c = confirmBox; setConfirmBox(null); c?.resolve(ok); };
   const [copied, setCopied] = useState(null);
   const [editing, setEditing] = useState(null); // { id, status, purposes, memo }
   const [thinking, setThinking] = useState(false); // 첫 텍스트 도착 전(모델 thinking 구간)
@@ -302,7 +306,8 @@ export default function Home() {
   const openScans = async () => { setShowScans(true); await loadScans(); };
   // 4-E: 보관함 열기 = 스캔 기록 조회(판정 보충 포함) + 저장 목록 판정. 세션이 준비되면 1회 자동으로 연다(기본 화면)
   const openStorage = async () => { setShowStorage(true); await loadScans(); if (collection.length && !Object.keys(verdicts).length) loadVerdicts(); };
-  useEffect(() => { if (session && !storageAutoOpened.current) { storageAutoOpened.current = true; openStorage(); } }, [session]); // eslint-disable-line react-hooks/exhaustive-deps
+  // 4-E.2: 자동 열기는 앱 WebView(UA PogoDoctorApp)에서만. PC·크롬은 기존 첫 화면(분석)
+  useEffect(() => { if (session && inApp && !storageAutoOpened.current) { storageAutoOpened.current = true; openStorage(); } }, [session, inApp]); // eslint-disable-line react-hooks/exhaustive-deps
   // 4-D3: 내 목록 패널 안내의 스캔 기록 수는 /api/scan 응답(activeCount)에서 — 아직 조회 전이면 한 번 조회(별도 count 호출 없음)
   useEffect(() => {
     if (showCollection && session && scanCount == null && !scanBusy) loadScans();
@@ -325,7 +330,7 @@ export default function Home() {
     const isTransfer = cat.category === "transfer";
     const rows = g.targetIds.filter((x) => x.startsWith("row:")).length;
     const msg = isTransfer ? `이 묶음 ${g.expected}마리를 게임에서 박사에게 보냈습니까? 스캔 기록을 정리하고${rows ? ` 내 목록 ${rows}건을 삭제합니다` : ""}. 계속할까요?` : `이 묶음 ${g.expected}마리에 게임에서 태그를 달았습니까? 스캔 기록을 정리합니다(내 목록은 유지).`;
-    if (!window.confirm(msg)) return;
+    if (!(await askConfirm(msg))) return;
     setCleanupBusy(true);
     try {
       const res = await fetch("/api/cleanup", { method: "POST", headers: { "Content-Type": "application/json", ...(await authHeader()) }, body: JSON.stringify({ action: "done", targetIds: g.targetIds, deleteRows: isTransfer }) });
@@ -339,7 +344,7 @@ export default function Home() {
   const purgeTransferred = async () => {
     const targets = collection.filter((c) => c.status === "transfer");
     if (!targets.length) return;
-    if (!window.confirm(`박사에게 보낼 예정 ${targets.length}마리를 목록에서 삭제합니다 (게임에서 실제로 보낸 뒤 누르세요). 계속할까요?`)) return;
+    if (!(await askConfirm(`박사에게 보낼 예정 ${targets.length}마리를 목록에서 삭제합니다 (게임에서 실제로 보낸 뒤 누르세요). 계속할까요?`))) return;
     let fail = 0;
     for (const t of targets) { const { error } = await deleteMyPokemon(t.id); if (error) fail++; }
     await reloadCollection();
@@ -2083,6 +2088,19 @@ export default function Home() {
           </div>
         );
       })()}
+      {/* ─── 4-E.2 페이지 내 확인 모달 (window.confirm 대체) ─── */}
+      {confirmBox && (
+        <div style={{ position: "fixed", inset: 0, background: "rgba(10,22,40,0.75)", zIndex: 400, display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }} onClick={() => answerConfirm(false)}>
+          <div style={{ background: "#1a2744", border: "1px solid #2a3a5c", borderRadius: 14, padding: 18, maxWidth: 420, width: "100%" }} onClick={(e) => e.stopPropagation()}>
+            <div style={{ fontSize: 14, color: "#e0e0e0", lineHeight: 1.6, whiteSpace: "pre-wrap" }}>{confirmBox.message}</div>
+            <div style={{ display: "flex", gap: 8, marginTop: 14 }}>
+              <button onClick={() => answerConfirm(true)} style={{ ...s.keepBtn, flex: 1, padding: 10 }}>확인</button>
+              <button onClick={() => answerConfirm(false)} style={{ ...s.resetBtn, flex: 1, margin: 0, padding: 10 }}>취소</button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* ─── 4-B5 정리 도우미 Panel ─── */}
       {showCleanup && (
         <div style={s.collOverlay}>
@@ -2113,6 +2131,15 @@ export default function Home() {
                   <div key={g.query} style={{ ...s.collItem, flexDirection: "column", alignItems: "stretch", marginTop: 6, opacity: cleanupDone[g.query] ? 0.5 : 1 }}>
                     <div style={{ fontSize: 11, color: "#8899aa" }}>{cat.fixed ? <b style={{ color: "#a890f0" }}>{g.label}</b> : <>묶음 {i + 1}/{cat.groups.length} · <b style={{ color: "#ffd93d" }}>{cat.protect ? `게임 결과 ≤ 예상 ${g.expected}마리` : `예상 ${g.expected}마리`}</b></>}{g.withCp ? " · CP 조건 포함" : ""}{g.overlap > 0 ? <span style={{ color: "#ff6b6b" }}> · ⚠️ 다른 개체 최대 {g.overlap}마리 포함 가능</span> : ""}{cat.fixed ? " · 예상 수 없음(앱이 모르는 정보 — 게임 결과를 보고 태그)" : ` · ${g.targetIds.map((id) => cleanup.names[id]).filter(Boolean).slice(0, 8).join(", ")}${g.targetIds.length > 8 ? " …" : ""}`}</div>
                     <code style={{ fontSize: 12, color: "#e0e0e0", wordBreak: "break-all", marginTop: 4, userSelect: "all" }}>{g.query}</code>
+                    {/* 4-E.2 포함 포켓몬 보기: 보내기 전 남길 개체를 알아보고 태그를 달 수 있게 */}
+                    {!cat.fixed && g.targetIds.length > 0 && cleanup.members && (
+                      <details style={{ marginTop: 4 }}>
+                        <summary style={{ fontSize: 10, color: "#8899aa", cursor: "pointer" }}>포함 포켓몬 {g.targetIds.length}마리 보기</summary>
+                        {g.targetIds.map((id) => { const m = cleanup.members[id]; if (!m) return <div key={id} style={{ fontSize: 10, color: "#576574" }}>{cleanup.names[id] || id}</div>; return (
+                          <div key={id} style={{ fontSize: 10, color: "#c8d6e5", padding: "1px 0" }}>{m.is_shadow ? "👤 " : ""}{m.is_purified ? "✨ " : ""}{m.name}{m.form && m.form !== "Normal" ? ` (${m.form})` : ""} · CP{m.cp ?? "?"} HP{m.hp ?? "?"} · {Number.isInteger(m.atk) ? `${m.atk}/${m.def}/${m.sta} (${Math.round(((m.atk + m.def + m.sta) / 45) * 100)}%)` : "개체값 없음"}{m.level ? ` L${m.level}` : ""} <span style={{ color: "#576574" }}>{id.startsWith("scan:") ? "스캔" : "저장"}</span></div>
+                        ); })}
+                      </details>
+                    )}
                     <div style={{ display: "flex", gap: 6, marginTop: 6 }}>
                       <button onClick={() => copyQuery(g)} style={{ ...s.chip, fontSize: 11, flex: 1 }}>{copied === g.query ? "복사됨 ✓" : "📋 복사"}</button>
                       {!cleanupDone[g.query] && !cat.fixed && <button onClick={() => cleanupGroupDone(cat, g)} disabled={cleanupBusy} style={{ ...s.chip, fontSize: 11, color: cat.category === "transfer" ? "#ff6b6b" : "#4ecdc4" }}>{cat.category === "transfer" ? "보냄 처리 완료" : "완료(정리)"}</button>}
@@ -2146,9 +2173,9 @@ export default function Home() {
               <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 10 }}>
                 <button onClick={() => scanAction("save", scans.map((x) => x.id))} disabled={scanBusy} style={{ ...s.keepBtn, width: "auto", padding: "8px 12px" }}>✅ 추천대로 전부 저장 ({scans.length})</button>
                 <button onClick={() => scanAction("save", scans.filter((x) => x.verdict?.tier !== "transfer").map((x) => x.id))} disabled={scanBusy} style={{ ...s.chip, fontSize: 11 }}>보관 추천만 저장 ({scans.filter((x) => x.verdict?.tier !== "transfer").length})</button>
-                <button onClick={() => { if (window.confirm("스캔 기록을 모두 지웁니다 (내 목록은 그대로). 계속할까요?")) scanAction("clear", []); }} disabled={scanBusy} style={{ ...s.chip, fontSize: 11, color: "#ff6b6b" }}>전부 지우기</button>
+                <button onClick={async () => { if (await askConfirm("스캔 기록을 모두 지웁니다 (내 목록은 그대로). 계속할까요?")) scanAction("clear", []); }} disabled={scanBusy} style={{ ...s.chip, fontSize: 11, color: "#ff6b6b" }}>전부 지우기</button>
                 {/* 4-D: 전체 스캔 세션 이전 기록 숨김(복구 가능) — 최신 세션 기준 */}
-                <button onClick={() => { if (window.confirm("구버전 앱(0.1.38 미만 또는 버전 없음)으로 기록된 스캔 기록을 모두 숨깁니다(내 목록은 그대로, \"숨김 복구\" 로 되돌릴 수 있음). 계속할까요?")) scanAction("dismiss_untrusted", []); }} disabled={scanBusy} style={{ ...s.chip, fontSize: 11, color: "#ffd93d" }}>구버전 앱 기록 숨김</button>
+                <button onClick={async () => { if (await askConfirm("구버전 앱(0.1.38 미만 또는 버전 없음)으로 기록된 스캔 기록을 모두 숨깁니다(내 목록은 그대로, \"숨김 복구\" 로 되돌릴 수 있음). 계속할까요?")) scanAction("dismiss_untrusted", []); }} disabled={scanBusy} style={{ ...s.chip, fontSize: 11, color: "#ffd93d" }}>구버전 앱 기록 숨김</button>
                 <button onClick={() => scanAction("restore_dismissed", [])} disabled={scanBusy} style={{ ...s.chip, fontSize: 11, color: "#8899aa" }}>숨김 복구</button>
               </div>
             )}

@@ -6,6 +6,9 @@ import android.content.Intent
 import android.net.Uri
 import android.os.Bundle
 import android.view.ViewGroup
+import android.app.AlertDialog
+import android.webkit.JsResult
+import android.webkit.WebChromeClient
 import android.webkit.WebResourceRequest
 import android.webkit.WebSettings
 import android.webkit.WebView
@@ -49,6 +52,17 @@ class WebActivity : Activity() {
             mixedContentMode = WebSettings.MIXED_CONTENT_NEVER_ALLOW
             cacheMode = WebSettings.LOAD_DEFAULT
             userAgentString = userAgentString + " PogoDoctorApp/" + BuildConfig.VERSION_NAME
+        }
+        // 4-E.2: WebChromeClient 가 없으면 window.confirm/alert 이 즉시 false/무시 → 웹 "보냄 처리 완료" 등 확인 버튼이 무반응(실측). 네이티브 대화상자로 연결
+        web.webChromeClient = object : WebChromeClient() {
+            override fun onJsAlert(view: WebView?, url: String?, message: String?, result: JsResult?): Boolean {
+                AlertDialog.Builder(this@WebActivity).setMessage(message ?: "").setPositiveButton("확인") { _, _ -> result?.confirm() }.setOnCancelListener { result?.confirm() }.show()
+                return true
+            }
+            override fun onJsConfirm(view: WebView?, url: String?, message: String?, result: JsResult?): Boolean {
+                AlertDialog.Builder(this@WebActivity).setMessage(message ?: "").setPositiveButton("확인") { _, _ -> result?.confirm() }.setNegativeButton("취소") { _, _ -> result?.cancel() }.setOnCancelListener { result?.cancel() }.show()
+                return true
+            }
         }
         web.webViewClient = object : WebViewClient() {
             override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {

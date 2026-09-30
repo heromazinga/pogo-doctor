@@ -225,6 +225,14 @@ Vercel 에서는 환경변수 `POGO_DISABLE_SOURCES` 를 Preview 환경에 잠�
 
 마이그레이션 없음. 새 APK 필요(앱 화면·서비스 변경). 웹은 배포 즉시.
 
+### 4-E.2 검토 반영
+- **[긴급] 앱 WebView 확인창 무반응**: `WebActivity` 에 `WebChromeClient` 가 없어 `window.confirm` 이 즉시 false → "보냄 처리 완료" 등 확인 버튼 전부 무반응(실측). 앱: `onJsAlert/onJsConfirm` → 네이티브 AlertDialog. 웹: `window.confirm` 을 페이지 내 확인 모달(`askConfirm`, Promise)로 전부 교체(브라우저·WebView 동일 동작).
+- **크롬에서 열기**: 앱 ④ 카드에 [앱에서 열기] [크롬에서 열기]. 크롬은 1회용 웹 로그인 코드를 발급해 `#applogin=코드&uid=` 해시로 넘기고, 웹이 즉시 교환 후 `history.replaceState` 로 지운다(서버 로그·URL 에 남지 않음). 크롬이 없으면 기본 브라우저.
+- **포함 포켓몬 보기**: `GET /api/cleanup` 응답에 `members`(id → 이름·폼·CP·HP·개체값·레벨·섀도/정화). 웹 🧹 패널은 묶음마다 `<details>`, 앱 박사행 목록은 "▸ 포함 포켓몬 n마리 보기" 펼치기.
+- 보관함 자동 열기는 앱 WebView(UA `PogoDoctorApp`)에서만. PC·크롬은 기존 첫 화면.
+- 박사행 묶음 상태(복사됨/보냄)는 `Prefs.cleanupStates`(검색어 → 상태 JSON)에 저장, 재시작 후 유지. 서버 목록에서 사라진 묶음의 상태는 정리.
+- 알림 액션 "캡처" 복원(게임 부스터 환경 대비): [연속 스캔/중지] [캡처] [정리 목록](박사행 ↔ 태그 전환 가능).
+
 ## 4-D3: 박사행 보호 조건에 다이맥스·XXS 추가 · 고개체 수집 보류 · 내 목록 패널의 스캔 기록 안내
 
 원칙(사용자, 이후 기준): 사용자 작업은 "복사 → 붙여넣기 → 수 확인 → 전체 선택 → 보내기"만 남아야 한다. 검색어 수동 수정이나 개체 수동 선택 해제가 필요하면 결함으로 본다.

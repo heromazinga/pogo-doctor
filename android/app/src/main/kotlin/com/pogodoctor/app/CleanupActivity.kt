@@ -104,7 +104,13 @@ class CleanupActivity : Activity() {
                 if (st != CleanupCopier.State.DONE) addView(button("보냄", 0xFFFF6B6B.toInt()) { confirmDone(i, g) })
                 root.addView(this)
             }
-            if (g.names.isNotBlank()) text("   ${g.names}", 10f, 0xFF8899AA.toInt())
+            // 4-E.2 포함 포켓몬 보기(펼치기): 보내기 전 남길 개체를 알아보고 태그를 달 수 있게
+            if (g.members.isNotEmpty()) {
+                val detail = TextView(this).apply { text = g.members.joinToString("\n"); textSize = 10f; setTextColor(0xFFC8D6E5.toInt()); setPadding(dp(12), 0, 0, dp(4)); visibility = android.view.View.GONE }
+                val toggle = TextView(this).apply { text = "   ▸ 포함 포켓몬 ${g.members.size}마리 보기"; textSize = 10f; setTextColor(0xFF8899AA.toInt()); setPadding(0, dp(2), 0, dp(2))
+                    setOnClickListener { val open = detail.visibility == android.view.View.GONE; detail.visibility = if (open) android.view.View.VISIBLE else android.view.View.GONE; text = (if (open) "   ▾" else "   ▸") + " 포함 포켓몬 ${g.members.size}마리 보기" } }
+                root.addView(toggle); root.addView(detail)
+            } else if (g.names.isNotBlank()) text("   ${g.names}", 10f, 0xFF8899AA.toInt())
         }
         if (CleanupCopier.gameTagged > 0) text("게임 태그가 이미 달린 개체 ${CleanupCopier.gameTagged}마리는 대상에서 제외됨", 10f, 0xFF8899AA.toInt())
         footer()

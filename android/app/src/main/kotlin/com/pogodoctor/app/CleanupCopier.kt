@@ -14,7 +14,7 @@ import org.json.JSONObject
 object CleanupCopier {
     // 예상 수 한계 문구 (웹 searchBuilder.js EXPECTED_LIMIT_NOTE 와 같은 뜻). 서버 응답의 note 가 있으면 그것을 쓴다
     const val LIMIT_NOTE = "예상 수는 앱이 아는 개체(스캔 기록 + 내 목록) 기준입니다. 앱이 모르는 같은 종·HP 개체가 게임에 있으면 결과가 더 나옵니다 — 게임 결과 수가 예상과 다르면 보내지 마세요."
-    data class Group(val category: String, val label: String, val query: String, val expected: Int, val names: String, val overlap: Int = 0, val targetIds: List<String> = emptyList())
+    data class Group(val category: String, val label: String, val query: String, val expected: Int, val names: String, val overlap: Int = 0, val targetIds: List<String> = emptyList(), val members: List<String> = emptyList())
     // 카테고리 한 줄: "카테고리명 · 예상 N마리" (N = 묶음들의 예상 합). 태그 카테고리는 묶음이 여러 개일 수 있어 groups 로 보관
     data class Category(val category: String, val label: String, val groups: List<Group>) { val expected: Int get() = if (groups.any { it.expected < 0 }) -1 else groups.sumOf { it.expected } }
     // 4-E 박사행 묶음 상태: 미복사 → 복사됨 → 보냄 (query 기준, 앱 프로세스 동안 유지. 보냄 처리된 묶음은 서버 갱신 후 목록에서 사라짐)
@@ -24,6 +24,17 @@ object CleanupCopier {
     @Volatile private var fetchedAt = 0L
     private val copied = HashSet<String>()
     private val done = HashSet<String>()
+    @Volatile private var statesLoaded = false
+    // 4-E.2 상태를 Prefs(JSON {query: "copied"|"done"})에 저장해 앱 재시작 후에도 유지
+    @Synchronized private fun loadStates(prefs: Prefs) {
+        if (statesLoaded) return
+        try { val o = JSONObject(prefs.cleanupStates); for (k in o.keys()) { when (o.optString(k)) { "done" -> done.add(k); "copied" -> copied.add(k) } } } catch (_: Exception) {}
+        statesLoaded = true
+    }
+    @Synchronized private fun saveStates(prefs: Prefs) {
+        val o = JSONObject(); for (q in copied) o.put(q, "copied"); for (q in done) o.put(q, "done")
+        prefs.cleanupStates = o.toString()
+    }
     @Volatile var lastError: String? = null
     @Volatile var note: String = LIMIT_NOTE
     @Volatile var gameTagged: Int = 0
@@ -42,10 +53,21 @@ object CleanupCopier {
 
     // 서버에서 묶음 갱신 (60초 캐시). 실패 시 이전 캐시 유지
     @Synchronized fun refresh(prefs: Prefs, force: Boolean = false): Boolean {
+        loadStates(prefs)
         if (!force && System.currentTimeMillis() - fetchedAt < 60_000 && (transfer.isNotEmpty() || tagCats.isNotEmpty())) return true
         return try {
             val res = Api(prefs).cleanup(prefs.cleanupMaxLen)
             val names = res.optJSONObject("names") ?: JSONObject()
+            val membersObj = res.optJSONObject("members") ?: JSONObject()
+            // 4-E.2 "포함 포켓몬 보기" 한 줄: 👤 이름 · CP HP · a/d/s (%) Lx
+            fun memberLine(id: String): String? {
+                val m = membersObj.optJSONObject(id) ?: return names.optString(id, null)
+                val ivs = if (m.has("atk") && !m.isNull("atk")) { val a = m.optInt("atk"); val d = m.optInt("def"); val s = m.optInt("sta"); "$a/$d/$s (${Math.round((a + d + s) / 45.0 * 100)}%)" } else "개체값 없음"
+                val form = m.optString("form", "Normal").let { if (it == "Normal" || it.isBlank()) "" else " ($it)" }
+                return (if (m.optBoolean("is_shadow")) "👤 " else "") + (if (m.optBoolean("is_purified")) "✨ " else "") + m.optString("name") + form +
+                    " · CP" + (if (m.isNull("cp")) "?" else m.optInt("cp").toString()) + " HP" + (if (m.isNull("hp")) "?" else m.optInt("hp").toString()) + " · " + ivs +
+                    (if (m.isNull("level")) "" else " L" + m.optDouble("level").let { if (it % 1.0 == 0.0) it.toInt().toString() else it.toString() })
+            }
             val cats = res.optJSONArray("categories")
             val tr = ArrayList<Group>(); val tg = ArrayList<Category>()
             for (i in 0 until (cats?.length() ?: 0)) {
@@ -60,7 +82,7 @@ object CleanupCopier {
                     // expected 가 null(고정 검색어)이면 -1
                     val expected = if (g.isNull("expected")) -1 else g.optInt("expected")
                     val glabel = g.optString("label", "").ifBlank { label }
-                    list.add(Group(category, if (category == "collect") "💎 $glabel" else label, g.optString("query"), expected, nm, g.optInt("overlap", 0), idList))
+                    list.add(Group(category, if (category == "collect") "💎 $glabel" else label, g.optString("query"), expected, nm, g.optInt("overlap", 0), idList, idList.mapNotNull { memberLine(it) }))
                 }
                 if (category == "transfer") tr.addAll(list)
                 else if (category.startsWith("tag:") && list.isNotEmpty()) tg.add(Category(category, label, list))
@@ -69,7 +91,7 @@ object CleanupCopier {
             transfer = tr; tagCats = tg; fetchedAt = System.currentTimeMillis(); lastError = null
             note = res.optString("note", LIMIT_NOTE).ifBlank { LIMIT_NOTE }; gameTagged = res.optInt("gameTagged", 0); pending = res.optInt("pending", 0)
             // 서버 목록에 없는(보냄 처리되어 사라진) 묶음의 상태는 정리
-            val alive = tr.map { it.query }.toHashSet(); copied.retainAll(alive); done.retainAll(alive)
+            val alive = tr.map { it.query }.toHashSet(); copied.retainAll(alive); done.retainAll(alive); saveStates(prefs)
             true
         } catch (e: Exception) { lastError = e.message ?: e.toString(); false }
     }
@@ -99,7 +121,7 @@ object CleanupCopier {
         if (pending > 0) { val msg = "판정 재계산 중 ${pending}건 — 박사행 복사는 잠시 후 다시(웹 🧹 패널 🔄 로 갱신)"; Toast.makeText(ctx, msg, Toast.LENGTH_LONG).show(); return msg }
         val g = transfer.getOrNull(idx) ?: run { val msg = if (lastError != null) "정리 묶음을 받지 못했습니다: $lastError" else "정리할 박사행 대상이 없습니다"; Toast.makeText(ctx, msg, Toast.LENGTH_LONG).show(); return msg }
         copy(ctx, g.query)
-        synchronized(this) { copied.add(g.query) }
+        synchronized(this) { copied.add(g.query) }; saveStates(Prefs(ctx))
         val msg = toastText("박사행 ${idx + 1}/${transfer.size}", g, withNote = true)
         Toast.makeText(ctx, msg, Toast.LENGTH_LONG).show()
         return msg
@@ -108,7 +130,7 @@ object CleanupCopier {
     // 4-E 박사행 묶음 보냄 처리 (게임에서 보낸 뒤): 서버에 done → 상태 "보냄". 실패 시 예외 메시지 반환
     fun markDone(prefs: Prefs, g: Group): String? = try {
         Api(prefs).cleanupDone(g.targetIds, deleteRows = true)
-        synchronized(this) { done.add(g.query) }
+        synchronized(this) { done.add(g.query) }; saveStates(prefs)
         null
     } catch (e: Exception) { e.message ?: e.toString() }
 

@@ -194,7 +194,26 @@ class MainActivity : ComponentActivity() {
                 Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Text("📦 내 보관함 (웹)", fontSize = 16.sp)
                     Text(if (paired) "스캔 기록 전체를 판정·태그·개체값과 함께 보고 검색·필터합니다. 앱 계정으로 자동 로그인됩니다." else "기기 연결 후에는 앱 계정으로 자동 로그인됩니다. 연결 전에는 익명으로 열립니다.", fontSize = 12.sp, color = dim)
-                    Button(onClick = { startActivity(Intent(this@MainActivity, WebActivity::class.java)) }) { Text("포고박사 열기") }
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Button(onClick = { startActivity(Intent(this@MainActivity, WebActivity::class.java)) }) { Text("앱에서 열기") }
+                        // 4-E.2: 크롬(기본 브라우저)으로 열기 — 1회용 웹 로그인 코드를 발급해 URL 해시로 넘기면 웹이 즉시 교환하고 history.replaceState 로 지운다(코드는 서버 로그·URL 에 남지 않음)
+                        OutlinedButton(enabled = !busy, onClick = {
+                            busy = true
+                            lifecycleScope.launch {
+                                val url = try {
+                                    if (!paired) prefs.serverUrl + "/" else {
+                                        val r = withContext(Dispatchers.IO) { api.webLoginCode() }
+                                        val c = r.optString("code", ""); val uid = r.optString("userId", "")
+                                        if (c.isBlank()) prefs.serverUrl + "/" else prefs.serverUrl + "/#applogin=" + Uri.encode(c) + (if (uid.isNotBlank()) "&uid=" + Uri.encode(uid) else "")
+                                    }
+                                } catch (e: Exception) { status = "웹 로그인 코드 발급 실패: ${e.message} — 익명으로 엽니다"; paired = prefs.isPaired; prefs.serverUrl + "/" }
+                                val view = Intent(Intent.ACTION_VIEW, Uri.parse(url)).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                                val chrome = Intent(view).setPackage("com.android.chrome")
+                                try { startActivity(chrome) } catch (_: Exception) { try { startActivity(view) } catch (e: Exception) { status = "브라우저를 열지 못했습니다: ${e.message}" } }
+                                busy = false
+                            }
+                        }) { Text("크롬에서 열기") }
+                    }
                 }
             }
 

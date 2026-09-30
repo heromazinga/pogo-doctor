@@ -176,10 +176,11 @@ class CaptureService : Service() {
             .setContentIntent(open).setOnlyAlertOnce(true).setOngoing(true)
         // 알림 액션은 3개까지 표시된다. 스캔 중·스캔 기록이 있으면 정리 액션(4-B5 박사행 복사 / 4-B6 태그 선택 목록)을 넣는다
         val cleanupMode = scanning || (scan == null && hadScanRecords)
+        // 4-E.2: 게임 부스터가 ⚡ 버튼을 숨기는 환경 대비 "캡처" 복원. 정리 목록(박사행)에서 태그 목록으로 전환 가능하므로 액션 3개로 맞춤
         if (cleanupMode) {
             b.addAction(Notification.Action.Builder(icon, if (scanning) "스캔 중지" else "연속 스캔", scanToggle).build())
-            b.addAction(Notification.Action.Builder(icon, "박사행 복사", copyTransfer).build())
-            b.addAction(Notification.Action.Builder(icon, "태그 선택", copyTag).build())
+            b.addAction(Notification.Action.Builder(icon, "캡처", capture).build())
+            b.addAction(Notification.Action.Builder(icon, "정리 목록", copyTransfer).build())
         } else {
             b.addAction(Notification.Action.Builder(icon, "캡처", capture).build())
             b.addAction(Notification.Action.Builder(icon, "연속 스캔", scanToggle).build())
