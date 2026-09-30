@@ -99,9 +99,9 @@ class MainActivity : ComponentActivity() {
     }
     private fun stopCapture() { startService(Intent(this, CaptureService::class.java).setAction(CaptureService.ACTION_STOP)); running = false; scanning = false; status = "오버레이 중지됨" }
     // 4-E: 모드를 정해 연속 스캔 시작 (세션이 끝나면 서비스가 모드를 일반으로 되돌림)
-    private fun startScan(mode: String) {
-        startService(Intent(this, CaptureService::class.java).setAction(CaptureService.ACTION_SCAN_START).putExtra(CaptureService.EXTRA_MODE, mode))
-        scanning = true; status = "연속 스캔 시작(${scanModeLabel(mode)}) — 포켓몬GO 평가 화면으로" + (if (mode != "normal") ". 게임 검색 \"${scanModeLabel(mode)}\" 로 먼저 거르세요" else "")
+    private fun startScan(mode: String, fullSync: Boolean = false) {
+        startService(Intent(this, CaptureService::class.java).setAction(CaptureService.ACTION_SCAN_START).putExtra(CaptureService.EXTRA_MODE, mode).putExtra(CaptureService.EXTRA_FULL_SYNC, fullSync))
+        scanning = true; status = if (fullSync) "전체 동기화 시작 — 검색어 없이 보관함 전체를 처음부터 끝까지 넘기세요. 끝나면 웹 📦 내 보관함에서 \"다시 보이지 않은 기록 숨기기\" 확인" else "연속 스캔 시작(${scanModeLabel(mode)}) — 포켓몬GO 평가 화면으로" + (if (mode != "normal") ". 게임 검색 \"${scanModeLabel(mode)}\" 로 먼저 거르세요" else "")
     }
     private fun stopScan() { startService(Intent(this, CaptureService::class.java).setAction(CaptureService.ACTION_SCAN_STOP)); scanning = false; status = "연속 스캔 중지 (모드 일반으로 복귀)" }
     private fun openCleanup(kind: String) = startActivity(Intent(this, CleanupActivity::class.java).putExtra(CleanupActivity.EXTRA_KIND, kind))
@@ -162,6 +162,8 @@ class MainActivity : ComponentActivity() {
                             OutlinedButton(enabled = paired, onClick = { scanMode = "shadow"; startScan("shadow") }) { Text("👤 섀도") }
                             OutlinedButton(enabled = paired, onClick = { scanMode = "purified"; startScan("purified") }) { Text("✨ 정화") }
                         }
+                        // 4-F.2 전체 동기화: 게임에서 수동으로 정리해 기록과 실제 보관함이 다를 때. 세션이 끝나면 웹이 "다시 보이지 않은 이전 기록" 숨김을 제안(확인창·복구 가능). 태그 필터 등 부분 스캔에는 쓰지 말 것
+                        OutlinedButton(enabled = paired, onClick = { scanMode = "normal"; startScan("normal", fullSync = true) }) { Text("🔄 전체 동기화 스캔 (보관함 전체)") }
                         OutlinedButton(onClick = { stopCapture() }) { Text("오버레이 중지") }
                     }
                     if (running && !paired) Text("스캔 기록은 서버에 남으므로 기기 연결이 필요합니다", fontSize = 11.sp, color = Color(0xFFFF6B6B))

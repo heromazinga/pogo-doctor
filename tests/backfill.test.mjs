@@ -1,7 +1,7 @@
 // 4-C.2 스캔 기록 superseded 백필(planSupersede) + CP 검증(cpConsistentLevel)
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { planSupersede, planConflicts, planSuspects, isSuspectBars, planModeSupersede } from "../app/lib/scanBackfill.js";
+import { planSupersede, planConflicts, planSuspects, isSuspectBars, planModeSupersede, planNotSeen } from "../app/lib/scanBackfill.js";
 import { cpConsistentLevel } from "../app/lib/ivCalc.js";
 import { calcCP } from "../app/lib/cpm.js";
 import { calcHP } from "../app/lib/ivCalc.js";
@@ -129,4 +129,17 @@ test("백필 ④: 진화·강화(레벨 비감소) → 최신 기록 유지, 서
   assert.deepEqual(planSupersede([d1, d2], dataset), [], "포획일이 둘 다 있고 다르면 다른 개체");
   const lower = item("lo", 4, [15, 14, 13], 20), later = item("hi", 4, [15, 14, 13], 15);
   assert.deepEqual(planSupersede([lower, later], dataset), [], "나중 기록의 레벨이 낮으면(다른 개체) 대체 없음");
+});
+
+test("4-F.2 전체 동기화 planNotSeen: fullSync·종료된 세션만, 다른 세션의 세션 종료 전 활성 기록만 숨김 후보, 부분 스캔 세션은 없음", () => {
+  const sess = { session_id: "S2", ended_at: "2026-09-30T10:00:00Z", metrics: { fullSync: true } };
+  const items = [
+    { id: "old1", session_id: "S1", created_at: "2026-09-29T10:00:00Z", dismissed: false, superseded: false },
+    { id: "old2", session_id: "S1", created_at: "2026-09-29T11:00:00Z", dismissed: false, superseded: true },
+    { id: "new1", session_id: "S2", created_at: "2026-09-30T09:30:00Z", dismissed: false, superseded: false },
+    { id: "later", session_id: "S3", created_at: "2026-09-30T12:00:00Z", dismissed: false, superseded: false },
+  ];
+  assert.deepEqual(planNotSeen(items, sess), ["old1"]);
+  assert.deepEqual(planNotSeen(items, { ...sess, metrics: {} }), [], "부분 스캔(fullSync 없음)");
+  assert.deepEqual(planNotSeen(items, { ...sess, ended_at: null }), [], "끝나지 않은 세션");
 });

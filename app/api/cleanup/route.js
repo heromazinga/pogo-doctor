@@ -22,10 +22,10 @@ export async function GET(req) {
   if (!user) return NextResponse.json({ error: "로그인이 필요합니다" }, { status: 401 });
   const sp = new URL(req.url).searchParams;
   const maxLen = Math.min(400, Math.max(60, Number(sp.get("maxLen")) || DEFAULT_MAX_LEN));
-  const { ctx } = await buildVerdictContext(req);
   // 4-D: 활성 기록 전부(페이지네이션, ≤3000) — 상한 300 이 population 을 잘라 예상 수·보호 판단을 틀리게 했다
   let items, truncated = false;
   try { ({ items, truncated } = await fetchActiveScanItems(sb, user.userId)); } catch (e) { return NextResponse.json({ error: e.message }, { status: 500 }); }
+  const { ctx } = await buildVerdictContext(req, { scanItems: items }); // 4-F: 예비 순위는 이 조회의 활성 기록으로
   // 4-C.2 스캔 기록 백필(멱등, 규칙 버전당 1회): 과거 기록끼리도 규칙 ③ 으로 superseded 처리
   let backfill = null;
   try { backfill = await backfillSuperseded(sb, user.userId, items, ctx); if (backfill.changed) items = backfill.items; } catch (e) { console.warn(`[cleanup] 백필 실패: ${e.message}`); }

@@ -3,7 +3,8 @@ import { getServiceClient } from "../../lib/supabaseServer";
 import { rateLimit, clientIp } from "../../lib/deviceAuth";
 import { resolveUser, buildVerdictContext } from "../../lib/verdictContext";
 import { fillMissingVerdicts, isStaleVerdict } from "../../lib/scanVerdict";
-import { backfillSuperseded } from "../../lib/scanBackfill";
+import { backfillSuperseded, planNotSeen, NOT_SEEN_REASON } from "../../lib/scanBackfill";
+import { invalidateReserveCache } from "../../lib/verdictContext";
 import { fetchActiveScanItems } from "../../lib/scanQuery";
 import { isTrustedVersion, MIN_TRUSTED_APP_VERSION } from "../../lib/appVersion";
 import { upsertMyPokemon } from "../../lib/savePokemonServer";
@@ -24,7 +25,7 @@ export async function GET(req) {
   let filled = 0, pending = 0, backfill = null;
   // 4-B6.2: 규칙 버전이 다른(낡은) 판정도 다시 계산 (isStaleVerdict). 4-C.2: 그때 superseded 백필도 1회(버전 플래그). 4-D2: 청크(100건·15s)만 처리, 나머지는 pending
   try {
-    const { ctx } = await buildVerdictContext(req, { myRows: undefined });
+    const { ctx } = await buildVerdictContext(req, { myRows: undefined, scanItems: items }); // 4-F: 예비 순위는 이 조회의 활성 기록으로
     try { backfill = await backfillSuperseded(sb, user.userId, items, ctx); if (backfill.changed) items = backfill.items; } catch (e) { console.warn(`[scan] 백필 실패: ${e.message}`); }
     if (items.some((it) => isStaleVerdict(it.verdict))) ({ filled, pending } = await fillMissingVerdicts(sb, items, ctx));
   } catch (e) { console.warn(`[scan] 판정 보충 실패: ${e.message}`); }
@@ -66,8 +67,28 @@ export async function POST(req) {
     }
     return NextResponse.json({ ok: true, count, minTrusted: MIN_TRUSTED_APP_VERSION });
   }
+  // 4-F.2 전체 동기화 세션(metrics.fullSync) 뒤 "다시 보이지 않은 기록" 수 조회 / 숨김(복구 가능: dismissed_reason 'not_seen'). 부분 스캔 세션(fullSync 없음)에는 적용하지 않는다
+  if (b.action === "not_seen_count" || b.action === "dismiss_not_seen") {
+    const sid = String(b.session_id || "");
+    const { data: session } = await sb.from("scan_sessions").select("session_id,metrics,ended_at").eq("user_id", user.userId).eq("session_id", sid).maybeSingle();
+    if (!session) return NextResponse.json({ error: "세션 없음" }, { status: 404 });
+    if (!session.metrics?.fullSync || !session.ended_at) return NextResponse.json({ error: "전체 동기화 세션이 아니거나 아직 끝나지 않았습니다" }, { status: 400 });
+    let active;
+    try { ({ items: active } = await fetchActiveScanItems(sb, user.userId, { select: "id,session_id,created_at,dismissed,superseded" })); } catch (e) { return NextResponse.json({ error: e.message }, { status: 500 }); }
+    const ids = planNotSeen(active, session);
+    if (b.action === "not_seen_count") return NextResponse.json({ ok: true, count: ids.length, session_id: sid });
+    let count = 0;
+    for (let i = 0; i < ids.length; i += 200) {
+      const chunk = ids.slice(i, i + 200);
+      const { error } = await sb.from("scan_items").update({ dismissed: true, dismissed_reason: NOT_SEEN_REASON }).eq("user_id", user.userId).in("id", chunk);
+      if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+      count += chunk.length;
+    }
+    invalidateReserveCache(user.userId);
+    return NextResponse.json({ ok: true, count, session_id: sid });
+  }
   if (b.action === "restore_dismissed") {
-    const { data: rows, error } = await sb.from("scan_items").update({ dismissed: false, dismissed_reason: null }).eq("user_id", user.userId).eq("dismissed", true).eq("dismissed_reason", "before_session").select("id");
+    const { data: rows, error } = await sb.from("scan_items").update({ dismissed: false, dismissed_reason: null }).eq("user_id", user.userId).eq("dismissed", true).in("dismissed_reason", ["before_session", NOT_SEEN_REASON]).select("id");
     if (error) return NextResponse.json({ error: error.message }, { status: 500 });
     return NextResponse.json({ ok: true, count: (rows || []).length });
   }
@@ -100,5 +121,5 @@ export async function POST(req) {
     }
     return NextResponse.json({ ok: true, results });
   }
-  return NextResponse.json({ error: "action 은 save|dismiss|clear|dismiss_untrusted|restore_dismissed" }, { status: 400 });
+  return NextResponse.json({ error: "action 은 save|dismiss|clear|dismiss_untrusted|restore_dismissed|not_seen_count|dismiss_not_seen" }, { status: 400 });
 }
