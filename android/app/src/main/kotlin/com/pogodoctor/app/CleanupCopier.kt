@@ -16,9 +16,9 @@ object CleanupCopier {
     const val LIMIT_NOTE = "예상 수는 앱이 아는 개체(스캔 기록 + 내 목록) 기준입니다. 앱이 모르는 같은 종·HP 개체가 게임에 있으면 결과가 더 나옵니다 — 게임 결과 수가 예상과 다르면 보내지 마세요."
     data class Group(val category: String, val label: String, val query: String, val expected: Int, val names: String, val overlap: Int = 0, val targetIds: List<String> = emptyList(), val members: List<String> = emptyList())
     // 카테고리 한 줄: "카테고리명 · 예상 N마리" (N = 묶음들의 예상 합). 태그 카테고리는 묶음이 여러 개일 수 있어 groups 로 보관
-    data class Category(val category: String, val label: String, val groups: List<Group>) { val expected: Int get() = if (groups.any { it.expected < 0 }) -1 else groups.sumOf { it.expected } }
+    data class Category(val category: String, val label: String, val groups: List<Group>, val optional: Boolean = false) { val expected: Int get() = if (groups.any { it.expected < 0 }) -1 else groups.sumOf { it.expected } }
     // 4-E 박사행 묶음 상태: 미복사 → 복사됨 → 보냄 (query 기준, 앱 프로세스 동안 유지. 보냄 처리된 묶음은 서버 갱신 후 목록에서 사라짐)
-    enum class State(val label: String) { NONE("미복사"), COPIED("복사됨"), DONE("보냄") }
+    enum class State(val label: String) { NONE("미복사"), COPIED("복사됨"), DONE("보냄"), GONE("이미 없음") }
     @Volatile private var transfer: List<Group> = emptyList()
     @Volatile private var tagCats: List<Category> = emptyList()
     @Volatile private var fetchedAt = 0L
@@ -85,7 +85,7 @@ object CleanupCopier {
                     list.add(Group(category, if (category == "collect") "💎 $glabel" else label, g.optString("query"), expected, nm, g.optInt("overlap", 0), idList, idList.mapNotNull { memberLine(it) }))
                 }
                 if (category == "transfer") tr.addAll(list)
-                else if (category.startsWith("tag:") && list.isNotEmpty()) tg.add(Category(category, label, list))
+                else if (category.startsWith("tag:") && list.isNotEmpty()) tg.add(Category(category, label, list, c.optBoolean("optional", false)))
                 else if (category == "collect") for (g in list) tg.add(Category("collect:${g.query}", g.label, listOf(g)))
             }
             transfer = tr; tagCats = tg; fetchedAt = System.currentTimeMillis(); lastError = null
@@ -133,6 +133,12 @@ object CleanupCopier {
         synchronized(this) { done.add(g.query) }; saveStates(prefs)
         null
     } catch (e: Exception) { e.message ?: e.toString() }
+    // 4-F.5 B 게임 결과 0마리 → "이미 없음" (스캔 기록 not_seen, 복구 가능)
+    fun markNotSeen(prefs: Prefs, g: Group): String? = try {
+        Api(prefs).cleanupNotSeen(g.targetIds)
+        synchronized(this) { done.add(g.query) }; saveStates(prefs)
+        null
+    } catch (e: Exception) { e.message ?: e.toString() }
 
     // 태그 카테고리의 묶음 하나 복사 → 토스트 "[불꽃 레이드] 복사됨 · …" (묶음이 여럿이면 "[불꽃 레이드 2/3]")
     fun copyTag(ctx: Context, cat: Category, groupIdx: Int): String {
@@ -146,8 +152,10 @@ object CleanupCopier {
 
     // 오프라인 대체: 세션 항목만으로 계산 (내 목록과의 충돌 검사 불가 → 표기). 게임 태그가 이미 달린 개체는 대상에서 제외
     fun localFallback(items: List<SearchBuilder.Item>, transferIds: Set<String>, gameTaggedIds: Set<String> = emptySet()) {
-        val targets = items.filter { it.id in transferIds && it.id !in gameTaggedIds }
-        val r = SearchBuilder.buildGroups(targets, items, strict = true)
+        // 4-F.5: 사용자 고유 태그가 있는 개체만 제외, 앱 관리 태그는 포함. 보호 접미사에 관측된 사용자 태그 절
+        val userTags = SearchBuilder.userTagsOf(items)
+        val targets = items.filter { it.id in transferIds && it.id !in gameTaggedIds && it.gameTags.none { t -> !SearchBuilder.isAppTag(t) } }
+        val r = SearchBuilder.buildGroups(targets, items, strict = true, suffix = SearchBuilder.protectSuffix(userTags))
         transfer = r.groups.map { Group("transfer", "❌ 박사행(로컬·내 목록 미검사)", it.query, it.expected, it.targetIds.take(6).joinToString(", "), 0, it.targetIds.map { id -> "scan:$id" }) }
         gameTagged = gameTaggedIds.size
         fetchedAt = System.currentTimeMillis()

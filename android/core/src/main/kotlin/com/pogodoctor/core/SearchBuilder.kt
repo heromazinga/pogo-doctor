@@ -10,16 +10,22 @@ object SearchBuilder {
     data class Result(val groups: List<Group>, val skipped: List<Skipped>)
 
     // 4-C.2 박사행 보호 조건(항상 적용, 웹 searchBuilder.js PROTECT_SUFFIX 와 동일): 태그·이로치·반짝반짝·XXL·배경 제외. 길이 계산에 포함
-    val PROTECT_CLAUSES = listOf("!#", "!색이 다른", "!반짝반짝", "!xxl", "!xxs", "!배경", "!특별", "!다이맥스") // 4-D2: !특별 = 코스튬, 4-D3: !xxs·!다이맥스
+    // 4-F.5: "!#"(태그 전체 제외) 폐지 → 사용자 고유 태그(앱 관리 태그 밖)마다 "!#태그명". 앱이 추천한 태그가 달린 박사행 개체는 묶음에 포함
+    val PROTECT_CLAUSES = listOf("!색이 다른", "!반짝반짝", "!xxl", "!xxs", "!배경", "!특별", "!다이맥스") // 4-D2: !특별 = 코스튬, 4-D3: !xxs·!다이맥스
     val PROTECT_SUFFIX = "&" + PROTECT_CLAUSES.joinToString("&")
     const val NO_TAG_CLAUSE = "!#"
-    fun withProtect(query: String) = query + PROTECT_SUFFIX
+    private fun normTag(t: String) = t.replace(Regex("\\s+"), "").removePrefix("#")
+    fun isAppTag(t: String) = GameTags.APP_MANAGED.any { normTag(it) == normTag(t) }
+    fun userTagsOf(items: List<Item>): List<String> = items.flatMap { it.gameTags }.filter { !isAppTag(it) }.distinct().sorted()
+    fun protectSuffix(userTags: List<String>) = (if (userTags.isEmpty()) "" else "&" + userTags.joinToString("&") { "!#$it" }) + PROTECT_SUFFIX
+    fun withProtect(query: String, userTags: List<String> = emptyList()) = query + protectSuffix(userTags)
 
     fun matches(query: String, x: Item): Boolean = query.split("&").all { clause ->
         clause.split(",").any { term ->
             val t = term.trim()
             when {
                 t == NO_TAG_CLAUSE -> x.gameTags.isEmpty()
+                t.startsWith("!#") -> { val n = normTag(t.substring(2)); x.gameTags.none { normTag(it) == n } }
                 t == "!색이 다른" -> !x.isShiny
                 t == "!반짝반짝" -> !x.isLucky
                 t == "!xxl" || t == "!xxs" || t == "!배경" || t == "!특별" || t == "!다이맥스" || t == "!거다이맥스" -> true

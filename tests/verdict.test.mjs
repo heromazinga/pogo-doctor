@@ -136,7 +136,8 @@ test("4-C 추천 기술: 기술 미입력이어도 경고 없이 태그별 추�
 test("기술 미입력 → 경고 대신 추천 기술 (4-C 이전 '기술 확인 필요' 문구 폐지)", () => {
   const v = computeVerdict({ species_id: 815, ivs: { atk: 15, def: 14, sta: 14 }, level: 40 }, ctx());
   const t = tagOf(v, TAG.raid("불꽃"));
-  assert.equal(t.metrics.notes.length, 0, "경고 없음");
+  // 4-F.5 C: 특수 기술(블라스트번) 종인데 기술을 모르면 주력 → 보류 + "특수 기술 보유 여부 확인 필요" (경고 문구 '기술 확인 필요' 폐지는 유지)
+  assert.deepEqual(t.metrics.notes, ["특수 기술 보유 여부 확인 필요"]); assert.equal(t.tier, "hold");
   assert.ok(t.moves && t.reason.includes("추천 기술:"));
 });
 
@@ -201,10 +202,11 @@ test("4-B6 레이드 공격 IV 하한: 0/15/15 → 레이드 태그 없음, 10~1
   assert.equal(tagOf(none, TAG.raid("불꽃")), undefined, "저승갓숭 사례: 공격 0 은 레이드 묶음에 들어가면 안 됨");
   assert.equal(tagOf(computeVerdict({ species_id: 815, ivs: { atk: 9, def: 15, sta: 15 }, level: 40 }, ctx()), TAG.raid("불꽃")), undefined);
   assert.equal(tagOf(computeVerdict({ species_id: 815, ivs: { atk: 11, def: 15, sta: 15 }, level: 40 }, ctx()), TAG.raid("불꽃")).tier, "hold");
-  assert.equal(tagOf(computeVerdict({ species_id: 815, ivs: { atk: 12, def: 15, sta: 15 }, level: 40 }, ctx()), TAG.raid("불꽃")).tier, "main");
+  assert.equal(tagOf(computeVerdict({ species_id: 815, ivs: { atk: 12, def: 15, sta: 15 }, level: 40, fast_move: "Fire Spin", charged_moves: ["Blast Burn"] }, ctx()), TAG.raid("불꽃")).tier, "main");
+  assert.equal(tagOf(computeVerdict({ species_id: 815, ivs: { atk: 12, def: 15, sta: 15 }, level: 40 }, ctx()), TAG.raid("불꽃")).tier, "hold", "4-F.5: 기술 미상이면 특수 기술 종은 보류");
   assert.equal(tagOf(computeVerdict({ species_id: 815, ivs: { atk: 11, def: 15, sta: 15 }, level: 40, is_shadow: true }, ctx()), TAG.raid("불꽃")).tier, "hold");
   assert.equal(RULES.RAID_MIN_ATK_IV, 10); assert.equal(RULES.RAID_MAIN_MIN_ATK_IV, 12);
-  const before = computeVerdict({ species_id: 815, ivs: { atk: 0, def: 15, sta: 15 }, level: 40 }, ctx({ rulesOverride: { RAID_MIN_ATK_IV: 0, RAID_MAIN_MIN_ATK_IV: 0 } }));
+  const before = computeVerdict({ species_id: 815, ivs: { atk: 0, def: 15, sta: 15 }, level: 40, fast_move: "Fire Spin", charged_moves: ["Blast Burn"] }, ctx({ rulesOverride: { RAID_MIN_ATK_IV: 0, RAID_MAIN_MIN_ATK_IV: 0 } }));
   assert.equal(tagOf(before, TAG.raid("불꽃")).tier, "main", "수정 전 기준 재현");
 });
 
@@ -371,7 +373,7 @@ test("4-C.2 C 수집 태그: 100%·0%·반짝반짝·오래 전 포획 → recom
 test("4-C.2 G 맥스배틀 종: 판정 대신 '다이맥스' 태그 권장 안내(보류), 목록에 없으면 일반 판정", () => {
   const v = computeVerdict({ species_id: 815, ivs: { atk: 15, def: 14, sta: 14 }, level: 40 }, ctx({ maxBattleSpecies: new Set([815]) }));
   assert.equal(v.dynamax, true); assert.equal(v.tier, "hold"); assert.deepEqual(v.recommendedTags, [TAG.dynamax]); assert.ok(v.summary.includes("다이맥스"), v.summary);
-  const v0 = computeVerdict({ species_id: 815, ivs: { atk: 15, def: 14, sta: 14 }, level: 40 }, ctx({ maxBattleSpecies: new Set([1]) }));
+  const v0 = computeVerdict({ species_id: 815, ivs: { atk: 15, def: 14, sta: 14 }, level: 40, fast_move: "Fire Spin", charged_moves: ["Blast Burn"] }, ctx({ maxBattleSpecies: new Set([1]) }));
   assert.equal(v0.dynamax, false); assert.equal(v0.tier, "main");
 });
 
@@ -399,7 +401,7 @@ test("개체값 후보가 판정을 가르면 need_appraisal", () => {
 });
 
 test("개체값 후보가 여러 개여도 판정이 같으면 확정", () => {
-  const v = computeVerdict({ species_id: 815, ivCandidates: [{ level: 40, atk: 15, def: 14, sta: 14 }, { level: 40, atk: 15, def: 13, sta: 15 }] }, ctx());
+  const v = computeVerdict({ species_id: 815, fast_move: "Fire Spin", charged_moves: ["Blast Burn"], ivCandidates: [{ level: 40, atk: 15, def: 14, sta: 14 }, { level: 40, atk: 15, def: 13, sta: 15 }] }, ctx());
   assert.equal(v.tier, "main");
   assert.ok(v.confident);
 });
@@ -689,7 +691,7 @@ test("4-F.4 C 레이드 주력 보완: 상위종이라도 내 보관함 같은 �
   const cx = beginnerCtx({ reserve, rulesOverride: { COLLECT_REPRESENTATIVE: 0 } });
   const inp = { id: "z", reserveKey: "scan:z", species_id: 6, ivs: { atk: 12, def: 5, sta: 5 }, level: 20 };
   const t = computeVerdict(inp, cx).tags.find((x) => x.name === TAG.raid("불꽃"));
-  assert.ok(t && t.tier === "hold" && /상위 6 밖|위 → 보류/.test(t.reason), JSON.stringify(t));
+  assert.ok(t && t.tier === "hold" && t.reason.includes("상위종 · 내 보관함 불꽃 타입 7위 이하"), JSON.stringify(t));
   // 같은 개체가 상위 6 안이면 주력
   const t2 = computeVerdict(inp, beginnerCtx({ reserve: buildReserveRanks(dataset, [], [weak]), rulesOverride: { COLLECT_REPRESENTATIVE: 0 } })).tags.find((x) => x.name === TAG.raid("불꽃"));
   assert.ok(t2 && t2.tier === "main" && t2.reason.includes("내 보관함 불꽃 1위"), JSON.stringify(t2));
@@ -719,4 +721,49 @@ test("4-F.4 D 종 대표 동점(합 차이 ≤1)은 용도별: 레이드 종은 
   const d1 = scanRow("d1", 650, [10, 10, 10], 20), d2 = scanRow("d2", 650, [12, 9, 9], 20);
   const rd = buildReserveRanks(dataset, [], [d1, d2], { leagueRankings, rules: noRaid }).rep.get("650:Normal:0:0");
   assert.equal(rd.key, "scan:d2"); assert.equal(rd.basis, "합 → 공격");
+});
+
+// ─── 4-F.5 ───
+test("4-F.5 C 번치코형: 특수 기술 종(블라스트번)이 보관함 불꽃 6위여도 기술을 모르면 보류 '특수 기술 보유 여부 확인 필요', 기술이 맞으면 주력", () => {
+  const w = scanRow("w", 815, [12, 2, 9], 30);
+  const reserve = buildReserveRanks(dataset, [], [w]);
+  const c = beginnerCtx({ reserve, rulesOverride: { COLLECT_REPRESENTATIVE: 0 } });
+  const t = computeVerdict({ id: "w", reserveKey: "scan:w", species_id: 815, ivs: { atk: 12, def: 2, sta: 9 }, level: 30 }, c).tags.find((x) => x.name === TAG.raid("불꽃"));
+  assert.ok(t && t.tier === "hold" && t.metrics.notes.includes("특수 기술 보유 여부 확인 필요") && t.reason.includes("내 보관함 불꽃 1위"), JSON.stringify(t));
+  const t2 = computeVerdict({ id: "w", reserveKey: "scan:w", species_id: 815, ivs: { atk: 12, def: 2, sta: 9 }, level: 30, fast_move: "Fire Spin", charged_moves: ["Blast Burn"] }, c).tags.find((x) => x.name === TAG.raid("불꽃"));
+  assert.equal(t2.tier, "main");
+});
+
+test("4-F.5 B② 메가 진화용: 메가진화 가능 종은 레이드 기준(공격 우선) 1마리 보류 '메가 진화용', 그림자 제외", () => {
+  const ds = { ...dataset, pokemon: dataset.pokemon.map((p) => (p.id === 650 ? { ...p, hasMega: true } : p)) };
+  const a = scanRow("a", 650, [12, 12, 15], 20, { cp: 770 }), b = scanRow("b", 650, [15, 5, 5], 20, { cp: 700 }), s = scanRow("s", 650, [15, 15, 15], 20, { is_shadow: true });
+  const reserve = buildReserveRanks(ds, [], [a, b, s], { rules: { ...RULES, BUDGET_RAID_TOP_RANK: 0, RESERVE_RAID_TOP_N: 0 } });
+  assert.equal(reserve.mega.get("650:Normal")?.key, "scan:b", "공격 15 우선");
+  const c = beginnerCtx({ dataset: ds, reserve, rulesOverride: { BUDGET_RAID_TOP_RANK: 0, COLLECT_REPRESENTATIVE: 0 } });
+  const vb = verdictForItem(b, c), va = verdictForItem(a, c), vs = verdictForItem(s, c);
+  assert.equal(vb.tier, "hold"); assert.ok(vb.recommendedTags.includes(TAG.mega), JSON.stringify(vb.recommendedTags));
+  assert.ok(!va.recommendedTags.includes(TAG.mega)); assert.ok(!vs.recommendedTags.includes(TAG.mega), "그림자 제외");
+});
+
+test("4-F.5 E 회귀: 삽입 시 부분 보관함(자기 자신 없음)으로 계산된 판정은 지문(reserveFp)이 달라 다시 계산된다 — 그림자 코일 8/5/4 CP null · 11/2/15 사례", () => {
+  // 코일 대신 레이드 순위가 없는 도치마론(650) 그림자로 재현 (라이츄 그림자는 테스트 풀에서 전기 1위라 레이드 규칙이 섞임)
+  const s1 = scanRow("s1", 650, [8, 5, 4], 10, { is_shadow: true, cp: null }), s2 = scanRow("s2", 650, [11, 2, 15], 10, { is_shadow: true, cp: 285 });
+  const rules = { ...RULES, RESERVE_RAID_TOP_N: 0, BUDGET_RAID_TOP_RANK: 0 };
+  // ① s1 만 있을 때(첫 삽입) 계산: s1 이 대표 → 보류
+  const r1 = buildReserveRanks(dataset, [], [s1], { rules });
+  const v1 = verdictForItem(s1, beginnerCtx({ reserve: r1, rulesOverride: { BUDGET_RAID_TOP_RANK: 0 } }));
+  assert.equal(v1.tier, "hold");
+  // ② s2 삽입 시 캐시된(s2 없는) 예비 순위로 계산 → 대표는 s1(합 17) → s2 박사행 (결함 재현)
+  const v2stale = verdictForItem(s2, beginnerCtx({ reserve: r1, rulesOverride: { BUDGET_RAID_TOP_RANK: 0 } }));
+  assert.equal(v2stale.tier, "transfer"); assert.ok(v2stale.summary.includes("종 대표: 8/5/4"), v2stale.summary);
+  // ③ 전체 보관함으로 만든 예비 순위에서는 대표가 s2(합 28) → s1 판정도 s2 판정도 지문이 달라 낡은 판정으로 판별
+  const r2 = buildReserveRanks(dataset, [], [s1, s2], { rules });
+  assert.equal(r2.rep.get("650:Normal:1:0")?.key, "scan:s2");
+  const c2 = beginnerCtx({ reserve: r2, rulesOverride: { BUDGET_RAID_TOP_RANK: 0 } });
+  assert.ok(isStaleVerdict(v1, s1, c2), "s1 판정 낡음(대표가 바뀜)"); assert.ok(isStaleVerdict(v2stale, s2, c2), "s2 판정 낡음");
+  const v1n = verdictForItem(s1, c2), v2n = verdictForItem(s2, c2);
+  assert.equal(v2n.tier, "hold"); assert.equal(v1n.tier, "transfer"); assert.ok(v1n.summary.includes("종 대표: 11/2/15"));
+  assert.ok(!isStaleVerdict(v2n, s2, c2) && !isStaleVerdict(v1n, s1, c2), "다시 계산한 판정은 최신");
+  // 규칙 버전만 같고 지문이 없던(구버전) 판정도 낡음
+  assert.ok(isStaleVerdict({ ...v2n, reserveFp: undefined }, s2, c2));
 });

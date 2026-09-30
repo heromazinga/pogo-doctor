@@ -332,6 +332,17 @@ export default function Home() {
   const copyQuery = async (g) => {
     try { await navigator.clipboard.writeText(g.query); setCopied(g.query); } catch { setCleanupError("클립보드 복사 실패 — 검색어를 직접 선택해 복사하세요"); }
   };
+  // 4-F.5 B: 게임 결과 0마리 → "이미 없음"(dismissed_reason 'not_seen', 복구 가능). 내 목록 행은 그대로
+  const cleanupGroupNotSeen = async (cat, g) => {
+    if (!(await askConfirm(`게임 검색 결과가 0마리입니까? 이 묶음 ${g.expected}마리의 스캔 기록을 "이미 없음"(복구 가능)으로 숨깁니다. 계속할까요?`))) return;
+    setCleanupBusy(true);
+    try {
+      const res = await fetch("/api/cleanup", { method: "POST", headers: { "Content-Type": "application/json", ...(await authHeader()) }, body: JSON.stringify({ action: "not_seen", targetIds: g.targetIds }) });
+      const data = await res.json();
+      if (!res.ok) { setCleanupError(data.error || `HTTP ${res.status}`); return; }
+      setCleanupDone((d) => ({ ...d, [g.query]: true }));
+    } catch (e) { setCleanupError(e.message); } finally { setCleanupBusy(false); }
+  };
   const cleanupGroupDone = async (cat, g) => {
     const isTransfer = cat.category === "transfer";
     const rows = g.targetIds.filter((x) => x.startsWith("row:")).length;
@@ -2135,8 +2146,16 @@ export default function Home() {
             {cleanupError && <div style={s.error}>{cleanupError}</div>}
             {cleanupBusy && !cleanup && <div style={{ fontSize: 12, color: "#8899aa" }}>계산 중…</div>}
             {cleanup && cleanup.categories.length === 0 && <div style={{ fontSize: 12, color: "#576574", padding: "8px 0" }}>정리할 대상이 없습니다 (스캔 기록·내 목록의 판정 기준)</div>}
+            {cleanup?.userTags?.length > 0 && <div style={{ fontSize: 10, color: "#8899aa", marginBottom: 8 }}>🏷 사용자 고유 태그(박사행에서 제외): {cleanup.userTags.map((t) => "#" + t).join(", ")}{cleanup.userTagged ? ` · 이 태그 때문에 제외된 박사행 판정 ${cleanup.userTagged}마리` : ""}. 앱이 추천한 태그(수집·진화 후보·리그·레이드)는 제외하지 않습니다.</div>}
             {cleanup && cleanup.categories.map((cat) => (
               <div key={cat.category} style={{ marginBottom: 14 }}>
+                {/* 4-F.5: 선택 태그(수집(종 대표))는 접어 둔다 — 대표는 판정상 박사행 금지라 보호용 태그가 필요 없다 */}
+                {cat.optional ? <details><summary style={{ fontSize: 12, color: "#8899aa", cursor: "pointer" }}>{cat.label} — 대상 {cat.count}마리 (선택: 태그 작업 불필요, 펼쳐서 사용)</summary>{cat.groups.map((g) => (
+                  <div key={g.query} style={{ ...s.collItem, flexDirection: "column", alignItems: "stretch", marginTop: 6 }}>
+                    <code style={{ fontSize: 12, color: "#e0e0e0", wordBreak: "break-all", userSelect: "all" }}>{g.query}</code>
+                    <button onClick={() => copyQuery(g)} style={{ ...s.chip, fontSize: 11, marginTop: 6 }}>{copied === g.query ? "복사됨 ✓" : "📋 복사"}</button>
+                  </div>
+                ))}</details> : <>
                 <div style={{ fontSize: 13, fontWeight: 700, color: cat.category === "transfer" ? "#ff6b6b" : cat.category === "collect" ? "#a890f0" : "#4ecdc4" }}>{cat.label}{cat.fixed ? " — 이로치·배경·XXL 은 게임 검색어로" : ` — 대상 ${cat.count}마리 · 묶음 ${cat.groups.length}${cat.skipped.length ? ` · 제외 ${cat.skipped.length}` : ""}`}{cat.protect ? " · 🛡 보호 조건 포함" : ""}</div>
                 {/* 4-D2: 재계산 중이면 박사행 묶음 잠금(복사·보냄 처리 불가) */}
                 {cat.locked && <div style={{ ...s.sourceNotice, marginTop: 6 }}>🔒 {cat.lockReason} — 박사행은 되돌릴 수 없어 옛 규칙 판정으로는 묶음을 열지 않습니다. 🔄 로 갱신을 이어가세요.</div>}
@@ -2156,11 +2175,13 @@ export default function Home() {
                     <div style={{ display: "flex", gap: 6, marginTop: 6 }}>
                       <button onClick={() => copyQuery(g)} style={{ ...s.chip, fontSize: 11, flex: 1 }}>{copied === g.query ? "복사됨 ✓" : "📋 복사"}</button>
                       {!cleanupDone[g.query] && !cat.fixed && <button onClick={() => cleanupGroupDone(cat, g)} disabled={cleanupBusy} style={{ ...s.chip, fontSize: 11, color: cat.category === "transfer" ? "#ff6b6b" : "#4ecdc4" }}>{cat.category === "transfer" ? "보냄 처리 완료" : "완료(정리)"}</button>}
+                      {!cleanupDone[g.query] && cat.category === "transfer" && <button onClick={() => cleanupGroupNotSeen(cat, g)} disabled={cleanupBusy} style={{ ...s.chip, fontSize: 11, color: "#8899aa" }} title="게임 검색 결과가 0마리일 때">이미 없음</button>}
                     </div>
                     {copied === g.query && !cat.fixed && <div style={{ fontSize: 10, color: "#ffd93d", marginTop: 4 }}>{cat.protect ? `⚠️ 게임 결과 ≤ 예상 ${g.expected}마리. 적으면 보호 대상(태그·이로치·반짝반짝·XXL·배경)이 빠진 것, 많으면 보내지 마세요.` : `⚠️ 게임 검색 결과가 정확히 ${g.expected}마리일 때만 전체 선택하세요. 다르면 진행하지 마세요.`}</div>}
                   </div>
                 ))}
                 {cat.skipped.length > 0 && <div style={{ fontSize: 10, color: "#576574", marginTop: 4 }}>제외: {cat.skipped.map((x) => `${cleanup.names[x.id] || x.id}(${x.reason})`).join(", ")}</div>}
+                </>}
               </div>
             ))}
             {cleanup && <div style={{ fontSize: 9, color: "#576574" }}>알려진 개체 {cleanup.population} (스캔 기록 + 내 목록, 게임 태그 있음 {cleanup.gameTagged ?? 0}) 기준으로 교차곱 충돌 검사 · 검색어 길이 상한 {cleanup.maxLen}자 · {fmtStamp(cleanup.at)}</div>}
