@@ -553,13 +553,19 @@ const scanRow = (id, species_id, ivs, level, extra = {}) => ({ id, species_id, f
 test("4-F ③ 리그 예비: 라이츄 3/13/13(슈퍼 스탯곱 391위, CP1480 상한 도달, PvPoke 순위 없음) → 보류 '슈퍼리그' 리그 예비, 같은 종 더 나쁜 1/13/15(450위)는 박사행", () => {
   const a = scanRow("a", 26, [3, 13, 13], 25.5), b = scanRow("b", 26, [1, 13, 15], 25.5);
   const reserve = buildReserveRanks(dataset, [], [a, b]);
-  assert.equal(reserve.league.great.get("26:Normal:0")?.key, "scan:a", "종·리그별 최상위 1마리 = 391위");
+  assert.deepEqual(reserve.league.great.get("26:Normal:0")?.map((x) => x.key), ["scan:a", "scan:b"], "종·리그별 스탯곱 순 목록 (391위, 450위)");
   const ctx1 = beginnerCtx({ reserve });
   const va = verdictForItem(a, ctx1), vb = verdictForItem(b, ctx1);
   assert.equal(va.tier, "hold", va.summary);
   const tg = va.tags.find((t) => t.name === TAG.great);
   assert.ok(tg && tg.tier === "hold" && tg.reason.includes("리그 예비") && tg.reason.includes("391/4096"), JSON.stringify(tg));
   assert.equal(vb.tier, "transfer", vb.summary);
+  // 4-F.3 박사행 사유: 리그 비교 먼저
+  assert.ok(vb.summary.includes("슈퍼리그: 같은 종 더 좋은 개체 있음(3/13/13 · 391위 vs 이 개체 450위)"), vb.summary);
+  // 4-F.3 보관함 여유는 종·리그별 2마리 → 둘 다 예비 보류
+  const relaxed = beginnerCtx({ reserve, storageMode: "relaxed", rulesOverride: { COLLECT_REPRESENTATIVE: 0 } });
+  assert.equal(verdictForItem(a, relaxed).tier, "hold"); const vb2 = verdictForItem(b, relaxed);
+  assert.equal(vb2.tier, "hold", vb2.summary); assert.ok(vb2.tags.find((t) => t.name === TAG.great)?.reason.includes("내 라이츄 중 2위"), vb2.summary);
   // 빠듯이면 현행(박사행)
   assert.equal(verdictForItem(a, beginnerCtx({ reserve, storageMode: "tight" })).tier, "transfer");
   // BEGINNER_RULES=0 이면 적용 전(박사행)
@@ -619,13 +625,13 @@ test("4-F.2 종 대표(보관함 여유만): 같은 종 3마리 중 개체값 �
   const relaxed = beginnerCtx({ reserve, storageMode: "relaxed", rulesOverride: { BUDGET_RAID_TOP_RANK: 0 } });
   const vb = verdictForItem(b, relaxed), va = verdictForItem(a, relaxed), vs = verdictForItem(sh, relaxed), val = verdictForItem(al, relaxed);
   assert.equal(vb.tier, "hold", vb.summary); assert.ok(vb.recommendedTags.includes(TAG.collectRep), JSON.stringify(vb.recommendedTags)); assert.ok(vb.summary.includes("종 대표"), vb.summary);
-  assert.equal(va.tier, "transfer", va.summary); assert.ok(va.summary.includes("같은 종 더 좋은 개체 있음(10/9/8 CP1200)"), va.summary);
+  assert.equal(va.tier, "transfer", va.summary); assert.ok(va.summary.includes("종 대표: 10/9/8 CP1200"), va.summary);
   assert.equal(verdictForItem(c, relaxed).tier, "transfer");
   assert.equal(vs.tier, "hold", "섀도 대표"); assert.equal(val.tier, "hold", "알로라 대표");
   // 보통·빠듯은 현행(대표도 박사행), 문구는 표시
   const normal = beginnerCtx({ reserve, storageMode: "normal", rulesOverride: { BUDGET_RAID_TOP_RANK: 0 } });
   assert.equal(verdictForItem(b, normal).tier, "transfer"); assert.ok(!verdictForItem(b, normal).recommendedTags.includes(TAG.collectRep));
-  assert.ok(verdictForItem(a, normal).summary.includes("같은 종 더 좋은 개체 있음"));
+  assert.ok(verdictForItem(a, normal).summary.includes("종 대표: 10/9/8 CP1200"));
   assert.equal(verdictForItem(b, beginnerCtx({ reserve, storageMode: "tight", rulesOverride: { BUDGET_RAID_TOP_RANK: 0 } })).tier, "transfer");
   // 끄기
   assert.equal(verdictForItem(b, beginnerCtx({ reserve, storageMode: "relaxed", rulesOverride: { BUDGET_RAID_TOP_RANK: 0, COLLECT_REPRESENTATIVE: 0 } })).tier, "transfer");

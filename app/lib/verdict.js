@@ -98,6 +98,7 @@ function indivRankBy(rows, p, keyFn, mine) {
 function evaluateCandidate(p, cand, input, ctx, rankings, { forEvolve = false } = {}) {
   const tags = [];
   const warnings = [];
+  const transferNotes = []; // 4-F.3 박사행 사유(탈락 기준, 순서대로: 리그 비교 → 종 대표)
   const shadow = Boolean(input.is_shadow);
   const moveStats = ctx.dataset.moveStats || {};
   const myRows = ctx.myRows || [];
@@ -175,8 +176,14 @@ function evaluateCandidate(p, cand, input, ctx, rankings, { forEvolve = false } 
     const capReached = me.level < RULES.LEAGUE_MAX_LEVEL && me.cp >= cap * rule(ctx, "LEAGUE_CAP_REACH_PCT");
     const candidate = Boolean(sp) && sp.rank <= rule(ctx, "LEAGUE_CANDIDATE_SPECIES_RANK") && me.rank <= candidateRank && capReached;
     // 4-F ③ 리그 예비(컵 리그용): 종 PvPoke 순위 무관, 상한 도달 가능 AND 스탯곱 ≤500 → 내 보관함 안 종·리그별 최상위 1마리
+    //   4-F.3: 종·리그별 상위 n(여유 2 / 보통 1). 밀린 개체는 박사행 사유에 "슈퍼리그: 같은 종 더 좋은 개체 있음(…)" 로 남긴다
     const rb = beginner && !forEvolve && capReached && me.rank <= rule(ctx, "LEAGUE_RESERVE_PRODUCT_RANK") ? reserveLeagueBest(ctx.reserve, league, input, p, cand) : null;
-    const reserve = Boolean(rb) && !rb.other;
+    const perSpecies = (input.storageMode || ctx.storageMode) === "relaxed" ? rule(ctx, "RESERVE_LEAGUE_PER_SPECIES_RELAXED") : rule(ctx, "RESERVE_LEAGUE_PER_SPECIES_NORMAL");
+    const reserve = Boolean(rb) && rb.pos <= perSpecies;
+    if (rb && !reserve) {
+      const slots = rb.better.slice(0, perSpecies);
+      transferNotes.push(`${TAG[league]}: 같은 종 더 좋은 개체 있음(${slots.map((b) => `${b.ivs.atk}/${b.ivs.def}/${b.ivs.sta} · ${b.productRank}위`).join(", ")} vs 이 개체 ${me.rank}위)`);
+    }
     if (!ranked && !candidate && !reserve) continue;
     const top = ranked && sp.rank <= RULES.LEAGUE_TOP_RANK;
     const currentCp = input.cp && !forEvolve ? input.cp : calcCP({ atk: p.baseAttack, def: p.baseDefense, sta: p.baseStamina }, cand, cand.level);
@@ -198,7 +205,7 @@ function evaluateCandidate(p, cand, input, ctx, rankings, { forEvolve = false } 
     const moves = movesFromPvpoke(ctx.dataset, p, sp?.moveset);
     const rankTxt = ranked ? `PvPoke ${sp.rank}위` : sp ? `PvPoke ${sp.rank}위(200위 밖)` : "PvPoke 순위 없음";
     const candTxt = candidate && (!ranked || (!top && me.rank <= candidateRank && me.rank > midHoldRank)) ? ` · 리그 후보(스탯곱 상위 ${candidateRank}위 이내)` : "";
-    const reserveTxt = reserve && tier === "hold" && !normalHold && !candidate ? ` · 리그 예비(컵 리그용, 내 ${p.nameKr} 중 1위)` : "";
+    const reserveTxt = reserve && tier === "hold" && !normalHold && !candidate ? ` · 리그 예비(컵 리그용, 내 ${p.nameKr} 중 ${rb.pos}위)` : "";
     tags.push({ name: TAG[league], tier, reason: `${rankTxt}·스탯곱 ${me.rank}/4096위 (L${me.level} CP${me.cp})${candTxt}${reserveTxt}${moves ? " · " + moveLine(moves) : ""}`, moves, metrics: { speciesRank: sp?.rank ?? null, top, productRank: me.rank, levelAtCap: me.level, cpAtCap: me.cp, capReached, candidate: candidate && (!ranked || (!top && me.rank <= candidateRank)), reserve: Boolean(reserveTxt) } });
   }
 
@@ -244,7 +251,7 @@ function evaluateCandidate(p, cand, input, ctx, rankings, { forEvolve = false } 
       tags.push(best);
     }
   }
-  return { tags, warnings, pct };
+  return { tags, warnings, pct, transferNotes };
 }
 
 function moveName(dataset, m) { return dataset.moveNamesKr?.[m] || m; }
@@ -374,7 +381,13 @@ export function computeVerdict(input, ctx) {
     const rare = rareFamilyNote(dataset, p);
     collect.push({ reason: `종 대표(내 ${p.nameKr}${shadow ? "(섀도)" : input.is_purified ? "(정화)" : ""} 중 개체값 합 최고${rare ? " · 귀한 계열: " + rare : ""})`, rep: true, hold: true });
     if (tier === "transfer") { tier = "hold"; repHold = true; }
-  } else if (rep?.other && tier === "transfer") repNote = ` · 같은 종 더 좋은 개체 있음(${rep.ivs.atk}/${rep.ivs.def}/${rep.ivs.sta} CP${rep.cp ?? "?"})`;
+  }
+  // 4-F.3 박사행 사유: 탈락한 기준을 순서대로 — 리그 스탯곱 ≤500 개체는 리그 비교 먼저, 그다음 종 대표 (실측: 라이츄 1/13/15 가 종 대표와만 비교돼 표시됨)
+  if (tier === "transfer") {
+    const notes = [...new Set(evals.flatMap((e) => e.transferNotes || []))];
+    if (rep?.other) notes.push(`종 대표: ${rep.ivs.atk}/${rep.ivs.def}/${rep.ivs.sta} CP${rep.cp ?? "?"}`);
+    if (notes.length) repNote = " · " + notes.join(" · ");
+  }
   const collectTag = collect.some((c) => c.collectTag);
   const summary = buildSummary(tier, tags, collect, event, evals[0].cand, allSame, legendaryHold || collectHold || repHold, collectHold, repHold) + repNote;
   // 4-C.2 맥스배틀 종(공개 데이터로 확인된 목록만): 판정 대신 "다이맥스 태그 권장" 안내

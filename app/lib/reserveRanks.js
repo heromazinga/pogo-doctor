@@ -75,7 +75,8 @@ export function buildReserveRanks(dataset, rows = [], scans = [], { rules = RULE
   const league = {};
   for (const lg of ["great", "ultra"]) {
     const cap = RULES.LEAGUE_CAPS[lg];
-    const best = new Map(); // speciesKey → { key, sig, productRank }
+    // 4-F.3: speciesKey → 스탯곱 순위 오름차순 목록 [{ key, sig, productRank, ivs }] (보관함 여유 2 / 보통 1 마리까지 예비, 판정 시 자름)
+    const lists = new Map();
     for (const e of entries) {
       const table = leagueProductTable(e.p, cap, maxLeagueLevel);
       const me = table.rank.get(`${e.ivs.atk},${e.ivs.def},${e.ivs.sta}`);
@@ -83,10 +84,11 @@ export function buildReserveRanks(dataset, rows = [], scans = [], { rules = RULE
       const capReached = me.level < RULES.LEAGUE_MAX_LEVEL && me.cp >= cap * reachPct;
       if (!capReached || me.rank > reserveRank) continue;
       const sk = `${e.p.id}:${e.p.form}:${e.shadow ? 1 : 0}`;
-      const cur = best.get(sk);
-      if (!cur || me.rank < cur.productRank) best.set(sk, { key: e.key, sig: e.sig, productRank: me.rank });
+      if (!lists.has(sk)) lists.set(sk, []);
+      lists.get(sk).push({ key: e.key, sig: e.sig, productRank: me.rank, ivs: e.ivs });
     }
-    league[lg] = best;
+    for (const l of lists.values()) l.sort((a, b) => a.productRank - b.productRank);
+    league[lg] = lists;
   }
   // 4-F.2 종 대표: 종·폼·섀도·정화별 개체값 합 최고(동률 CP 높은 쪽, 그다음 먼저 온 것)
   const rep = new Map();
@@ -107,11 +109,16 @@ export function reserveRaidRank(reserve, type, input, p, cand) {
   const sig = sigOf(p.id, p.form, Boolean(input.is_shadow), cand, cand.level);
   return m.has(sig) ? m.get(sig) : null;
 }
+// 4-F.3 리그 예비: 이 개체의 종·리그 안 순번(pos, 1부터)과 앞선 개체들(better). 목록에 없으면 null
 export function reserveLeagueBest(reserve, league, input, p, cand) {
   const m = reserve?.league?.[league]; if (!m) return null;
-  const b = m.get(`${p.id}:${p.form}:${input.is_shadow ? 1 : 0}`); if (!b) return null;
+  const list = m.get(`${p.id}:${p.form}:${input.is_shadow ? 1 : 0}`); if (!list || !list.length) return null;
+  const keys = keysOf(input);
   const sig = sigOf(p.id, p.form, Boolean(input.is_shadow), cand, cand.level);
-  return keysOf(input).includes(b.key) || b.sig === sig ? b : { ...b, other: true };
+  let pos = list.findIndex((b) => keys.includes(b.key));
+  if (pos < 0) pos = list.findIndex((b) => b.sig === sig);
+  if (pos < 0) return { pos: list.length + 1, better: list, other: true };
+  return { pos: pos + 1, better: list.slice(0, pos), productRank: list[pos].productRank };
 }
 // 4-F.2 종 대표: 이 개체가 대표면 { ...rep }, 다른 개체가 대표면 { ...rep, other: true }, 정보 없으면 null
 export function reserveRepresentative(reserve, input, p, cand) {

@@ -15,7 +15,8 @@ export const dynamic = "force-dynamic";
 // 4-F: ?BEGINNER_RULES=0 → 초보자 기준(가성비 상위종·레이드 예비·리그 예비) 적용 전 분포. BUDGET_RAID_TOP_RANK·RESERVE_RAID_TOP_N·LEAGUE_RESERVE_PRODUCT_RANK 도 덮어쓰기 가능
 const OVERRIDABLE = ["RAID_MIN_ATK_IV", "RAID_MAIN_MIN_ATK_IV", "RAID_TOP_SCORE_PCT", "RAID_MID_SCORE_PCT",
   "LEAGUE_MAIN_PRODUCT_RANK", "LEAGUE_HOLD_PRODUCT_RANK", "LEAGUE_MID_HOLD_PRODUCT_RANK", "LEAGUE_HOLD_PRODUCT_RANK_TIGHT", "LEAGUE_MID_HOLD_PRODUCT_RANK_TIGHT",
-  "BEGINNER_RULES", "BUDGET_RAID_TOP_RANK", "RESERVE_RAID_TOP_N", "LEAGUE_RESERVE_PRODUCT_RANK", "LEAGUE_CANDIDATE_PRODUCT_RANK", "LEAGUE_CANDIDATE_SPECIES_RANK"];
+  "BEGINNER_RULES", "BUDGET_RAID_TOP_RANK", "RESERVE_RAID_TOP_N", "RESERVE_RAID_MIN_PCT", "LEAGUE_RESERVE_PRODUCT_RANK", "RESERVE_LEAGUE_PER_SPECIES_RELAXED", "RESERVE_LEAGUE_PER_SPECIES_NORMAL",
+  "COLLECT_REPRESENTATIVE", "LEAGUE_CANDIDATE_PRODUCT_RANK", "LEAGUE_CANDIDATE_SPECIES_RANK"];
 export async function GET(req) {
   const sb = getServiceClient();
   if (!sb) return NextResponse.json({ error: "서버 Supabase 미설정" }, { status: 503 });
@@ -29,7 +30,7 @@ export async function GET(req) {
   const { ctx } = await buildVerdictContext(req, { scanItems: scans });
   ctx.rulesOverride = override;
   // 4-F: 예비 순위 상수를 덮어쓰면 보관함 상대 순위도 그 값으로 다시 계산
-  if (["RESERVE_RAID_TOP_N", "LEAGUE_RESERVE_PRODUCT_RANK", "RAID_MIN_ATK_IV"].some((k) => override[k] != null)) ctx.reserve = buildReserveRanks(ctx.dataset, ctx.myRows || [], scans, { rules: { ...RULES, ...override } });
+  if (["RESERVE_RAID_TOP_N", "RESERVE_RAID_MIN_PCT", "LEAGUE_RESERVE_PRODUCT_RANK", "RAID_MIN_ATK_IV"].some((k) => override[k] != null)) ctx.reserve = buildReserveRanks(ctx.dataset, ctx.myRows || [], scans, { rules: { ...RULES, ...override } });
   const tiers = { main: 0, hold: 0, transfer: 0, need_appraisal: 0 };
   const holdReasons = {}, mainTags = {};
   const tally = (v) => {
