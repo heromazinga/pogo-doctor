@@ -71,7 +71,7 @@ class Prefs(ctx: Context) {
     val gameTagList: List<String> get() = gameTagNames.split(",", "\n").map { it.trim() }.filter { it.length in 1..24 }.distinct()
     // 4-D 연속 스캔 모드: normal(일반) | shadow(그림자: is_shadow=true 로 기록, 그림자 판정) | purified(정화). 사용자가 게임 검색("그림자"/"정화")으로 먼저 거른 뒤 스캔
     var scanMode: String
-        get() = plain.getString("scan_mode", "normal")!!.takeIf { it in listOf("normal", "shadow", "purified") } ?: "normal"
+        get() = plain.getString("scan_mode", "normal")!!.takeIf { it in listOf("normal", "shadow", "purified", "protected") } ?: "normal"
         set(v) = plain.edit().putString("scan_mode", v).apply()
     // 4-E.2 박사행 묶음 상태(검색어 → "copied"|"done"), 앱 재시작 후에도 유지. JSON 객체 문자열
     var cleanupStates: String

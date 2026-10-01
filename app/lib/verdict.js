@@ -400,9 +400,12 @@ export function computeVerdict(input, ctx) {
   const rep = Number(rule(ctx, "COLLECT_REPRESENTATIVE")) !== 0 ? reserveRepresentative(ctx.reserve, input, p, allSame ? evals[0].cand : null) : null;
   if (rep && !rep.other) {
     const rare = rareFamilyNote(dataset, p);
-    collect.push({ reason: `종 대표(내 ${p.nameKr}${shadow ? "(그림자)" : input.is_purified ? "(정화)" : ""} 중 ${rep.tie ? `동점 → ${rep.basis}` : "개체값 합 최고"}${rare ? " · 귀한 계열: " + rare : ""})`, rep: true, hold: true });
+    collect.push({ reason: `종 대표(내 ${p.nameKr}${shadow ? "(그림자)" : input.is_purified ? "(정화)" : ""} 중 ${rep.basis.startsWith("그림자") ? rep.basis : rep.tie ? `동점 → ${rep.basis}` : "개체값 합 최고"}${rare ? " · 귀한 계열: " + rare : ""})`, rep: true, hold: true });
     if (tier === "transfer") { tier = "hold"; repHold = true; }
   }
+  // 4-F.6 D 보호 모드 기록(is_protected): 색이 다른·반짝반짝·XXL·XXS·배경·코스튬 중 하나 이상(종류는 모름) → 박사행 금지. 종 대표·리그·레이드 순위 계산은 일반 개체와 동일
+  let protectedHold = false;
+  if (tier === "transfer" && input.is_protected) { tier = "hold"; protectedHold = true; collect.push({ reason: `보호 속성(${rule(ctx, "PROTECT_SEARCH")},다이맥스)`, hold: true }); }
   // 4-F.4 B 안농(201): 글자 폼을 구분하지 못해 전부 Normal 로 기록됨 → 글자 인식 전까지 박사행 제외·보류
   let formUnknownHold = false;
   if (tier === "transfer" && (rule(ctx, "FORM_UNKNOWN_HOLD_SPECIES") || []).includes(p.id)) { tier = "hold"; formUnknownHold = true; collect.push({ reason: "글자 구분 불가 — 수집 판단 보류", hold: true }); }
@@ -413,7 +416,7 @@ export function computeVerdict(input, ctx) {
     if (notes.length) repNote = " · " + notes.join(" · ");
   }
   const collectTag = collect.some((c) => c.collectTag);
-  const summary = buildSummary(tier, tags, collect, event, evals[0].cand, allSame, legendaryHold || collectHold || repHold || formUnknownHold, collectHold, repHold, formUnknownHold) + repNote;
+  const summary = buildSummary(tier, tags, collect, event, evals[0].cand, allSame, legendaryHold || collectHold || repHold || formUnknownHold || protectedHold, collectHold, repHold, formUnknownHold, protectedHold) + repNote;
   // 4-C.2 맥스배틀 종(공개 데이터로 확인된 목록만): 판정 대신 "다이맥스 태그 권장" 안내
   const dynamax = isMaxBattleSpecies(ctx, p);
   const keptTags = tags.filter((t) => t.tier === "main" || t.tier === "hold").map((t) => t.name);
@@ -476,7 +479,7 @@ export function luckyTradeReason(caughtOn) {
   return null;
 }
 
-function buildSummary(tier, tags, collect, event, cand, allSame, legendaryHold, collectHold = false, repHold = false, formUnknownHold = false) {
+function buildSummary(tier, tags, collect, event, cand, allSame, legendaryHold, collectHold = false, repHold = false, formUnknownHold = false, protectedHold = false) {
   const kept = tags.filter((t) => t.tier === tier && (tier === "main" || tier === "hold"));
   let s;
   if (tier === "need_appraisal") s = `${TIER_LABEL.need_appraisal}${tags.length ? ": " + tags.map((t) => t.name).join(", ") : ""}`;
@@ -487,6 +490,7 @@ function buildSummary(tier, tags, collect, event, cand, allSame, legendaryHold, 
   else if (collectHold && !kept.length) s = `${TIER_LABEL.hold}: 고개체 수집(용도 태그 없음)`;
   else if (repHold && !kept.length) s = `${TIER_LABEL.hold}: 종 대표 수집(용도 태그 없음)`;
   else if (formUnknownHold && !kept.length) s = `${TIER_LABEL.hold}: 글자 구분 불가 — 수집 판단 보류`;
+  else if (protectedHold && !kept.length) s = `${TIER_LABEL.hold}: 보호 속성(색이 다른·반짝반짝·XXL·XXS·배경·코스튬·다이맥스 중 하나)`;
   else if (legendaryHold && !kept.length) s = `${TIER_LABEL.hold}: 전설·환상(용도 태그 없음)`;
   if (collect.length) s += ` → 💎 수집 추천: ${collect.map((c) => c.reason).join(", ")}`;
   if (cand && allSame) s += ` [${cand.atk}/${cand.def}/${cand.sta} L${cand.level}]`;
@@ -496,7 +500,7 @@ function buildSummary(tier, tags, collect, event, cand, allSame, legendaryHold, 
 // my_pokemon 행 → 입력
 export function inputFromRow(r, storageMode) {
   return {
-    id: r.id, reserveKey: `row:${r.id}`, species_id: r.species_id, form: r.form || "Normal", cp: r.cp || null, hp: r.hp || null, level: r.level || null,
+    id: r.id, reserveKey: `row:${r.id}`, is_protected: Boolean(r.is_shiny || r.is_lucky), species_id: r.species_id, form: r.form || "Normal", cp: r.cp || null, hp: r.hp || null, level: r.level || null,
     ivs: Number.isInteger(r.atk_iv) ? { atk: r.atk_iv, def: r.def_iv, sta: r.sta_iv } : null,
     fast_move: r.fast_move || null, charged_moves: r.charged_moves || [],
     is_shadow: Boolean(r.is_shadow), is_purified: Boolean(r.is_purified), is_shiny: Boolean(r.is_shiny), is_lucky: Boolean(r.is_lucky),

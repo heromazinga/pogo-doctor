@@ -28,7 +28,9 @@ export async function resolveUser(req) {
 export async function loadMyRows(userId) {
   const sb = getServiceClient();
   if (!sb || !userId) return [];
-  const { data, error } = await sb.from("my_pokemon").select("*").eq("user_id", userId).limit(2000);
+  // 4-F.6: 숨긴 행(hidden_reason, 0012) 제외. 컬럼이 없으면(미적용) 필터 없이
+  let { data, error } = await sb.from("my_pokemon").select("*").eq("user_id", userId).is("hidden_reason", null).limit(2000);
+  if (error && /hidden_reason/.test(error.message || "")) ({ data, error } = await sb.from("my_pokemon").select("*").eq("user_id", userId).limit(2000));
   if (error) { console.warn(`[verdict] 내 목록 조회 실패: ${error.message}`); return []; }
   return data || [];
 }

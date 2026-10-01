@@ -5,7 +5,7 @@ import { resolveUser, buildVerdictContext } from "../../lib/verdictContext";
 import { fillMissingVerdicts } from "../../lib/scanVerdict";
 import { backfillSuperseded } from "../../lib/scanBackfill";
 import { fetchActiveScanItems } from "../../lib/scanQuery";
-import { buildCleanup, DEFAULT_MAX_LEN, EXPECTED_LIMIT_NOTE, protectNote, protectSuffix, userTagsOf } from "../../lib/searchBuilder";
+import { buildCleanup, DEFAULT_MAX_LEN, EXPECTED_LIMIT_NOTE, FEWER_NOTE, protectNote, protectSuffix, userTagsOf } from "../../lib/searchBuilder";
 import { applySyncSupersede, NOT_SEEN_REASON } from "../../lib/scanBackfill";
 import { invalidateReserveCache } from "../../lib/verdictContext";
 import { computeVerdict, inputFromRow } from "../../lib/verdict";
@@ -39,13 +39,13 @@ export async function GET(req) {
   const rows = ctx.myRows || [];
   const legendaryOf = (r) => { const p = findPokemon(ctx.dataset, { id: r.species_id, form: r.form || "Normal" }); return p ? isLegendaryClass(p) : false; };
   // 대상: 스캔 항목(판정 있음) + 내 목록(판정은 여기서 계산; 박사행은 status=transfer 또는 판정 transfer)
-  const scanTargets = items.map((it) => ({ id: `scan:${it.id}`, species_id: it.species_id, hp: it.hp, cp: it.cp, cpVerified: it.cp != null && !it.recheck, is_shadow: Boolean(it.is_shadow), form: it.form || "Normal",
+  const scanTargets = items.map((it) => ({ id: `scan:${it.id}`, species_id: it.species_id, hp: it.hp, cp: it.cp, cpVerified: it.cp != null && !it.recheck, is_shadow: Boolean(it.is_shadow), is_protected: Boolean(it.is_protected), form: it.form || "Normal",
     verdict: it.verdict || {}, recheck: Boolean(it.recheck) || it.verdict?.tier === "need_appraisal", legendary: legendaryOf(it), name_kr: it.name_kr, game_tags: it.game_tags || [] }));
   const rowTargets = rows.map((r) => {
     let v = null; try { v = computeVerdict(inputFromRow(r, ctx.storageMode), ctx); } catch { v = null; }
     const verdict = r.status === "transfer" ? { tier: "transfer", recommendedTags: [], collect: v?.collect || [] } : (v ? { tier: v.tier, recommendedTags: r.tags?.length ? r.tags : v.recommendedTags, collect: v.collect } : {});
     return { id: `row:${r.id}`, species_id: r.species_id, hp: r.hp, cp: r.cp, cpVerified: r.cp != null, is_shadow: Boolean(r.is_shadow), form: r.form || "Normal",
-      verdict, recheck: v ? !v.confident : true, is_shiny: Boolean(r.is_shiny), is_lucky: Boolean(r.is_lucky), legendary: legendaryOf(r), name_kr: r.name_kr, game_tags: [...new Set([...(r.game_tags || []), ...(r.tags || [])])] };
+      verdict, recheck: v ? !v.confident : true, is_shiny: Boolean(r.is_shiny), is_lucky: Boolean(r.is_lucky), is_protected: Boolean(r.is_shiny || r.is_lucky), legendary: legendaryOf(r), name_kr: r.name_kr, game_tags: [...new Set([...(r.game_tags || []), ...(r.tags || [])])] };
   });
   const all = [...scanTargets, ...rowTargets];
   const categories = buildCleanup(all, all, { maxLen });
@@ -59,7 +59,7 @@ export async function GET(req) {
   const gameTagged = all.filter((x) => (x.game_tags || []).length).length;
   const userTags = userTagsOf(all); // 4-F.5 관측된 사용자 고유 태그(앱 관리 태그 밖) — 보호 절·안내
   const userTagged = all.filter((x) => x.verdict?.tier === "transfer" && (x.game_tags || []).some((t) => userTags.includes(t))).length;
-  return NextResponse.json({ categories, names, members, population: all.length, scans: items.length, truncated, filled: fill.filled, pending: fill.pending, gameTagged, userTags, userTagged, maxLen, protect: protectSuffix(userTags), note: EXPECTED_LIMIT_NOTE, protectNote: protectNote(userTags), backfill: backfill ? { ran: backfill.ran, superseded: backfill.superseded, conflicts: backfill.conflicts, suspects: backfill.suspects, version: backfill.version } : null, at: new Date().toISOString() });
+  return NextResponse.json({ categories, names, members, population: all.length, scans: items.length, truncated, filled: fill.filled, pending: fill.pending, gameTagged, userTags, userTagged, maxLen, protect: protectSuffix(userTags), note: EXPECTED_LIMIT_NOTE, fewerNote: FEWER_NOTE, protectNote: protectNote(userTags), backfill: backfill ? { ran: backfill.ran, superseded: backfill.superseded, conflicts: backfill.conflicts, suspects: backfill.suspects, version: backfill.version } : null, at: new Date().toISOString() });
 }
 
 export async function POST(req) {
@@ -77,9 +77,12 @@ export async function POST(req) {
   // 4-F.5 B: 게임 결과 0마리 → "이미 없음": 스캔 기록을 dismissed_reason 'not_seen' 으로 숨김(복구 가능). 내 목록 행은 건드리지 않는다
   if (b.action === "not_seen") {
     if (scanIds.length) { const { error } = await sb.from("scan_items").update({ dismissed: true, dismissed_reason: NOT_SEEN_REASON }).eq("user_id", user.userId).in("id", scanIds); if (error) return NextResponse.json({ error: error.message }, { status: 500 }); dismissed = scanIds.length; }
+    // 4-F.6: 내 목록 행도 함께 숨김(hidden_reason 'not_seen', 0012, 복구 가능). 컬럼이 없으면 건너뛰고 알린다
+    let hiddenRows = 0, rowsError = null;
+    if (rowIds.length) { const { error } = await sb.from("my_pokemon").update({ hidden_reason: NOT_SEEN_REASON }).eq("user_id", user.userId).in("id", rowIds); if (error) rowsError = error.message; else hiddenRows = rowIds.length; }
     invalidateReserveCache(user.userId);
-    console.log(`[cleanup] not_seen ${user.userId} scan ${dismissed}`);
-    return NextResponse.json({ ok: true, dismissed, rows: rowIds.length });
+    console.log(`[cleanup] not_seen ${user.userId} scan ${dismissed} rows ${hiddenRows}${rowsError ? " rowsError " + rowsError : ""}`);
+    return NextResponse.json({ ok: true, dismissed, rows: hiddenRows, rowsError });
   }
   if (scanIds.length) { const { error } = await sb.from("scan_items").update({ dismissed: true }).eq("user_id", user.userId).in("id", scanIds); if (error) return NextResponse.json({ error: error.message }, { status: 500 }); dismissed = scanIds.length; }
   if (rowIds.length && b.deleteRows) { const { error } = await sb.from("my_pokemon").delete().eq("user_id", user.userId).in("id", rowIds); if (error) return NextResponse.json({ error: error.message }, { status: 500 }); deleted = rowIds.length; }

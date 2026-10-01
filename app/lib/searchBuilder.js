@@ -7,6 +7,8 @@
 export const DEFAULT_MAX_LEN = 200;
 // 예상 수 한계 안내 (박사행 토스트·🧹 패널·앱 목록에 상시 표기)
 export const EXPECTED_LIMIT_NOTE = "예상 수는 앱이 아는 개체(스캔 기록 + 내 목록) 기준입니다. 앱이 모르는 같은 종·HP 개체가 게임에 있으면 결과가 더 나옵니다 — 게임 결과 수가 예상과 다르면 보내지 마세요.";
+// 4-F.6 D: 게임 결과가 예상보다 적을 때(보호 속성 개체가 섞임) 안내
+export const FEWER_NOTE = "게임 결과가 예상보다 적으면 보호 속성(색이 다른·반짝반짝·XXL·XXS·배경·코스튬) 개체가 섞였을 수 있습니다 → 나온 것만 보내고 '보호' 스캔(게임 검색 \"색이 다른,반짝반짝,xxl,xxs,배경,특별\" 후 보호 모드로 넘기기)을 한 번 실행하세요.";
 // 4-C.2 박사행 보호 조건 안내: 보호 대상(태그·이로치·반짝반짝·XXL·배경)은 검색에서 빠지므로 결과는 예상 이하
 // 4-F.5: 태그 보호는 "앱이 관리하지 않는 태그"만(각각 &!#태그명). 앱 관리 태그(수집·진화 후보·슈퍼리그·○○ 레이드 …)가 달린 박사행 개체는 묶음에 포함된다
 export const PROTECT_NOTE = "박사행 검색어에는 보호 조건(&!색이 다른&!반짝반짝&!xxl&!xxs&!배경&!특별&!다이맥스 + 사용자 고유 태그 &!#태그명)이 항상 붙습니다(이로치·반짝반짝·XXL·XXS·배경·코스튬·다이맥스·사용자 태그 제외. 앱이 추천한 태그는 제외하지 않음). 게임 결과 ≤ 예상 N마리 — 적으면 보호 대상이 빠진 것, 많으면 보내지 마세요(앱이 모르는 같은 종·HP 개체).";
@@ -36,6 +38,8 @@ export function protectSuffix(userTags = []) { return (userTags.length ? "&" + u
 // 검색어가 개체 x 를 잡는가. 부정 절: !# → game_tags 없음, !색이 다른 → 이로치 아님, !반짝반짝 → 럭키 아님, !xxl·!배경 → 앱이 모르는 정보(잡힌다고 봄)
 export function matches(query, x) {
   const parts = query.split("&");
+  // 4-F.6 D: 보호 모드 기록(is_protected)은 보호 절(!색이 다른 … !특별)이 하나라도 있는 검색어에 잡히지 않는다(속성 종류는 몰라도 전체 보호 절이 모두 붙으므로)
+  if (x.is_protected && parts.some((c) => PROTECT_CLAUSES.includes(c.trim()))) return false;
   return parts.every((clause) => clause.split(",").some((term) => {
     const t = term.trim();
     if (t === NO_TAG_CLAUSE) return !(x.game_tags || []).length;

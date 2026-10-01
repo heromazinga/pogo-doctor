@@ -20,8 +20,12 @@ import java.util.Locale
 class ScanSession(val id: String = newId(), val mode: String = "normal", val fullSync: Boolean = false) {
     val isShadow: Boolean get() = mode == "shadow"
     val isPurified: Boolean get() = mode == "purified"
-    val modeLabel: String get() = when (mode) { "shadow" -> "그림자"; "purified" -> "정화"; else -> "일반" }
+    val isProtected: Boolean get() = mode == "protected"   // 4-F.6 D 보호 모드(색이 다른·반짝반짝·XXL·XXS·배경·코스튬)
+    val modeLabel: String get() = when (mode) { "shadow" -> "그림자"; "purified" -> "정화"; "protected" -> "보호"; else -> "일반" }
     companion object {
+        // 4-F.6 D 모드별 게임 검색어 (⚡ 메뉴·첫 화면에서 모드 선택 시 클립보드에 복사)
+        const val PROTECT_SEARCH = "색이 다른,반짝반짝,xxl,xxs,배경,특별"
+        fun searchFor(mode: String): String? = when (mode) { "shadow" -> "그림자"; "purified" -> "정화"; "protected" -> PROTECT_SEARCH; else -> null }
         fun newId(): String = SimpleDateFormat("yyyyMMdd-HHmm", Locale.US).format(Date()) + "-" + (1000 + (Math.random() * 9000).toInt())
 
         // 프레임 지문: 이름·CP 영역(상단 6~30%) + 막대 영역(70~82%) 을 격자 샘플링해 밝기 합을 블록별로 담는다. 값 차이가 임계 이상이면 "변화"
@@ -113,6 +117,7 @@ class ScanSession(val id: String = newId(), val mode: String = "normal", val ful
         val b = JSONObject().put("session_id", id).put("species_id", sp.id).put("form", sp.form).put("name_kr", sp.nameKr)
             .put("app_version", BuildConfig.VERSION_NAME)                  // 4-D 신뢰 기록 판단(≥0.1.38)
             .put("is_shadow", isShadow).put("is_purified", isPurified)      // 4-D 스캔 모드
+            .put("is_protected", isProtected)                               // 4-F.6 D 보호 모드(0013)
         info.cp?.let { b.put("cp", it) }; info.hp?.let { b.put("hp", it) }
         b.put("atk_iv", ap.atk).put("def_iv", ap.def).put("sta_iv", ap.sta)
         if (cands.size == 1) b.put("level", cands[0].level)

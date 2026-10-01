@@ -4,7 +4,7 @@ package com.pogodoctor.core
 // 형식: "{도감번호 OR}&{hp OR}[&cp OR]" (CNF: & 절마다 , 는 OR). 알려진 전체 개체에서 대상 외 개체가 잡히면 묶음을 쪼갠다.
 object SearchBuilder {
     const val DEFAULT_MAX_LEN = 200
-    data class Item(val id: String, val speciesId: Int, val hp: Int?, val cp: Int?, val cpVerified: Boolean, val isShadow: Boolean = false, val form: String = "Normal", val gameTags: List<String> = emptyList(), val isShiny: Boolean = false, val isLucky: Boolean = false)
+    data class Item(val id: String, val speciesId: Int, val hp: Int?, val cp: Int?, val cpVerified: Boolean, val isShadow: Boolean = false, val form: String = "Normal", val gameTags: List<String> = emptyList(), val isShiny: Boolean = false, val isLucky: Boolean = false, val isProtected: Boolean = false)
     data class Group(val query: String, val expected: Int, val targetIds: List<String>, val withCp: Boolean, val overlap: Int = 0)
     data class Skipped(val id: String, val reason: String)
     data class Result(val groups: List<Group>, val skipped: List<Skipped>)
@@ -20,7 +20,8 @@ object SearchBuilder {
     fun protectSuffix(userTags: List<String>) = (if (userTags.isEmpty()) "" else "&" + userTags.joinToString("&") { "!#$it" }) + PROTECT_SUFFIX
     fun withProtect(query: String, userTags: List<String> = emptyList()) = query + protectSuffix(userTags)
 
-    fun matches(query: String, x: Item): Boolean = query.split("&").all { clause ->
+    // 4-F.6 D: 보호 모드 기록(isProtected)은 보호 절이 하나라도 있는 검색어에 잡히지 않는다 (웹 searchBuilder.js 와 동일)
+    fun matches(query: String, x: Item): Boolean = (!x.isProtected || query.split("&").none { it.trim() in PROTECT_CLAUSES }) && query.split("&").all { clause ->
         clause.split(",").any { term ->
             val t = term.trim()
             when {

@@ -1,7 +1,7 @@
 // 4-C.2 스캔 기록 superseded 백필(planSupersede) + CP 검증(cpConsistentLevel)
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { planSupersede, planConflicts, planSuspects, isSuspectBars, planModeSupersede, planNotSeen, planSyncSupersede } from "../app/lib/scanBackfill.js";
+import { planSupersede, planConflicts, planSuspects, isSuspectBars, planModeSupersede, planNotSeen, planSyncSupersede, planRescanRecovery } from "../app/lib/scanBackfill.js";
 import { cpConsistentLevel } from "../app/lib/ivCalc.js";
 import { calcCP } from "../app/lib/cpm.js";
 import { calcHP } from "../app/lib/ivCalc.js";
@@ -163,4 +163,26 @@ test("4-F.4 F 전체 동기화 대체 planSyncSupersede: 새 세션 기록과 �
   assert.deepEqual(planSyncSupersede(items, { ...sess, metrics: {} }), [], "부분 스캔");
   const left = new Set(plan.map((p) => p.id));
   assert.deepEqual(planNotSeen(items.filter((it) => !left.has(it.id)), sess), ["o5", "o6"], "대체되지 않은 이전 기록만 not_seen 후보");
+});
+
+test("4-F.6 C 재스캔 복구 planRescanRecovery: 보냄/없음 처리로 숨긴 같은 개체는 새 스캔으로 대체(→ 새 기록이 활성), 다른 개체값·이미 대체된 기록·활성 기록은 대상 아님", () => {
+  const item = { species_id: 15, form: "Normal", is_shadow: false, atk_iv: 12, def_iv: 12, sta_iv: 15, cp: 770, hp: 88 };
+  const hidden = [
+    { id: "h1", species_id: 15, form: "Normal", is_shadow: false, atk_iv: 12, def_iv: 12, sta_iv: 15, cp: 770, hp: 88, dismissed: true, superseded: false },   // 보냄 처리된 독침붕 770
+    { id: "h2", species_id: 15, form: "Normal", is_shadow: false, atk_iv: 12, def_iv: 12, sta_iv: 15, cp: null, hp: 88, dismissed: true, superseded: false },  // CP 없는 기록도 같은 개체
+    { id: "h3", species_id: 15, form: "Normal", is_shadow: false, atk_iv: 12, def_iv: 12, sta_iv: 14, cp: 770, hp: 88, dismissed: true, superseded: false },  // 개체값 다름
+    { id: "h4", species_id: 15, form: "Normal", is_shadow: false, atk_iv: 12, def_iv: 12, sta_iv: 15, cp: 770, hp: 88, dismissed: true, superseded: true },   // 이미 대체됨
+    { id: "h5", species_id: 15, form: "Normal", is_shadow: false, atk_iv: 12, def_iv: 12, sta_iv: 15, cp: 770, hp: 88, dismissed: false, superseded: false }, // 활성(숨김 아님)
+    { id: "h6", species_id: 15, form: "Normal", is_shadow: true, atk_iv: 12, def_iv: 12, sta_iv: 15, cp: 770, hp: 88, dismissed: true, superseded: false },   // 그림자
+  ];
+  assert.deepEqual(planRescanRecovery(hidden, item), ["h1", "h2"]);
+  assert.deepEqual(planRescanRecovery(hidden, { ...item, cp: 800 }), ["h2"], "CP 다르면 CP 없는 기록만");
+});
+
+test("4-F.6 D 보호 모드 기록은 그림자 모드와 같은 규칙으로 같은 개체의 일반 기록을 대체(planModeSupersede)", () => {
+  const normal = { ...item("n", 68, [15, 12, 14], 31), cp: 2634, hp: 163, app_version: "0.1.55", is_shadow: false, is_purified: false, is_protected: false };
+  const prot = { ...item("p", 68, [15, 12, 14], 31), cp: 2634, hp: 163, app_version: "0.1.55", is_shadow: false, is_purified: false, is_protected: true };
+  assert.deepEqual(planModeSupersede([normal, prot]), [{ id: "n", superseded_by: "p" }]);
+  assert.deepEqual(planModeSupersede([prot]), []);
+  assert.deepEqual(planModeSupersede([normal, { ...prot, app_version: "0.1.30" }]), [], "미신뢰 보호 기록은 대체 안 함");
 });

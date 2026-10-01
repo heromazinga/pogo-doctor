@@ -2001,7 +2001,7 @@ export default function Home() {
       {/* ─── 4-E 내 보관함 Panel: 스캔 기록(활성 전체) + 저장 목록 통합. 판정 등급·추천 태그·개체값·그림자/정화·출처 표시, 검색·필터 ─── */}
       {showStorage && (() => {
         const items = [
-          ...scans.map((it) => ({ key: "scan:" + it.id, kind: "scan", id: it.id, speciesId: it.species_id, name: it.name_kr || `#${it.species_id}`, form: it.form, cp: it.cp, hp: it.hp, atk: it.atk_iv, def: it.def_iv, sta: it.sta_iv, level: it.level, isShadow: !!it.is_shadow, isPurified: !!it.is_purified, isShiny: false, verdict: it.verdict, tags: it.verdict?.recommendedTags || [], gameTags: it.game_tags || [], recheck: !!it.recheck, recheckReason: it.recheck_reason, at: it.created_at, session: it.session_id })),
+          ...scans.map((it) => ({ key: "scan:" + it.id, kind: "scan", id: it.id, speciesId: it.species_id, name: it.name_kr || `#${it.species_id}`, form: it.form, cp: it.cp, hp: it.hp, atk: it.atk_iv, def: it.def_iv, sta: it.sta_iv, level: it.level, isShadow: !!it.is_shadow, isPurified: !!it.is_purified, isProtected: !!it.is_protected, isShiny: false, verdict: it.verdict, tags: it.verdict?.recommendedTags || [], gameTags: it.game_tags || [], recheck: !!it.recheck, recheckReason: it.recheck_reason, at: it.created_at, session: it.session_id })),
           ...collection.map((c) => ({ key: "row:" + c.id, kind: "row", id: c.id, speciesId: c.pokemonId, name: c.name, form: c.form, cp: c.cp || null, hp: c.raw.hp, atk: c.atkIv, def: c.defIv, sta: c.staIv, level: c.raw.level, isShadow: c.isShadow, isPurified: c.isPurified, isShiny: c.isShiny, verdict: verdicts[c.id], tags: [...new Set([...(c.tags || []), ...(verdicts[c.id]?.recommendedTags || [])])], gameTags: c.raw.game_tags || [], recheck: false, status: c.status, memo: c.memo, at: c.raw.created_at, entry: c })),
         ];
         const tierOf = (x) => (x.recheck ? "recheck" : x.verdict?.tier || "none");
@@ -2011,7 +2011,7 @@ export default function Home() {
             && (storageTier === "all" || tierOf(x) === storageTier)
             && (storageTag === "all" || x.tags.includes(storageTag))
             && (storageSrc === "all" || x.kind === storageSrc)
-            && (storageForm === "all" || (storageForm === "shadow" ? x.isShadow : storageForm === "purified" ? x.isPurified : !x.isShadow && !x.isPurified)))
+            && (storageForm === "all" || (storageForm === "shadow" ? x.isShadow : storageForm === "purified" ? x.isPurified : storageForm === "protected" ? x.isProtected : !x.isShadow && !x.isPurified && !x.isProtected)))
           .sort((a, b) => a.speciesId - b.speciesId || (b.cp || 0) - (a.cp || 0));
         const counts = {}; for (const x of items) counts[tierOf(x)] = (counts[tierOf(x)] || 0) + 1;
         const allTags = [...new Set(items.flatMap((x) => x.tags))].sort();
@@ -2059,7 +2059,7 @@ export default function Home() {
                   <button key={k} onClick={() => setStorageSrc(k)} style={storageSrc === k ? s.chipActive : s.chip}>{label}</button>
                 ))}
                 <span style={{ width: 1, background: "#2a3a5c", margin: "0 2px", alignSelf: "stretch" }} />
-                {[["all", "모드 전체"], ["normal", "일반"], ["shadow", "👤 그림자"], ["purified", "✨ 정화"]].map(([k, label]) => (
+                {[["all", "모드 전체"], ["normal", "일반"], ["shadow", "👤 그림자"], ["purified", "✨ 정화"], ["protected", "🛡 보호"]].map(([k, label]) => (
                   <button key={k} onClick={() => setStorageForm(k)} style={storageForm === k ? s.chipActive : s.chip}>{label}</button>
                 ))}
                 <span style={{ width: 1, background: "#2a3a5c", margin: "0 2px", alignSelf: "stretch" }} />
@@ -2088,6 +2088,7 @@ export default function Home() {
                           {x.isShiny ? "✨" : ""}{x.name}{x.kind === "scan" && x.form && x.form !== "Normal" ? ` (${x.form})` : ""}
                           {x.isShadow && <span style={{ ...s.tagBadge, color: "#d0a8ff", marginLeft: 4 }}>👤 그림자</span>}
                           {x.isPurified && <span style={{ ...s.tagBadge, color: "#9cd3ff", marginLeft: 4 }}>✨ 정화</span>}
+                          {x.isProtected && <span style={{ ...s.tagBadge, color: "#ffd27f", marginLeft: 4 }} title="보호 모드 스캔: 색이 다른·반짝반짝·XXL·XXS·배경·코스튬 중 하나">🛡 보호</span>}
                           <span style={{ ...s.tagBadge, color: x.kind === "scan" ? "#4ecdc4" : "#8899aa", marginLeft: 4 }}>{x.kind === "scan" ? "📷 스캔" : "📋 저장"}</span>
                           {x.kind === "row" && <span style={{ ...s.tagBadge, color: x.status === "transfer" ? "#ff6b6b" : "#4ecdc4", marginLeft: 4 }}>{STATUS_LABELS[x.status] || x.status}</span>}
                         </div>
@@ -2141,6 +2142,7 @@ export default function Home() {
             </div>
             <div style={{ ...s.sourceNotice, marginBottom: 10 }}>⚠️ {cleanup?.note || "예상 수는 앱이 아는 개체(스캔 기록 + 내 목록) 기준입니다. 앱이 모르는 같은 종·HP 개체가 게임에 있으면 결과가 더 나옵니다 — 게임 결과 수가 예상과 다르면 보내지 마세요."}</div>
             {cleanup?.protectNote && <div style={{ ...s.sourceNotice, marginBottom: 10 }}>🛡 {cleanup.protectNote}</div>}
+            {cleanup?.fewerNote && <div style={{ ...s.sourceNotice, marginBottom: 10 }}>📉 {cleanup.fewerNote}</div>}
             {cleanup?.pending > 0 && <div style={{ ...s.sourceNotice, marginBottom: 8 }}>⏳ 판정 갱신 중 — {cleanup.pending}건은 아직 옛 규칙 판정으로 묶였습니다. 🔄 로 이어서 갱신한 뒤 사용하세요</div>}
             {cleanup?.backfill?.ran && <div style={{ fontSize: 10, color: "#4ecdc4", marginBottom: 8 }}>🧹 스캔 기록 정리 1회 실행: 대체된 과거 기록 {cleanup.backfill.superseded}건 · 재스캔 필요 표시 {cleanup.backfill.conflicts ?? 0}건(충돌) + {cleanup.backfill.suspects ?? 0}건(오판독 의심) (규칙 {cleanup.backfill.version})</div>}
             {cleanupError && <div style={s.error}>{cleanupError}</div>}

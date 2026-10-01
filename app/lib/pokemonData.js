@@ -212,6 +212,7 @@ function parsePokemonGoApi(json) {
       types: [normType(p.primaryType), normType(p.secondaryType)].filter(Boolean),
       fast, charged, eliteFast, eliteCharged,
       hasMoves: fast.length + charged.length > 0,
+      hasMega: p.hasMegaEvolution === true, // 4-F.6: 포켓몬 GO 게임 마스터(pokemon-go-api) 기준 메가진화 존재 — 폼별(알로라 라이츄는 false)
       // 4-A: 전설/환상/UB 구분, 진화 목록(이름 → 아래에서 도감번호로 해석)
       pokemonClass: p.pokemonClass ? String(p.pokemonClass).replace("POKEMON_CLASS_", "").toLowerCase() : null, // legendary | mythic | ultra_beast
       evolutionsRaw: asList(p.evolutions).map((e) => ({ name: e.id, formId: e.formId, candies: e.candies ?? null })).filter((e) => e.name),
@@ -262,7 +263,7 @@ function parsePvpoke(json) {
     if (!p?.dex || !p.speciesName) continue;
     // "Raichu (Alolan)", "Rattata (Alolan) (Shadow)", "Charizard (Mega X)"
     const labels = [...p.speciesName.matchAll(/\(([^)]+)\)/g)].map((x) => x[1].trim());
-    if (labels.some((l) => /^(mega|primal)\b/i.test(l))) megaDex.add(p.dex);
+    if (labels.some((l) => /^(mega|primal)\b/i.test(l)) && p.released !== false) megaDex.add(p.dex); // 4-F.6: PvPoke released=false(예: Camerupt (Mega)) 제외
     const baseName = p.speciesName.replace(/\s*\([^)]*\)/g, "").trim();
     let form = "Normal";
     if (labels.length) {
@@ -293,8 +294,17 @@ function parsePvpoke(json) {
       shadowEligible: Array.isArray(p.tags) && p.tags.includes("shadoweligible"), // PvPoke gamemaster tags: 그림자 존재 종 (4-A2 그림자 순위 범위)
     });
   }
-  for (const r of records.values()) if (megaDex.has(r.id)) r.hasMega = true; // 4-F.5
+  for (const r of records.values()) if (megaDex.has(r.id) && r.form === "Normal") r.hasMega = true; // 4-F.5/4-F.6: 메가진화는 기본 폼에서만(알로라·가라르·아머드 제외)
   return { records, moveNames, moveKinds, moveStats };
+}
+
+// 4-F.6 메가진화 가능(포켓몬 GO 기준): pokemon-go-api(GO 게임 마스터 파생, 폼별 hasMegaEvolution)가 있으면 그 값이 필수이고,
+//   PvPoke gamemaster 가 있으면 그 메가 항목이 released=false 가 아니어야 한다(둘 다 있으면 AND, 한쪽만 있으면 그쪽). 본가 게임 기준이 아니다.
+export function megaFromSources(pgaRec, pvRec) {
+  if (pgaRec && pvRec) return Boolean(pgaRec.hasMega) && Boolean(pvRec.hasMega);
+  if (pgaRec) return Boolean(pgaRec.hasMega);
+  if (pvRec) return Boolean(pvRec.hasMega);
+  return false;
 }
 
 function parsePogoapi(statsJson, movesJson) {
@@ -747,7 +757,7 @@ function crossValidate(loaded /* {sourceKey: {meta, parsed}} */) {
       evolutions: recs.find((x) => Array.isArray(x.rec.evolutions) && x.rec.evolutions.length)?.rec.evolutions || [],
       pvpokeId: recs.find((x) => x.rec.pvpokeId)?.rec.pvpokeId || null,
       shadowEligible: recs.some((x) => x.rec.shadowEligible === true),
-      hasMega: recs.some((x) => x.rec.hasMega === true), // 4-F.5 메가진화 가능 종 (PvPoke gamemaster)
+      hasMega: megaFromSources(recs.find((x) => x.src === "pokemon-go-api")?.rec, recs.find((x) => x.src === "pvpoke")?.rec), // 4-F.6
     });
   }
   counts.stat = statDisputes;

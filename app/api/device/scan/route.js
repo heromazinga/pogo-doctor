@@ -6,7 +6,7 @@ import { scanKey, findSuperseded } from "../../../lib/pokemonMatch";
 import { getFamilyOf } from "../../../lib/savePokemonServer";
 import { getPokemonDataset, findPokemon } from "../../../lib/pokemonData";
 import { cpConsistentLevel } from "../../../lib/ivCalc";
-import { CONFLICT_REASON } from "../../../lib/scanBackfill";
+import { CONFLICT_REASON, planRescanRecovery } from "../../../lib/scanBackfill";
 import { fetchActiveScanItems } from "../../../lib/scanQuery";
 import { isTrustedVersion } from "../../../lib/appVersion";
 import { buildVerdictContext, invalidateReserveCache } from "../../../lib/verdictContext";
@@ -51,6 +51,7 @@ export async function POST(req) {
     recheck_reason: b.recheck && typeof b.recheck_reason === "string" && b.recheck_reason.trim() ? b.recheck_reason.trim() : null, // 4-C.4 앱이 보낸 재확인 사유(막대 판독 불일치 등)
     app_version: typeof b.app_version === "string" ? b.app_version.trim().slice(0, 20) : null, // 4-D 기록한 앱 버전(≥0.1.38 신뢰 기록)
     is_purified: Boolean(b.is_purified), // 4-D 스캔 모드 "정화"
+    is_protected: Boolean(b.is_protected), // 4-F.6 D 스캔 모드 "보호" (0013)
   };
   const trustedNew = isTrustedVersion(item.app_version);
   // 4-C.2 A. CP 자리수 누락 방지: 종·개체값·HP 로 가능한 레벨의 CP 와 맞지 않으면 CP 를 null 로 저장 (예: 괴력몬 2634 → 263 오판독)
@@ -77,7 +78,7 @@ export async function POST(req) {
   }
   // 4-C 규칙 ③: 강화·진화 후 같은 개체(같은 계열·폼·그림자·개체값, 레벨/CP 비감소)의 과거 기록(다른 세션 포함)을 superseded 로 표시.
   //   과거 후보가 서로 다른 2개 이상이면 대체하지 않고 새 기록에 recheck 표시
-  let superseded = 0;
+  let superseded = 0, recovered = 0;
   if (!existing && anyIv) {
     const fam = await getFamilyOf();
     const famIds = fam ? [...fam(item.species_id)] : [item.species_id];
@@ -104,9 +105,10 @@ export async function POST(req) {
   }
   // 4-D2: 스캔 모드(그림자/정화) 신뢰 기록은 같은 종·폼·CP·HP·개체값의 "일반 모드" 활성 기록을 대체 (반대 방향 없음)
   //   4-D3: 모드 기록 CP 가 null 이면 종·폼·HP·개체값 일치(CP 무관)로 대체, CP 가 있으면 CP 같거나 없는 일반 기록만
-  if (!existing && anyIv && trustedNew && (item.is_shadow || item.is_purified) && item.hp != null) {
+  //   4-F.6 D: "보호" 모드 기록도 같은 규칙으로 일반(그림자·정화·보호 아님) 기록을 대체
+  if (!existing && anyIv && trustedNew && (item.is_shadow || item.is_purified || item.is_protected) && item.hp != null) {
     let nq = sb.from("scan_items").select("id,cp").eq("user_id", auth.userId).eq("dismissed", false).eq("superseded", false)
-      .eq("species_id", item.species_id).eq("form", item.form).eq("is_shadow", false).eq("is_purified", false).eq("hp", item.hp)
+      .eq("species_id", item.species_id).eq("form", item.form).eq("is_shadow", false).eq("is_purified", false).eq("is_protected", false).eq("hp", item.hp)
       .eq("atk_iv", item.atk_iv).eq("def_iv", item.def_iv).eq("sta_iv", item.sta_iv).limit(20);
     if (item.cp != null) nq = nq.or(`cp.eq.${item.cp},cp.is.null`);
     const { data: normals } = await nq;
@@ -114,10 +116,10 @@ export async function POST(req) {
   }
   // 4-F.5 B①: 보냄/없음 처리로 숨긴 기록과 같은 개체(종·폼·그림자·개체값, CP·HP 같거나 한쪽 없음)가 다시 스캔되면 그 숨김 기록을 새 기록으로 대체 → 새 기록이 활성으로 복구된 셈
   if (!existing && anyIv) {
-    const { data: hidden } = await sb.from("scan_items").select("id,cp,hp").eq("user_id", auth.userId).eq("dismissed", true).eq("superseded", false)
+    const { data: hidden } = await sb.from("scan_items").select("id,cp,hp,species_id,form,is_shadow,atk_iv,def_iv,sta_iv,dismissed,superseded").eq("user_id", auth.userId).eq("dismissed", true).eq("superseded", false)
       .eq("species_id", item.species_id).eq("form", item.form).eq("is_shadow", item.is_shadow).eq("atk_iv", item.atk_iv).eq("def_iv", item.def_iv).eq("sta_iv", item.sta_iv).limit(20);
-    const hit = (hidden || []).filter((h) => (item.cp == null || h.cp == null || h.cp === item.cp) && (item.hp == null || h.hp == null || h.hp === item.hp)).map((h) => h.id);
-    if (hit.length) item._supersedes = [...new Set([...(item._supersedes || []), ...hit])];
+    const hit = planRescanRecovery(hidden, item);
+    if (hit.length) { item._supersedes = [...new Set([...(item._supersedes || []), ...hit])]; recovered = hit.length; }
   }
   const supersedes = item._supersedes || []; delete item._supersedes;
   let data, error;
@@ -143,7 +145,7 @@ export async function POST(req) {
       console.log(`[scan] verdict after-response ${Date.now() - t0}ms ${data.id}`);
     } catch (e) { console.warn(`[scan] 판정 후계산 실패: ${e.message}`); }
   });
-  return NextResponse.json({ item: data, duplicate: Boolean(existing) && !cpFilled, cpFilled, superseded, cpRejected, conflicts: conflictIds.length, ms: Date.now() - started });
+  return NextResponse.json({ item: data, duplicate: Boolean(existing) && !cpFilled, cpFilled, superseded, recovered, cpRejected, conflicts: conflictIds.length, ms: Date.now() - started });
 }
 
 // 앱 → 세션 스캔 기록 조회 (?session=… 없으면 최근 200)

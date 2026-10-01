@@ -63,6 +63,10 @@ await check("0009 storage_mode 잘못된 값 거부", `update public.user_settin
 await check("0009 scan_backfill_version 저장", `update public.user_settings set scan_backfill_version = '2026-09-29.4' where user_id = '${UID}'`, true);
 // 0010 recheck_reason
 await check("0010 recheck_reason 저장", `update public.scan_items set recheck = true, recheck_reason = '같은 CP·HP 다른 개체값 — 재스캔 필요' where session_id = 's3'`, true);
+// 0013 scan_items.is_protected
+await check("0013 is_protected 저장", `insert into public.scan_items(user_id,session_id,scan_key,species_id,name_kr,is_protected) values ('${UID}','s5','k5',25,'피카츄',true)`, true);
+// 0012 my_pokemon.hidden_reason
+await check("0012 hidden_reason 저장·복구", `update public.my_pokemon set hidden_reason = 'not_seen' where user_id = '${UID}'; update public.my_pokemon set hidden_reason = null where hidden_reason = 'not_seen'`, true);
 // 0011 app_version / is_purified / dismissed_reason
 await check("0011 app_version·is_purified 저장", `insert into public.scan_items(user_id,session_id,scan_key,species_id,name_kr,app_version,is_purified) values ('${UID}','s4','k4',396,'찌르꼬','0.1.38',true)`, true);
 await check("0011 dismissed_reason 저장", `update public.scan_items set dismissed = true, dismissed_reason = 'before_session' where session_id = 's4'`, true);

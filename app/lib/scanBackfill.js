@@ -95,10 +95,11 @@ export function planModeSupersede(items) {
   }
   const out = [];
   for (const list of groups.values()) {
-    const modes = list.filter((r) => (r.is_shadow || r.is_purified) && isTrustedVersion(r.app_version)).sort((a, b) => String(a.created_at).localeCompare(String(b.created_at)));
+    // 4-F.6 D: "보호" 모드 기록(is_protected)도 모드 기록으로 — 같은 개체의 일반 기록을 대체
+    const modes = list.filter((r) => (r.is_shadow || r.is_purified || r.is_protected) && isTrustedVersion(r.app_version)).sort((a, b) => String(a.created_at).localeCompare(String(b.created_at)));
     if (!modes.length) continue;
     for (const r of list) {
-      if (r.is_shadow || r.is_purified) continue;
+      if (r.is_shadow || r.is_purified || r.is_protected) continue;
       const cand = modes.filter((m) => m.cp == null || r.cp == null || m.cp === r.cp);
       if (cand.length) out.push({ id: r.id, superseded_by: cand[cand.length - 1].id });
     }
@@ -257,4 +258,12 @@ export function diagnoseSync(items, session) {
     rows.push({ id: r.id, name: r.name_kr, ivs: hasIv(r) ? ivKey(r) : null, cp: r.cp, hp: r.hp, session_id: r.session_id, dismissed: r.dismissed, superseded: r.superseded, why });
   }
   return { session: { session_id: session.session_id, ended_at: session.ended_at, fullSync: Boolean(session.metrics?.fullSync) }, rows };
+}
+
+// 4-F.5/4-F.6 C 재스캔 복구(순수 계산): 보냄/없음 처리로 숨긴 기록(dismissed=true, superseded=false) 중 새 스캔과 같은 개체(종·폼·그림자·개체값, CP·HP 같거나 한쪽 없음)는
+//   새 기록으로 superseded → 새 기록이 활성으로 남는다(= 복구). "보냄" 상태는 scan_items.dismissed(+dismissed_reason null) 와 my_pokemon 행 삭제로만 저장되며 별도 플래그는 없다
+export function planRescanRecovery(hidden, item) {
+  return (hidden || []).filter((h) => h.dismissed && !h.superseded && h.species_id === item.species_id && (h.form || "Normal") === (item.form || "Normal") && Boolean(h.is_shadow) === Boolean(item.is_shadow)
+    && h.atk_iv === item.atk_iv && h.def_iv === item.def_iv && h.sta_iv === item.sta_iv
+    && (item.cp == null || h.cp == null || h.cp === item.cp) && (item.hp == null || h.hp == null || h.hp === item.hp)).map((h) => h.id);
 }

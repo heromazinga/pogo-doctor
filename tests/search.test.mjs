@@ -157,3 +157,12 @@ test("4-F.5 '수집(종 대표)' 태그 묶음은 선택(optional)으로 뒤에"
   const c = buildCleanup(items, items).filter((x) => x.category.startsWith("tag:"));
   assert.deepEqual(c.map((x) => [x.category, Boolean(x.optional)]), [["tag:전기 레이드", false], ["tag:수집(종 대표)", true]]);
 });
+
+test("4-F.6 D 보호 모드 기록(is_protected)은 보호 절이 붙은 박사행 검색어에 잡히지 않는다(같은 종·HP 라도 예상 수에서 제외)", () => {
+  const q = "25&hp50" + PROTECT_SUFFIX;
+  assert.ok(!matches(q, { species_id: 25, hp: 50, is_protected: true }));
+  assert.ok(matches("25&hp50", { species_id: 25, hp: 50, is_protected: true }), "보호 절 없는 검색어(태그 묶음)에는 잡힘");
+  const items = [{ id: "t", species_id: 25, hp: 50, verdict: { tier: "transfer" } }, { id: "p", species_id: 25, hp: 50, is_protected: true, verdict: { tier: "hold" } }];
+  const tr = buildCleanup(items, items).find((x) => x.category === "transfer");
+  assert.equal(tr.groups[0].expected, 1); assert.deepEqual(tr.groups[0].targetIds, ["t"]); assert.equal(tr.groups[0].withCp, false, "보호 기록은 충돌로 보지 않아 CP 로 좁히지 않음");
+});
