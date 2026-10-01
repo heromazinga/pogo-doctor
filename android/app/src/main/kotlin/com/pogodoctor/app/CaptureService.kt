@@ -67,7 +67,7 @@ class CaptureService : Service() {
         const val ACTION_SCAN_STOP = "com.pogodoctor.app.SCAN_STOP"       // 4-E 연속 스캔 중지
         const val EXTRA_MODE = "mode"
         const val EXTRA_FULL_SYNC = "fullSync"   // 4-F.2 전체 동기화 세션
-        fun modeEmoji(m: String?) = when (m) { "shadow" -> "👤"; "purified" -> "✨"; else -> "📷" }
+        fun modeEmoji(m: String?) = when (m) { "shadow" -> "👤"; "purified" -> "✨"; "protected" -> "🛡"; else -> "📷" }
         @Volatile var scanning = false
         @Volatile var scanLine: String = ""
         private const val CHANNEL = "capture"
@@ -125,7 +125,7 @@ class CaptureService : Service() {
             // 4-E: 모드를 정해 시작(앱 첫 화면·오버레이 메뉴). 이미 스캔 중이면 그 세션을 끝내고 새 모드로 시작
             ACTION_SCAN_START -> {
                 if (projection == null) { toast("캡처 서비스가 실행 중이 아닙니다 — 앱에서 오버레이 시작"); return START_NOT_STICKY }
-                val m = intent?.getStringExtra(EXTRA_MODE)?.takeIf { it in listOf("normal", "shadow", "purified") } ?: "normal"
+                val m = intent?.getStringExtra(EXTRA_MODE)?.takeIf { it in listOf("normal", "shadow", "purified", "protected") } ?: "normal"
                 if (scanning) stopScan()
                 prefs.scanMode = m; startScan(fullSync = intent?.getBooleanExtra(EXTRA_FULL_SYNC, false) == true)
                 return START_NOT_STICKY
@@ -202,9 +202,11 @@ class CaptureService : Service() {
         val session = ScanSession(mode = prefs.scanMode, fullSync = fullSync); session.metrics.batteryStart = batteryPct()   // 4-D 스캔 모드(일반/그림자/정화)는 시작 시점 설정으로 고정
         scan = session; scanning = true; scanStartedAt = System.currentTimeMillis(); gate = ScanGate(prefs.scanStableMs.toLong(), 3, 300)
         hideCard(); hideMenu(); bubble?.text = modeEmoji(session.mode)
+        // 4-F.6 D: 그림자·정화·보호 모드는 게임 검색어를 클립보드에 복사해 둔다(검색창에 붙여넣기만). 서비스에서의 클립보드 쓰기는 허용됨(읽기만 제한)
+        ScanSession.searchFor(session.mode)?.let { q -> runCatching { (getSystemService(Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager).setPrimaryClip(android.content.ClipData.newPlainText("pogo-mode-search", q)); toast("게임 검색어 복사됨: $q — 검색창에 붙여넣고 ${session.modeLabel} 개체만 넘기세요") } }
         if (prefs.scanStrip) showStrip(session.mode)   // 상단 띠(설정). 4-E: 그림자/정화 모드면 색·글자 크게
         queue.start(scope)
-        refreshScanLine(if (session.fullSync) "🔄 전체 동기화 — 검색어 없이 보관함 전체를 처음부터 끝까지 넘기세요" else if (session.mode == "normal") "평가 화면(막대 3개)을 켜고 좌우로 넘기세요" else "${modeEmoji(session.mode)} ${session.modeLabel} 모드 — 게임 검색 \"${session.modeLabel}\" 로 거른 뒤 평가 화면을 넘기세요")
+        refreshScanLine(if (session.fullSync) "🔄 전체 동기화 — 검색어 없이 보관함 전체를 처음부터 끝까지 넘기세요" else if (session.mode == "normal") "평가 화면(막대 3개)을 켜고 좌우로 넘기세요" else "${modeEmoji(session.mode)} ${session.modeLabel} 모드 — 게임 검색 \"${ScanSession.searchFor(session.mode)}\" 로 거른 뒤 평가 화면을 넘기세요")
         DebugLog.add(this, "scan", emptyList(), "연속 스캔 시작 세션 ${session.id} 모드 ${session.mode} 간격 ${prefs.scanIntervalMs}ms 안정 ${prefs.scanStableMs}ms 대기열 ${queue.pending}")
         handler.removeCallbacks(scanTick); handler.post(scanTick)
     }
@@ -389,7 +391,7 @@ class CaptureService : Service() {
     private fun showStrip(mode: String = "normal") {
         hideStrip()
         // 4-E: 그림자(보라)·정화(파랑) 모드는 배경색과 글자를 키워 모드를 놓치지 않게 한다
-        val bg = when (mode) { "shadow" -> 0xCC5B2A86.toInt(); "purified" -> 0xCC1E5AA8.toInt(); else -> 0xCC0F2035.toInt() }
+        val bg = when (mode) { "shadow" -> 0xCC5B2A86.toInt(); "purified" -> 0xCC1E5AA8.toInt(); "protected" -> 0xCC8A6D1A.toInt(); else -> 0xCC0F2035.toInt() }
         val tv = TextView(this).apply { text = "${modeEmoji(mode)} 연속 스캔 시작"; textSize = if (mode == "normal") 12f else 15f; setTextColor(Color.WHITE); setBackgroundColor(bg); setPadding(dp(10), dp(6), dp(10), dp(6)); alpha = 0.8f }
         val lp = WindowManager.LayoutParams(WindowManager.LayoutParams.MATCH_PARENT, WindowManager.LayoutParams.WRAP_CONTENT, WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
             WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE or WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN, PixelFormat.TRANSLUCENT)
@@ -489,6 +491,8 @@ class CaptureService : Service() {
             item("📷 연속 스캔 시작 — 일반") { prefs.scanMode = "normal"; startScan() }
             item("👤 그림자 모드로 스캔 (게임 검색 \"그림자\" 후)", 0xFFD0A8FF.toInt()) { prefs.scanMode = "shadow"; startScan() }
             item("✨ 정화 모드로 스캔 (게임 검색 \"정화\" 후)", 0xFF9CD3FF.toInt()) { prefs.scanMode = "purified"; startScan() }
+            // 4-F.6 D: 보호 모드 — 앱이 읽지 못하는 보호 속성(색이 다른·반짝반짝·XXL·XXS·배경·코스튬) 개체를 게임 검색으로 거른 뒤 스캔 → is_protected 기록(박사행 금지)
+            item("🛡 보호 모드로 스캔 (게임 검색 \"색이 다른,반짝반짝,xxl,xxs,배경,특별\" 후)", 0xFFFFD27F.toInt()) { prefs.scanMode = "protected"; startScan() }
             item("🔄 전체 동기화 스캔 (검색어 없이 보관함 전체)", 0xFFFFD93D.toInt()) { prefs.scanMode = "normal"; startScan(fullSync = true) }
         }
         item("⚡ 1장 캡처(상세·평가 화면)") { captureAndAnalyze(viaActivity = false) }

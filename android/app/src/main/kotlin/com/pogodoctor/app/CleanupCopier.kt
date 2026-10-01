@@ -107,7 +107,7 @@ object CleanupCopier {
         // 4-C.2: 박사행 묶음은 보호 조건이 항상 붙어 "결과 ≤ 예상" (보호 대상이 빠짐). 고정 검색어(수집: 색이 다른/배경/xxl)는 예상 수 없음
         val sb = StringBuilder(when {
             g.expected < 0 -> "[$head] 복사됨 · 예상 수 없음(앱이 모르는 정보) — 게임 결과를 보고 태그"
-            g.category == "transfer" -> "[$head] 복사됨 · 게임 결과 ≤ 예상 ${g.expected}마리. 적으면 보호 대상이 빠진 것, 많으면 보내지 말 것"
+            g.category == "transfer" -> "[$head] 복사됨 · 게임 결과 ≤ 예상 ${g.expected}마리. 적으면 보호 속성 개체가 섞인 것 → 나온 것만 보내고 '보호' 스캔을 한 번 실행. 많으면 보내지 말 것"
             else -> "[$head] 복사됨 · 예상 ${g.expected}마리 — 게임 결과 수가 같을 때만 전체 선택"
         })
         if (g.overlap > 0) sb.append("\n⚠️ 다른 개체 최대 ${g.overlap}마리 포함 가능(태그는 덮어써도 됨)")

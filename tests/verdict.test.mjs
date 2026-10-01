@@ -10,6 +10,7 @@ import { RULES, RULES_VERSION, TAG, purposesFromTags } from "../app/lib/verdictR
 import { fillMissingVerdicts, isStaleVerdict, verdictForItem } from "../app/lib/scanVerdict.js";
 import { buildReserveRanks, rareFamilyNote } from "../app/lib/reserveRanks.js";
 import { megaFromSources } from "../app/lib/pokemonData.js";
+import { speciesUsage } from "../app/lib/reserveRanks.js";
 import { getRankings as getRankings2, budgetRankOf } from "../app/lib/speciesRankings.js";
 import { calcHP } from "../app/lib/ivCalc.js";
 
@@ -774,4 +775,32 @@ test("4-F.6 A 메가 판정 출처: 포켓몬 GO 게임 마스터(pokemon-go-api
   assert.equal(megaFromSources({ hasMega: true }, { hasMega: false }), false, "PvPoke released=false(Camerupt) → 제외");
   assert.equal(megaFromSources({ hasMega: false }, { hasMega: true }), false, "GO 게임 마스터에 없음 → 제외");
   assert.equal(megaFromSources({ hasMega: true }, undefined), true); assert.equal(megaFromSources(undefined, { hasMega: true }), true); assert.equal(megaFromSources(undefined, undefined), false);
+});
+
+test("4-F.6 D 보호 모드 기록(is_protected): 박사행 금지 → 보류 '보호 속성(…)', 종 대표·레이드 계산은 일반과 동일", () => {
+  const a = scanRow("a", 650, [5, 5, 5], 20, { is_protected: true }), b = scanRow("b", 650, [10, 10, 10], 20);
+  const reserve = buildReserveRanks(dataset, [], [a, b], { rules: { ...RULES, BUDGET_RAID_TOP_RANK: 0 } });
+  assert.equal(reserve.rep.get("650:Normal:0:0")?.key, "scan:b", "보호 기록도 일반 개체로 대표 계산(합이 낮으면 대표 아님)");
+  const c = beginnerCtx({ reserve, rulesOverride: { BUDGET_RAID_TOP_RANK: 0 } });
+  const va = verdictForItem(a, c);
+  assert.equal(va.tier, "hold"); assert.ok(va.collect.some((x) => x.reason.startsWith("보호 속성(색이 다른,반짝반짝,xxl,xxs,배경,특별,다이맥스)")), JSON.stringify(va.collect)); assert.ok(va.summary.includes("보호 속성"), va.summary);
+  assert.equal(verdictForItem({ ...a, is_protected: false }, c).tier, "transfer", "보호 기록이 아니면 현행(종 대표 b 가 있으니 박사행)");
+});
+
+test("4-F.6 E 그림자 종 대표: (자신 또는 최종형이) 레이드 종인 그림자는 공격 → 합 → CP, 레이드에 안 쓰는 그림자 종은 합 기준, 일반 개체는 기존 규칙", () => {
+  const r = getRankings2(dataset);
+  // 그림자 파이리(→ 그림자 리자몽, 불꽃 상위): speciesUsage 가 최종형으로 레이드 종 판단
+  const charmander = dataset.pokemon.find((p) => p.id === 4);
+  assert.equal(speciesUsage(r, leagueRankings, charmander, true, RULES, dataset).raid, true, "최종형(리자몽) 그림자 순위로 레이드 종");
+  const s1 = scanRow("s1", 4, [15, 5, 5], 20, { is_shadow: true }), s2 = scanRow("s2", 4, [10, 15, 15], 20, { is_shadow: true });
+  const rep = buildReserveRanks(dataset, [], [s1, s2], { leagueRankings }).rep.get("4:Normal:1:0");
+  assert.equal(rep.key, "scan:s1", "합 25 < 40 이어도 공격 15 우선"); assert.equal(rep.basis, "그림자 레이드 종 → 공격");
+  // 레이드에 안 쓰는 그림자 종(도치마론, 진화 없음·기술 없음): 합 기준 유지
+  const d1 = scanRow("d1", 650, [15, 5, 5], 20, { is_shadow: true }), d2 = scanRow("d2", 650, [10, 15, 15], 20, { is_shadow: true });
+  assert.equal(buildReserveRanks(dataset, [], [d1, d2], { leagueRankings }).rep.get("650:Normal:1:0").key, "scan:d2");
+  // 일반 파이리: 기존 규칙(합 우선, 동점 ±1 만 용도별)
+  const n1 = scanRow("n1", 4, [15, 5, 5], 20), n2 = scanRow("n2", 4, [10, 15, 15], 20);
+  assert.equal(buildReserveRanks(dataset, [], [n1, n2], { leagueRankings }).rep.get("4:Normal:0:0").key, "scan:n2");
+  const v = verdictForItem(s1, beginnerCtx({ reserve: buildReserveRanks(dataset, [], [s1, s2], { leagueRankings }) }));
+  assert.ok(v.collect.some((x) => x.reason.includes("그림자 레이드 종 → 공격")), JSON.stringify(v.collect));
 });

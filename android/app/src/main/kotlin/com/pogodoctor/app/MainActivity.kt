@@ -49,7 +49,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 // 4-D 스캔 모드 표시명
-private fun scanModeLabel(m: String) = when (m) { "shadow" -> "그림자"; "purified" -> "정화"; else -> "일반" }
+private fun scanModeLabel(m: String) = when (m) { "shadow" -> "그림자"; "purified" -> "정화"; "protected" -> "보호"; else -> "일반" }
 
 // 4-E 첫 화면(카드 4개): 연결 상태 / 연속 스캔(모드 선택 시작·중지) / 정리(박사행·태그 목록) / 웹 열기. 나머지는 "고급 설정"(접힘).
 // 사용자 흐름: 스캔 → 정리 목록에서 복사 → 게임 검색창 붙여넣기 → 수 확인 → 전체 선택 → 보내기. 게임 조작 없음.
@@ -101,7 +101,7 @@ class MainActivity : ComponentActivity() {
     // 4-E: 모드를 정해 연속 스캔 시작 (세션이 끝나면 서비스가 모드를 일반으로 되돌림)
     private fun startScan(mode: String, fullSync: Boolean = false) {
         startService(Intent(this, CaptureService::class.java).setAction(CaptureService.ACTION_SCAN_START).putExtra(CaptureService.EXTRA_MODE, mode).putExtra(CaptureService.EXTRA_FULL_SYNC, fullSync))
-        scanning = true; status = if (fullSync) "전체 동기화 시작 — 검색어 없이 보관함 전체를 처음부터 끝까지 넘기세요. 끝나면 웹 📦 내 보관함에서 \"다시 보이지 않은 기록 숨기기\" 확인" else "연속 스캔 시작(${scanModeLabel(mode)}) — 포켓몬GO 평가 화면으로" + (if (mode != "normal") ". 게임 검색 \"${scanModeLabel(mode)}\" 로 먼저 거르세요" else "")
+        scanning = true; status = if (fullSync) "전체 동기화 시작 — 검색어 없이 보관함 전체를 처음부터 끝까지 넘기세요. 끝나면 웹 📦 내 보관함에서 \"다시 보이지 않은 기록 숨기기\" 확인" else "연속 스캔 시작(${scanModeLabel(mode)}) — 포켓몬GO 평가 화면으로" + (ScanSession.searchFor(mode)?.let { ". 게임 검색 \"$it\" 로 먼저 거르세요(클립보드에 복사됨)" } ?: "")
     }
     private fun stopScan() { startService(Intent(this, CaptureService::class.java).setAction(CaptureService.ACTION_SCAN_STOP)); scanning = false; status = "연속 스캔 중지 (모드 일반으로 복귀)" }
     private fun openCleanup(kind: String) = startActivity(Intent(this, CleanupActivity::class.java).putExtra(CleanupActivity.EXTRA_KIND, kind))
@@ -161,7 +161,10 @@ class MainActivity : ComponentActivity() {
                             Button(enabled = paired, onClick = { scanMode = "normal"; startScan("normal") }) { Text("일반 스캔 시작") }
                             OutlinedButton(enabled = paired, onClick = { scanMode = "shadow"; startScan("shadow") }) { Text("👤 그림자") }
                             OutlinedButton(enabled = paired, onClick = { scanMode = "purified"; startScan("purified") }) { Text("✨ 정화") }
+                            // 4-F.6 D 보호 모드: 앱이 읽지 못하는 보호 속성 개체(색이 다른·반짝반짝·XXL·XXS·배경·코스튬)를 게임 검색으로 거른 뒤 스캔 → 박사행 금지. 시작 시 검색어가 클립보드에 복사됨
+                            OutlinedButton(enabled = paired, onClick = { scanMode = "protected"; startScan("protected") }) { Text("🛡 보호") }
                         }
+                        Text("보호 모드: 게임 검색창에 \"${ScanSession.PROTECT_SEARCH}\" 를 붙여넣고(시작 시 자동 복사) 나온 개체만 넘기세요. 박사행 묶음 결과가 예상보다 적으면 보호 속성 개체가 섞인 것 → 나온 것만 보내고 보호 스캔을 한 번 실행하세요.", fontSize = 11.sp, color = dim)
                         // 4-F.2 전체 동기화: 게임에서 수동으로 정리해 기록과 실제 보관함이 다를 때. 세션이 끝나면 웹이 "다시 보이지 않은 이전 기록" 숨김을 제안(확인창·복구 가능). 태그 필터 등 부분 스캔에는 쓰지 말 것
                         OutlinedButton(enabled = paired, onClick = { scanMode = "normal"; startScan("normal", fullSync = true) }) { Text("🔄 전체 동기화 스캔 (보관함 전체)") }
                         OutlinedButton(onClick = { stopCapture() }) { Text("오버레이 중지") }

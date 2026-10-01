@@ -91,6 +91,9 @@ class Phase4b6Test {
         assertEquals("700&hp154&!#다이맥스&!#즐겨찾기&!색이 다른&!반짝반짝&!xxl&!xxs&!배경&!특별&!다이맥스", qu)
         assertTrue(!SearchBuilder.matches(qu, SearchBuilder.Item("b", 700, 154, null, false, gameTags = listOf("즐겨찾기"))))
         assertTrue(SearchBuilder.matches(qu, SearchBuilder.Item("b2", 700, 154, null, false, gameTags = listOf("수집"))))
+        // 4-F.6 D: 보호 모드 기록은 보호 절이 붙은 검색어에 잡히지 않는다
+        assertTrue(!SearchBuilder.matches(q, SearchBuilder.Item("p", 700, 154, null, false, isProtected = true)))
+        assertTrue(SearchBuilder.matches("700&hp154", SearchBuilder.Item("p", 700, 154, null, false, isProtected = true)))
         assertEquals(listOf("다이맥스", "즐겨찾기"), SearchBuilder.userTagsOf(listOf(SearchBuilder.Item("x", 1, 1, null, false, gameTags = listOf("즐겨찾기", "수집", "진화 후보")), SearchBuilder.Item("y", 1, 1, null, false, gameTags = listOf("다이맥스")))))
         assertTrue(!SearchBuilder.matches(q, SearchBuilder.Item("c", 700, 154, null, false, isShiny = true)))
         assertTrue(!SearchBuilder.matches(q, SearchBuilder.Item("d", 700, 154, null, false, isLucky = true)))

@@ -178,3 +178,11 @@ test("4-F.6 C 재스캔 복구 planRescanRecovery: 보냄/없음 처리로 숨�
   assert.deepEqual(planRescanRecovery(hidden, item), ["h1", "h2"]);
   assert.deepEqual(planRescanRecovery(hidden, { ...item, cp: 800 }), ["h2"], "CP 다르면 CP 없는 기록만");
 });
+
+test("4-F.6 D 보호 모드 기록은 그림자 모드와 같은 규칙으로 같은 개체의 일반 기록을 대체(planModeSupersede)", () => {
+  const normal = { ...item("n", 68, [15, 12, 14], 31), cp: 2634, hp: 163, app_version: "0.1.55", is_shadow: false, is_purified: false, is_protected: false };
+  const prot = { ...item("p", 68, [15, 12, 14], 31), cp: 2634, hp: 163, app_version: "0.1.55", is_shadow: false, is_purified: false, is_protected: true };
+  assert.deepEqual(planModeSupersede([normal, prot]), [{ id: "n", superseded_by: "p" }]);
+  assert.deepEqual(planModeSupersede([prot]), []);
+  assert.deepEqual(planModeSupersede([normal, { ...prot, app_version: "0.1.30" }]), [], "미신뢰 보호 기록은 대체 안 함");
+});

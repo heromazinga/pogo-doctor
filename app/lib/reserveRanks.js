@@ -10,7 +10,7 @@ import { TYPES } from "./typeChart.js";
 import { cpmForLevel, estimateLevel } from "./cpm.js";
 import { findPokemon } from "./pokemonData.js";
 import { RULES } from "./verdictRules.js";
-import { getRankings, raidRankOf, budgetRankOf, familyIds } from "./speciesRankings.js";
+import { getRankings, raidRankOf, budgetRankOf, familyIds, finalForms } from "./speciesRankings.js";
 import { leagueRankOf } from "./pvpokeRankings.js";
 import { leagueProductTable } from "./verdict.js";
 
@@ -51,22 +51,32 @@ export function rareFamilyNote(dataset, p, rules = RULES) {
 
 // 반환 { raid: { [type]: Map<key|sig, rank> }, league: { great|ultra: Map<speciesKey, { key, sig, productRank }> }, rep: Map<speciesKey, { key, sig, ivs, cp, ivSum }>, size }
 // 4-F.4 종의 용도: 레이드 가치(어느 타입이든 상위/중위 또는 가성비 ≤12위) / 리그 가치(PvPoke 슈퍼·하이퍼 ≤ LEAGUE_CANDIDATE_SPECIES_RANK)
-function speciesUsage(rankings, leagueRankings, p, shadow, rules) {
-  let raid = false;
-  for (const t of TYPES) {
-    const sp = raidRankOf(rankings, t, p.id, p.form, shadow);
-    if (sp && ((sp.rank <= rules.RAID_MID_RANK && sp.pct >= rules.RAID_MID_SCORE_PCT))) { raid = true; break; }
-    if (!shadow) { const bg = budgetRankOf(rankings, t, p.id, p.form); if (bg && bg.budgetRank <= rules.BUDGET_RAID_TOP_RANK) { raid = true; break; } }
-  }
+//   4-F.6 E: 레이드 판단에 진화 최종형(최고 진화형)의 순위를 포함한다. 그림자는 그림자 순위(자신·최종형 모두)
+export function speciesUsage(rankings, leagueRankings, p, shadow, rules, dataset = null) {
+  const raidOf = (q) => {
+    for (const t of TYPES) {
+      const sp = raidRankOf(rankings, t, q.id, q.form, shadow);
+      if (sp && ((sp.rank <= rules.RAID_MID_RANK && sp.pct >= rules.RAID_MID_SCORE_PCT))) return true;
+      if (!shadow) { const bg = budgetRankOf(rankings, t, q.id, q.form); if (bg && bg.budgetRank <= rules.BUDGET_RAID_TOP_RANK) return true; }
+    }
+    return false;
+  };
+  let raid = raidOf(p);
+  if (!raid && dataset) for (const f of finalForms(dataset, p)) if (raidOf(f.species)) { raid = true; break; }
   let league = false;
   for (const lg of ["great", "ultra"]) { const sp = leagueRankOf(leagueRankings, lg, p.pvpokeId, shadow); if (sp && sp.rank <= rules.LEAGUE_CANDIDATE_SPECIES_RANK) { league = true; break; } }
   return { raid, league };
 }
 // 4-F.4 종 대표 선택: 합 최고 ±REP_TIE_MARGIN 안의 후보 중 — 레이드 종은 공격, 리그 종은 스탯곱(슈퍼, 없으면 하이퍼), 그 외 합 → 공격 → CP
-function pickRepresentative(cands, usage, rules, maxLeagueLevel) {
+//   4-F.6 E: 그림자 개체는 (자신 또는 최종형이) 레이드 종이면 동점 여부와 무관하게 공격 → 합 → CP 순(그림자 코일 → 그림자 자포코일). 레이드에 안 쓰는 그림자 종은 기존 규칙
+function pickRepresentative(cands, usage, rules, maxLeagueLevel, shadow = false) {
+  const byCp = (a, b) => (b.cp || 0) - (a.cp || 0);
+  if (shadow && usage.raid) {
+    const sorted = [...cands].sort((a, b) => b.ivs.atk - a.ivs.atk || b.ivSum - a.ivSum || byCp(a, b));
+    return { pick: sorted[0], basis: "그림자 레이드 종 → 공격" };
+  }
   const maxSum = Math.max(...cands.map((c) => c.ivSum));
   const pool = cands.filter((c) => c.ivSum >= maxSum - (rules.REP_TIE_MARGIN ?? 0));
-  const byCp = (a, b) => (b.cp || 0) - (a.cp || 0);
   let sorted;
   if (usage.raid) sorted = [...pool].sort((a, b) => b.ivs.atk - a.ivs.atk || b.ivSum - a.ivSum || byCp(a, b));
   else if (usage.league) {
@@ -126,9 +136,9 @@ export function buildReserveRanks(dataset, rows = [], scans = [], { rules = RULE
     bySpecies.get(sk).push({ ...e, ivSum: e.ivs.atk + e.ivs.def + e.ivs.sta });
   }
   for (const [sk, cands] of bySpecies) {
-    const usage = speciesUsage(rankings, leagueRankings, cands[0].p, cands[0].shadow, rules);
-    const { pick, basis } = pickRepresentative(cands, usage, rules, maxLeagueLevel);
-    rep.set(sk, { key: pick.key, sig: pick.sig, ivs: pick.ivs, cp: pick.cp, ivSum: pick.ivSum, basis, tie: cands.filter((c) => c.ivSum >= pick.ivSum - (rules.REP_TIE_MARGIN ?? 0)).length > 1 });
+    const usage = speciesUsage(rankings, leagueRankings, cands[0].p, cands[0].shadow, rules, dataset);
+    const { pick, basis } = pickRepresentative(cands, usage, rules, maxLeagueLevel, cands[0].shadow);
+    rep.set(sk, { key: pick.key, sig: pick.sig, ivs: pick.ivs, cp: pick.cp, ivSum: pick.ivSum, basis, tie: cands.filter((c) => c.ivSum >= pick.ivSum - (rules.REP_TIE_MARGIN ?? 0)).length > 1 || basis.startsWith("그림자") });
   }
   // 4-F.5 B② 메가 진화용: 메가진화 가능 종(dataset.hasMega)의 일반(그림자 아님) 개체 중 레이드 기준(공격 → 합 → CP) 1마리
   const mega = new Map();

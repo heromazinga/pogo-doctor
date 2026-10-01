@@ -95,10 +95,11 @@ export function planModeSupersede(items) {
   }
   const out = [];
   for (const list of groups.values()) {
-    const modes = list.filter((r) => (r.is_shadow || r.is_purified) && isTrustedVersion(r.app_version)).sort((a, b) => String(a.created_at).localeCompare(String(b.created_at)));
+    // 4-F.6 D: "보호" 모드 기록(is_protected)도 모드 기록으로 — 같은 개체의 일반 기록을 대체
+    const modes = list.filter((r) => (r.is_shadow || r.is_purified || r.is_protected) && isTrustedVersion(r.app_version)).sort((a, b) => String(a.created_at).localeCompare(String(b.created_at)));
     if (!modes.length) continue;
     for (const r of list) {
-      if (r.is_shadow || r.is_purified) continue;
+      if (r.is_shadow || r.is_purified || r.is_protected) continue;
       const cand = modes.filter((m) => m.cp == null || r.cp == null || m.cp === r.cp);
       if (cand.length) out.push({ id: r.id, superseded_by: cand[cand.length - 1].id });
     }
